@@ -1,0 +1,159 @@
+material Yard/asphalt
+{
+  technique
+  {
+    pass
+    {
+      ambient 0.72 0.72 0.72 1
+      diffuse 0.9 0.9 0.9 1
+      specular 0.02 0.02 0.02 1
+      texture_unit
+      {
+        texture asphalt.png
+        filtering anisotropic
+        max_anisotropy 4
+        scale 0.25 0.25
+      }
+    }
+  }
+}
+
+material Yard/grass
+{
+  technique
+  {
+    pass
+    {
+      ambient 0.72 0.72 0.72 1
+      diffuse 0.9 0.9 0.9 1
+      specular 0.02 0.02 0.02 1
+      texture_unit
+      {
+        texture grass.png
+        filtering anisotropic
+        max_anisotropy 4
+        scale 0.2 0.2
+      }
+    }
+  }
+}
+
+material Yard/brick
+{
+  technique
+  {
+    pass
+    {
+      ambient 0.72 0.72 0.72 1
+      diffuse 0.9 0.9 0.9 1
+      specular 0.02 0.02 0.02 1
+      texture_unit
+      {
+        texture brick.png
+        filtering anisotropic
+        max_anisotropy 4
+        scale 0.5 0.5
+      }
+    }
+  }
+}
+
+material Yard/concrete
+{
+  technique
+  {
+    pass
+    {
+      ambient 0.72 0.72 0.72 1
+      diffuse 0.9 0.9 0.9 1
+      specular 0.02 0.02 0.02 1
+      texture_unit
+      {
+        texture concrete.png
+        filtering anisotropic
+        max_anisotropy 4
+        scale 0.4 0.4
+      }
+    }
+  }
+}
+
+material Yard/wood
+{
+  technique
+  {
+    pass
+    {
+      ambient 0.72 0.72 0.72 1
+      diffuse 0.9 0.9 0.9 1
+      specular 0.02 0.02 0.02 1
+      texture_unit
+      {
+        texture wood.png
+        filtering anisotropic
+        max_anisotropy 4
+        scale 1 1
+      }
+    }
+  }
+}
+
+material Yard/foliage
+{
+  technique
+  {
+    pass
+    {
+      ambient 0.72 0.72 0.72 1
+      diffuse 0.9 0.9 0.9 1
+      specular 0.02 0.02 0.02 1
+      texture_unit
+      {
+        texture foliage.png
+        filtering anisotropic
+        max_anisotropy 4
+        scale 1 1
+      }
+    }
+  }
+}
+
+material Yard/warehouse_sign
+{
+  technique
+  {
+    pass
+    {
+      ambient 0.72 0.72 0.72 1
+      diffuse 0.9 0.9 0.9 1
+      specular 0.02 0.02 0.02 1
+      texture_unit
+      {
+        texture warehouse_sign.png
+        filtering anisotropic
+        max_anisotropy 4
+        scale 1 1
+      }
+    }
+  }
+}
+
+material Yard/office_sign
+{
+  technique
+  {
+    pass
+    {
+      ambient 0.72 0.72 0.72 1
+      diffuse 0.9 0.9 0.9 1
+      specular 0.02 0.02 0.02 1
+      texture_unit
+      {
+        texture office_sign.png
+        filtering anisotropic
+        max_anisotropy 4
+        scale 1 1
+      }
+    }
+  }
+}

@@ -1,0 +1,282 @@
+diff --git a/Tools/simulation/gazebo-classic/sitl_run.sh b/Tools/simulation/gazebo-classic/sitl_run.sh
+index 741d064dd6..d0edf95964 100755
+--- a/Tools/simulation/gazebo-classic/sitl_run.sh
++++ b/Tools/simulation/gazebo-classic/sitl_run.sh
+@@ -71,7 +71,7 @@ export PX4_SIM_MODEL=gazebo-classic_${model}
+ export PX4_SIM_WORLD=${world}
+ 
+ SIM_PID=0
+-
++PX4_SITL_WORLD="boat"
+ if [ -x "$(command -v gazebo)" ]; then
+ 	# Get the model name
+ 	model_name="${model}"
+diff --git a/platforms/posix/src/px4/common/px4_daemon/server.cpp b/platforms/posix/src/px4/common/px4_daemon/server.cpp
+index c3b012bb84..2a08f4ea49 100644
+--- a/platforms/posix/src/px4/common/px4_daemon/server.cpp
++++ b/platforms/posix/src/px4/common/px4_daemon/server.cpp
+@@ -51,6 +51,7 @@
+ #include <sys/types.h>
+ #include <sys/un.h>
+ #include <vector>
++#include <utility>
+ 
+ #include <px4_platform_common/log.h>
+ 
+@@ -126,6 +127,30 @@ void Server::_pthread_key_destructor(void *arg)
+ 	delete ((CmdThreadSpecificData *)arg);
+ }
+ 
++void
++Server::_join_and_close(pthread_t thread, FILE *out, bool cancel)
++{
++	if (cancel) {
++		int ret = pthread_cancel(thread);
++
++		if (ret != 0 && ret != ESRCH) {
++			PX4_ERR("could not cancel client pthread (%i)", ret);
++		}
++	}
++
++	// Normal completion and cancellation both retain the stream through
++	// the worker's thread-specific data destruction.
++	int ret = pthread_join(thread, nullptr);
++
++	if (ret != 0) {
++		// Completion was not established, so the worker may still own out.
++		PX4_ERR("could not join client pthread (%i); stdout left open", ret);
++		return;
++	}
++
++	fclose(out);
++}
++
+ void
+ Server::_server_main()
+ {
+@@ -146,6 +171,9 @@ Server::_server_main()
+ 	// stdouts[i] corresponds to poll_fds[i+1].
+ 	std::vector<FILE *> stdouts;
+ 
++	// Connections removed from polling must be reaped without _mutex held.
++	std::vector<std::pair<ClientThread, FILE *>> clients_to_reap;
++
+ 	while (true) {
+ 		int n_ready = poll(poll_fds.data(), poll_fds.size(), -1);
+ 
+@@ -168,7 +196,7 @@ Server::_server_main()
+ 			if (client == -1) {
+ 				PX4_ERR("failed to accept client: %s", strerror(errno));
+ 				_unlock();
+-				return;
++				break;
+ 			}
+ 
+ 			FILE *thread_stdout = fdopen(client, "w");
+@@ -182,7 +210,7 @@ Server::_server_main()
+ 				setvbuf(thread_stdout, nullptr, _IOLBF, BUFSIZ);
+ 
+ 				// Start a new thread to handle the client.
+-				pthread_t *thread = &_fd_to_thread[client];
++				pthread_t *thread = &_fd_to_thread[client].thread;
+ 				ret = pthread_create(thread, nullptr, Server::_handle_client, thread_stdout);
+ 
+ 				if (ret != 0) {
+@@ -191,8 +219,7 @@ Server::_server_main()
+ 					fclose(thread_stdout);
+ 
+ 				} else {
+-					// We won't join the thread, so detach to automatically release resources at its end
+-					pthread_detach(*thread);
++					// Keep the worker joinable until its connection is reaped.
+ 
+ 					// Start listening for the client hanging up.
+ 					poll_fds.push_back(pollfd {client, POLLHUP, 0});
+@@ -210,13 +237,14 @@ Server::_server_main()
+ 				auto thread = _fd_to_thread.find(poll_fds[i].fd);
+ 
+ 				if (thread != _fd_to_thread.end()) {
+-					// Thread is still running, so we cancel it.
+-					// TODO: use a more graceful exit method to avoid resource leaks
+-					pthread_cancel(thread->second);
++					clients_to_reap.emplace_back(thread->second, stdouts[i - 1]);
+ 					_fd_to_thread.erase(thread);
++
++				} else {
++					// Do not destroy a stream whose worker completion is unknown.
++					PX4_ERR("missing client pthread for fd %i; stdout left open", poll_fds[i].fd);
+ 				}
+ 
+-				fclose(stdouts[i - 1]);
+ 				stdouts.erase(stdouts.begin() + i - 1);
+ 				poll_fds.erase(poll_fds.begin() + i);
+ 
+@@ -226,6 +254,33 @@ Server::_server_main()
+ 		}
+ 
+ 		_unlock();
++
++		for (const auto &client : clients_to_reap) {
++			_join_and_close(client.first.thread, client.second, !client.first.completion_started);
++		}
++
++		clients_to_reap.clear();
++	}
++
++	// Reap remaining joinable workers on a server-loop exit as well.
++	_lock();
++
++	for (size_t i = 1; i < poll_fds.size(); ++i) {
++		auto thread = _fd_to_thread.find(poll_fds[i].fd);
++
++		if (thread != _fd_to_thread.end()) {
++			clients_to_reap.emplace_back(thread->second, stdouts[i - 1]);
++
++		} else {
++			PX4_ERR("missing client pthread for fd %i; stdout left open", poll_fds[i].fd);
++		}
++	}
++
++	_fd_to_thread.clear();
++	_unlock();
++
++	for (const auto &client : clients_to_reap) {
++		_join_and_close(client.first.thread, client.second, !client.first.completion_started);
+ 	}
+ 
+ 	std::string sock_path = get_socket_path(_instance_id);
+@@ -239,6 +294,17 @@ void
+ 	FILE *out = (FILE *)arg;
+ 	int fd = fileno(out);
+ 
++	// Both normal return and cancellation must disable cancellation before
++	// running thread-local destructors, which may contain cancellation points.
++	pthread_cleanup_push(_cleanup_trampoline, &fd);
++	_process_client(out, fd);
++	pthread_cleanup_pop(1);
++	return nullptr;
++}
++
++void
++Server::_process_client(FILE *out, int fd)
++{
+ 	// Read until the end of the incoming stream.
+ 	std::string cmd;
+ 
+@@ -248,8 +314,7 @@ void
+ 		ssize_t n_read = read(fd, &cmd[n], cmd.size() - n);
+ 
+ 		if (n_read <= 0) {
+-			_cleanup(fd);
+-			return nullptr;
++			return;
+ 		}
+ 
+ 		cmd.resize(n + n_read);
+@@ -261,8 +326,7 @@ void
+ 	}
+ 
+ 	if (cmd.size() < 2) {
+-		_cleanup(fd);
+-		return nullptr;
++		return;
+ 	}
+ 
+ 	// Last byte is 'isatty'.
+@@ -292,24 +356,36 @@ void
+ 
+ 	// Flush the FILE*'s buffer before we shut down the connection.
+ 	fflush(out);
++}
+ 
+-	_cleanup(fd);
+-	return nullptr;
++void
++Server::_cleanup_trampoline(void *arg)
++{
++	_cleanup(*(int *)arg);
+ }
+ 
+ void
+ Server::_cleanup(int fd)
+ {
++	// Keep cancellation disabled through all TLS destructors. This also
++	// covers a cancellation requested before normal completion was published.
++	(void)pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, nullptr);
++
+ 	_instance->_lock();
+-	_instance->_fd_to_thread.erase(fd);
++	auto thread = _instance->_fd_to_thread.find(fd);
++
++	if (thread != _instance->_fd_to_thread.end()) {
++		thread->second.completion_started = true;
++	}
++
+ 	_instance->_unlock();
+ 
+ 	// We can't close() the fd here, since the main thread is probably
+ 	// polling for it: close()ing it causes a race condition.
+ 	// So, we only call shutdown(), which causes the main thread to register a
+ 	// 'POLLHUP', such that the main thread can close() it for us.
+-	// We already removed this thread from _fd_to_thread, so there is no risk
+-	// of the main thread trying to cancel this thread after it already exited.
++	// The server retains our joinable thread handle until it has joined us;
++	// shutdown() does not transfer ownership of the output stream.
+ 	shutdown(fd, SHUT_RDWR);
+ }
+ 
+diff --git a/platforms/posix/src/px4/common/px4_daemon/server.h b/platforms/posix/src/px4/common/px4_daemon/server.h
+index 2932a977ff..c1d55bf1d9 100644
+--- a/platforms/posix/src/px4/common/px4_daemon/server.h
++++ b/platforms/posix/src/px4/common/px4_daemon/server.h
+@@ -104,11 +104,19 @@ private:
+ 	}
+ 
+ 	static void *_handle_client(void *arg);
++	static void _process_client(FILE *out, int fd);
++	static void _cleanup_trampoline(void *arg);
+ 	static void _cleanup(int fd);
++	static void _join_and_close(pthread_t thread, FILE *out, bool cancel);
++
++	struct ClientThread {
++		pthread_t thread {};
++		bool completion_started {false}; ///< Command phase ended; join without requesting cancellation.
++	};
+ 
+ 	pthread_t _server_main_pthread;
+ 
+-	std::map<int, pthread_t> _fd_to_thread;
++	std::map<int, ClientThread> _fd_to_thread; ///< Joinable workers and completion state retained until reaping.
+ 	pthread_mutex_t _mutex; ///< Protects _fd_to_thread.
+ 
+ 	pthread_key_t _key;
+diff --git a/src/systemcmds/topic_listener/listener_main.cpp b/src/systemcmds/topic_listener/listener_main.cpp
+index b4db038c12..57f2ebd4bb 100644
+--- a/src/systemcmds/topic_listener/listener_main.cpp
++++ b/src/systemcmds/topic_listener/listener_main.cpp
+@@ -101,6 +101,25 @@ void listener(const orb_id_t &id, unsigned num_msgs, int topic_instance,
+ 		}
+ 
+ 		int sub = orb_subscribe_multi(id, topic_instance);
++
++		if (num_msgs == 1) {
++			// Like the default one-shot listener, copy the published data immediately.
++			if (sub < 0) {
++				PX4_ERR("subscribe failed (%i)", sub);
++				return;
++			}
++
++			PX4_INFO_RAW("\nTOPIC: %s instance %d #1\n", id->o_name, topic_instance);
++			int ret = listener_print_topic(id, sub);
++
++			if (ret != PX4_OK) {
++				PX4_ERR("listener callback failed (%i)", ret);
++			}
++
++			orb_unsubscribe(sub);
++			return;
++		}
++
+ 		orb_set_interval(sub, topic_interval);
+ 
+ 		unsigned msgs_received = 0;

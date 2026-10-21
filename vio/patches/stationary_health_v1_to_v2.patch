@@ -1,0 +1,166 @@
+--- a/vins_estimator/src/estimator/estimator.cpp
++++ b/vins_estimator/src/estimator/estimator.cpp
+@@ -13,7 +13,7 @@
+ #include <std_msgs/Float64MultiArray.h>
+ #include <std_msgs/String.h>
+ #include <sstream>
+-// PX4_AGENT_STATIONARY_HEALTH_V1: real stereo/IMU ZUPT and native solution checks.
++// PX4_AGENT_STATIONARY_HEALTH_V2: real stereo/IMU ZUPT and native solution checks.
+ // PX4_AGENT_INITIAL_BIAS_PRIOR: native IMU statistics, added once then marginalized.
+ // PX4_AGENT_VIO_PATCH: health, guarded reset, and clean shutdown only.
+ 
+@@ -47,6 +47,7 @@
+     stationary_detector.clear();
+     stationary_evidence = StationaryEvidence();
+     previous_stereo_ids.clear();
++    native_stereo_tracks_json = "[]";
+     solver_solution_usable = true;
+     solver_initial_cost = solver_final_cost = solver_residual_rms = 0;
+     solver_health_reason.clear();
+@@ -68,6 +69,7 @@
+         Bas[i].setZero();
+         Bgs[i].setZero();
+         stationary_frames[i] = false;
++        stationary_intervals[i] = false;
+         dt_buf[i].clear();
+         linear_acceleration_buf[i].clear();
+         angular_velocity_buf[i].clear();
+@@ -1003,6 +1005,9 @@
+     stationary_evidence = stationary_detector.imuEvidence(stamp + td, G.norm());
+     std::set<int> current_stereo_ids;
+     std::vector<double> speeds;
++    std::ostringstream raw_tracks;
++    raw_tracks.precision(12); raw_tracks << "[";
++    bool first_track = true;
+     const Eigen::Vector3d baseline = ric[0].transpose() * (tic[1] - tic[0]);
+     const bool rectified = STEREO && (ric[0].transpose() * ric[1] - Eigen::Matrix3d::Identity()).norm() < 1e-3
+         && baseline.x() > 0 && std::abs(baseline.y()) < 1e-3 && std::abs(baseline.z()) < 1e-3;
+@@ -1019,8 +1024,18 @@
+         double speed = 0;
+         if (nearStereoStationarySupport(*left, *right, previous_stereo_ids.count(entry.first), rectified,
+                 baseline.x(), ZUPT_CAMERA_FX, stationary_detector.config.maximum_depth_m, &speed))
++        {
+             speeds.push_back(speed);
+-    }
++            if (!first_track) raw_tracks << ",";
++            first_track = false;
++            raw_tracks << "{\"id\":" << entry.first << ",\"left_uv\":[" << (*left)[3] << "," << (*left)[4]
++                << "],\"right_uv\":[" << (*right)[3] << "," << (*right)[4]
++                << "],\"left_velocity_normalized\":[" << (*left)[5] << "," << (*left)[6]
++                << "],\"right_velocity_normalized\":[" << (*right)[5] << "," << (*right)[6]
++                << "],\"depth_m\":" << ZUPT_CAMERA_FX * baseline.x() / ((*left)[3] - (*right)[3]) << "}";
++        }
++    }
++    raw_tracks << "]"; native_stereo_tracks_json = raw_tracks.str();
+     previous_stereo_ids.swap(current_stereo_ids);
+     stationary_evidence.near_stereo_tracks = static_cast<int>(speeds.size());
+     if (!speeds.empty())
+@@ -1031,6 +1046,8 @@
+     }
+     const bool sensor_stationary = stationary_detector.update(stamp, stationary_evidence);
+     stationary_frames[frame_count] = ENABLE_ZUPT && USE_IMU && sensor_stationary;
++    stationary_intervals[frame_count] = frame_count > 0 && stationary_frames[frame_count - 1]
++        && stationary_frames[frame_count];
+ }
+ 
+ bool Estimator::validateOptimizedSolution()
+@@ -1078,7 +1095,7 @@
+       << ",\"imu_age_s\":" << stationary_evidence.imu_age_s << ",\"gyro_mean_norm\":" << stationary_evidence.gyro_mean_norm
+       << ",\"gyro_std_norm\":" << stationary_evidence.gyro_std_norm << ",\"acc_std_norm\":" << stationary_evidence.acc_std_norm
+       << ",\"gravity_norm_error\":" << stationary_evidence.gravity_norm_error << ",\"near_stereo_tracks\":" << stationary_evidence.near_stereo_tracks
+-      << ",\"flow_p90_px_s\":" << stationary_evidence.flow_p90_px_s << ",\"flow_median_px_s\":" << stationary_evidence.flow_median_px_s << "}";
++      << ",\"flow_p90_px_s\":" << stationary_evidence.flow_p90_px_s << ",\"flow_median_px_s\":" << stationary_evidence.flow_median_px_s << ",\"stereo_tracks\":" << native_stereo_tracks_json << "}";
+     return o.str();
+ }
+ 
+@@ -1177,7 +1194,7 @@
+     // never imposes a zero-velocity observation on earlier moving states.
+     if (ENABLE_ZUPT && USE_IMU)
+     {
+-        const StationaryFactorCounts counts = addStationaryFactors(problem, stationary_frames,
++        const StationaryFactorCounts counts = addStationaryFactors(problem, stationary_frames, stationary_intervals,
+             para_Pose, para_SpeedBias, frame_count, ZUPT_VELOCITY_SIGMA, ZUPT_POSITION_SIGMA);
+         ROS_DEBUG("Sensor-supported stationary factors: velocity=%d relative_position=%d",
+             counts.zero_velocity, counts.relative_position);
+@@ -1318,7 +1335,7 @@
+             marginalization_info->addResidualBlockInfo(new ResidualBlockInfo(
+                 new ZeroVelocityFactor(ZUPT_VELOCITY_SIGMA), NULL,
+                 vector<double *>{para_SpeedBias[0]}, vector<int>{0}));
+-            if (stationary_frames[1])
++            if (stationary_frames[1] && stationary_intervals[1])
+                 marginalization_info->addResidualBlockInfo(new ResidualBlockInfo(
+                     new StationaryRelativePositionFactor(ZUPT_POSITION_SIGMA), NULL,
+                     vector<double *>{para_Pose[0], para_Pose[1]}, vector<int>{0}));
+@@ -1519,10 +1536,10 @@
+         back_P0 = Ps[0];
+         if (frame_count == WINDOW_SIZE)
+         {
++            slideStationaryEvidenceOld(stationary_frames, stationary_intervals, WINDOW_SIZE);
+             for (int i = 0; i < WINDOW_SIZE; i++)
+             {
+                 Headers[i] = Headers[i + 1];
+-                stationary_frames[i] = stationary_frames[i + 1];
+                 Rs[i].swap(Rs[i + 1]);
+                 Ps[i].swap(Ps[i + 1]);
+                 if(USE_IMU)
+@@ -1539,7 +1556,6 @@
+                 }
+             }
+             Headers[WINDOW_SIZE] = Headers[WINDOW_SIZE - 1];
+-            stationary_frames[WINDOW_SIZE] = false; // next image needs fresh evidence
+             Ps[WINDOW_SIZE] = Ps[WINDOW_SIZE - 1];
+             Rs[WINDOW_SIZE] = Rs[WINDOW_SIZE - 1];
+ 
+@@ -1572,8 +1588,7 @@
+         if (frame_count == WINDOW_SIZE)
+         {
+             Headers[frame_count - 1] = Headers[frame_count];
+-            stationary_frames[frame_count - 1] = stationary_frames[frame_count];
+-            stationary_frames[frame_count] = false;
++            slideStationaryEvidenceSecondNew(stationary_frames, stationary_intervals, frame_count);
+             Ps[frame_count - 1] = Ps[frame_count];
+             Rs[frame_count - 1] = Rs[frame_count];
+ 
+--- a/vins_estimator/src/estimator/estimator.h
++++ b/vins_estimator/src/estimator/estimator.h
+@@ -34,7 +34,7 @@
+ #include "../factor/projectionTwoFrameOneCamFactor.h"
+ #include "../factor/projectionTwoFrameTwoCamFactor.h"
+ #include "../factor/projectionOneFrameTwoCamFactor.h"
+-// PX4_AGENT_STATIONARY_HEALTH_V1: per-frame sensor support and native health.
++// PX4_AGENT_STATIONARY_HEALTH_V2: per-frame sensor support and native health.
+ #include "../factor/stationary_factors.h"
+ #include <set>
+ #include <string>
+@@ -183,7 +183,9 @@
+     SensorStationaryDetector stationary_detector;
+     StationaryEvidence stationary_evidence;
+     bool stationary_frames[WINDOW_SIZE + 1];
++    bool stationary_intervals[WINDOW_SIZE + 1]; // [i] supports interval i-1 -> i
+     std::set<int> previous_stereo_ids;
++    std::string native_stereo_tracks_json;
+     bool solver_solution_usable;
+     double solver_initial_cost, solver_final_cost, solver_residual_rms;
+     std::string solver_health_reason;
+--- a/vins_estimator/src/estimator/parameters.cpp
++++ b/vins_estimator/src/estimator/parameters.cpp
+@@ -182,7 +182,7 @@
+     if (!fsSettings["acc_bias_prior_sigma"].empty()) fsSettings["acc_bias_prior_sigma"] >> ACC_BIAS_PRIOR_SIGMA;
+     if (!fsSettings["gyr_bias_prior_sigma"].empty()) fsSettings["gyr_bias_prior_sigma"] >> GYR_BIAS_PRIOR_SIGMA;
+     ROS_INFO("Initial native-IMU bias prior sigmas: acceleration=%f gyro=%f", ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA);
+-    // PX4_AGENT_STATIONARY_HEALTH_V1: optional sensor-supported ZUPT only.
++    // PX4_AGENT_STATIONARY_HEALTH_V2: optional sensor-supported ZUPT only.
+     if (!fsSettings["enable_zupt"].empty()) fsSettings["enable_zupt"] >> ENABLE_ZUPT;
+     if (!fsSettings["zupt_velocity_sigma"].empty()) fsSettings["zupt_velocity_sigma"] >> ZUPT_VELOCITY_SIGMA;
+     if (!fsSettings["zupt_position_sigma"].empty()) fsSettings["zupt_position_sigma"] >> ZUPT_POSITION_SIGMA;
+--- a/vins_estimator/src/estimator/parameters.h
++++ b/vins_estimator/src/estimator/parameters.h
+@@ -31,7 +31,7 @@
+ 
+ extern double ACC_N, ACC_W;
+ extern double ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA;
+-// PX4_AGENT_STATIONARY_HEALTH_V1: optional Ceres ZUPT configuration.
++// PX4_AGENT_STATIONARY_HEALTH_V2: optional Ceres ZUPT configuration.
+ extern int ENABLE_ZUPT;
+ extern double ZUPT_VELOCITY_SIGMA, ZUPT_POSITION_SIGMA, ZUPT_CAMERA_FX;
+ extern double GYR_N, GYR_W;

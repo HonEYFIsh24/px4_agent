@@ -1,0 +1,137 @@
+--- a/vins_estimator/src/estimator/estimator.cpp
++++ b/vins_estimator/src/estimator/estimator.cpp
+@@ -14,7 +14,7 @@
+ #include <std_msgs/Float64MultiArray.h>
+ #include <std_msgs/String.h>
+ #include <sstream>
+-// PX4_AGENT_STATIONARY_HEALTH_V5: sensor health and opt-in source matrix snapshots.
++// PX4_AGENT_STATIONARY_HEALTH_V6: sensor health and opt-in source matrix snapshots.
+ // PX4_AGENT_INITIAL_BIAS_PRIOR: native IMU statistics, added once then marginalized.
+ // PX4_AGENT_VIO_PATCH: health, guarded reset, and clean shutdown only.
+ 
+@@ -1151,7 +1151,7 @@
+     quaternion_json << "]";
+     // Sentinel values are finite, keeping diagnostics valid JSON even before
+     // the first IMU window or stereo pair has arrived.
+-    o << "{\"implementation_revision\":\"stationary_health_v5\",\"stamp\":" << stamp << ",\"tracking_ok\":" << ((solver_flag == NON_LINEAR && !failure_occur) ? "true" : "false")
++    o << "{\"implementation_revision\":\"stationary_health_v6\",\"marginalization_pose_jacobian_mode\":\"" << (EXACT_MARGINALIZATION_POSE_JACOBIAN ? "exact_residual_chain_rule" : "legacy_frozen_local") << "\",\"active_prior_pose_jacobian_mode\":\"" << (last_marginalization_info && last_marginalization_info->valid ? (last_marginalization_info->exact_pose_jacobian ? "exact_residual_chain_rule" : "legacy_frozen_local") : "none") << "\",\"stamp\":" << stamp << ",\"tracking_ok\":" << ((solver_flag == NON_LINEAR && !failure_occur) ? "true" : "false")
+       << ",\"solution_usable\":" << (solver_solution_usable ? "true" : "false")
+       << ",\"reason\":\"" << solver_health_reason << "\",\"initial_cost\":" << solver_initial_cost
+       << ",\"final_cost\":" << solver_final_cost << ",\"residual_rms\":" << solver_residual_rms
+@@ -1481,7 +1481,7 @@
+     TicToc t_whole_marginalization;
+     if (marginalization_flag == MARGIN_OLD)
+     {
+-        MarginalizationInfo *marginalization_info = new MarginalizationInfo();
++        MarginalizationInfo *marginalization_info = new MarginalizationInfo(EXACT_MARGINALIZATION_POSE_JACOBIAN != 0);
+         marginalization_info->diagnostics_enabled = diagnostic_sample;
+         vector2double();
+         if (diagnostic_sample) biasDumpProblem(*this,problem,"full_problem_after_native_yaw_gauge");
+@@ -1631,7 +1631,7 @@
+             std::count(std::begin(last_marginalization_parameter_blocks), std::end(last_marginalization_parameter_blocks), para_Pose[WINDOW_SIZE - 1]))
+         {
+ 
+-            MarginalizationInfo *marginalization_info = new MarginalizationInfo();
++            MarginalizationInfo *marginalization_info = new MarginalizationInfo(EXACT_MARGINALIZATION_POSE_JACOBIAN != 0);
+             marginalization_info->diagnostics_enabled = diagnostic_sample;
+             vector2double();
+             if (diagnostic_sample) biasDumpProblem(*this,problem,"full_problem_after_native_yaw_gauge");
+--- a/vins_estimator/src/estimator/estimator.h
++++ b/vins_estimator/src/estimator/estimator.h
+@@ -34,7 +34,7 @@
+ #include "../factor/projectionTwoFrameOneCamFactor.h"
+ #include "../factor/projectionTwoFrameTwoCamFactor.h"
+ #include "../factor/projectionOneFrameTwoCamFactor.h"
+-// PX4_AGENT_STATIONARY_HEALTH_V5: sensor health and opt-in matrix evidence.
++// PX4_AGENT_STATIONARY_HEALTH_V6: sensor health and opt-in matrix evidence.
+ #include "../factor/stationary_factors.h"
+ #include "../factor/imu_chain_health.h"
+ #include <set>
+--- a/vins_estimator/src/estimator/parameters.cpp
++++ b/vins_estimator/src/estimator/parameters.cpp
+@@ -17,6 +17,7 @@
+ double ACC_BIAS_PRIOR_SIGMA = 0, GYR_BIAS_PRIOR_SIGMA = 0;
+ int ENABLE_ZUPT = 0;
+ double MAX_IMU_PREINTEGRATION_SPAN_S = 0; // opt-in; unchanged upstream keyframe policy by default
++int EXACT_MARGINALIZATION_POSE_JACOBIAN = 0; // upstream legacy unless explicit opt-in
+ std::string BIAS_DIAGNOSTICS_DIR; // empty disables all matrix snapshots
+ double BIAS_DIAGNOSTICS_PERIOD_S = 1.0, BIAS_DIAGNOSTICS_STARTUP_DENSE_S = 3.0;
+ Eigen::Vector3d HEALTH_IMU_TO_BODY_FLU = Eigen::Vector3d::Zero();
+@@ -186,7 +187,13 @@
+     if (!fsSettings["acc_bias_prior_sigma"].empty()) fsSettings["acc_bias_prior_sigma"] >> ACC_BIAS_PRIOR_SIGMA;
+     if (!fsSettings["gyr_bias_prior_sigma"].empty()) fsSettings["gyr_bias_prior_sigma"] >> GYR_BIAS_PRIOR_SIGMA;
+     ROS_INFO("Initial native-IMU bias prior sigmas: acceleration=%f gyro=%f", ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA);
+-    // PX4_AGENT_STATIONARY_HEALTH_V5: optional sensor-supported ZUPT and matrix evidence.
++    // PX4_AGENT_STATIONARY_HEALTH_V6: optional sensor-supported ZUPT and matrix evidence.
++    if (!fsSettings["exact_marginalization_pose_jacobian"].empty())
++        fsSettings["exact_marginalization_pose_jacobian"] >> EXACT_MARGINALIZATION_POSE_JACOBIAN;
++    if (EXACT_MARGINALIZATION_POSE_JACOBIAN != 0 && EXACT_MARGINALIZATION_POSE_JACOBIAN != 1)
++        throw std::runtime_error("exact_marginalization_pose_jacobian must be 0 or 1");
++    ROS_INFO("Marginalized prior pose derivative: %s", EXACT_MARGINALIZATION_POSE_JACOBIAN ? "exact existing residual chart" : "legacy frozen local Jacobian");
++
+     if (!fsSettings["bias_information_diagnostics_dir"].empty())
+         fsSettings["bias_information_diagnostics_dir"] >> BIAS_DIAGNOSTICS_DIR;
+     if (!fsSettings["bias_information_period_s"].empty())
+--- a/vins_estimator/src/estimator/parameters.h
++++ b/vins_estimator/src/estimator/parameters.h
+@@ -31,10 +31,11 @@
+ 
+ extern double ACC_N, ACC_W;
+ extern double ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA;
+-// PX4_AGENT_STATIONARY_HEALTH_V5: optional sensor and diagnostic configuration.
++// PX4_AGENT_STATIONARY_HEALTH_V6: optional sensor and diagnostic configuration.
+ extern int ENABLE_ZUPT;
+ extern double MAX_IMU_PREINTEGRATION_SPAN_S;
+ extern std::string BIAS_DIAGNOSTICS_DIR;
++extern int EXACT_MARGINALIZATION_POSE_JACOBIAN;
+ extern double BIAS_DIAGNOSTICS_PERIOD_S, BIAS_DIAGNOSTICS_STARTUP_DENSE_S;
+ extern Eigen::Vector3d HEALTH_IMU_TO_BODY_FLU;
+ extern double ZUPT_VELOCITY_SIGMA, ZUPT_POSITION_SIGMA, ZUPT_CAMERA_FX;
+--- a/vins_estimator/src/factor/marginalization_factor.cpp
++++ b/vins_estimator/src/factor/marginalization_factor.cpp
+@@ -390,6 +390,24 @@
+                 Eigen::Map<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> jacobian(jacobians[i], n, size);
+                 jacobian.setZero();
+                 jacobian.leftCols(local_size) = marginalization_info->linearized_jacobians.middleCols(idx, local_size);
++                if (size == 7 && marginalization_info->exact_pose_jacobian)
++                {
++                    // Keep the frozen prior and residual chart unchanged. Native
++                    // factors embed right-body tangent derivatives in columns
++                    // 3:6; PoseLocalParameterization uses the same convention.
++                    const Eigen::Quaterniond q0(marginalization_info->keep_block_data[i][6],
++                        marginalization_info->keep_block_data[i][3],
++                        marginalization_info->keep_block_data[i][4],
++                        marginalization_info->keep_block_data[i][5]);
++                    const Eigen::Quaterniond q(parameters[i][6],parameters[i][3],
++                        parameters[i][4],parameters[i][5]);
++                    const Eigen::Quaterniond relative = q0.inverse() * q;
++                    const double hemisphere = relative.w() >= 0 ? 1.0 : -1.0;
++                    const Eigen::Matrix3d chart_derivative = hemisphere *
++                        (relative.w() * Eigen::Matrix3d::Identity() + Utility::skewSymmetric(relative.vec()));
++                    jacobian.middleCols(3,3) =
++                        marginalization_info->linearized_jacobians.middleCols(idx+3,3) * chart_derivative;
++                }
+             }
+         }
+     }
+--- a/vins_estimator/src/factor/marginalization_factor.h
++++ b/vins_estimator/src/factor/marginalization_factor.h
+@@ -55,7 +55,8 @@
+ class MarginalizationInfo
+ {
+   public:
+-    MarginalizationInfo(){valid = true;};
++    explicit MarginalizationInfo(bool exact_pose_derivative = false)
++        : valid(true), exact_pose_jacobian(exact_pose_derivative) {};
+     ~MarginalizationInfo();
+     int localSize(int size) const;
+     int globalSize(int size) const;
+@@ -82,6 +83,8 @@
+     // PX4_AGENT_BIAS_DIAGNOSTICS_V1: expose already-computed spectra only.
+     bool diagnostics_enabled = false;
+     Eigen::VectorXd diagnostic_amm_eigenvalues, diagnostic_schur_eigenvalues;
++    // PX4_AGENT_EXACT_PRIOR_POSE_JACOBIAN: immutable per prior, default legacy.
++    const bool exact_pose_jacobian;
+ 
+ };
+ 

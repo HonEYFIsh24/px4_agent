@@ -1,0 +1,28 @@
+{
+  "id": "logistics_yard",
+  "world_sha256": "b1791d061bac5c47554555d48279ab3ff3f12d7c12b62dc3a330e60f6931ddde",
+  "ground_plane": {
+    "known": true,
+    "z_m": 0.003,
+    "bounds_xy_m": [
+      -20,
+      -20,
+      20,
+      20
+    ]
+  },
+  "flight_region": {
+    "frame": "gazebo_world",
+    "bounds_min_m": [
+      -3,
+      -4,
+      -0.2
+    ],
+    "bounds_max_m": [
+      8,
+      4,
+      6
+    ],
+    "margin_m": 0.6
+  }
+}

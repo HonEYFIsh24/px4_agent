@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Source scripts/setup_ros.bash, then launch this file with the
+       roslaunch sigint-timeout option set to 180 seconds. One manager owns
+       startup, landing and ordered child shutdown before the master exits. -->
+  <arg name="px4_dir" default="$(optenv PX4_DIR /home/dut/PX4-Autopilot)"/>
+  <arg name="gui" default="true"/>
+  <arg name="sim_speed_factor" default="$(eval 0.35 if arg('gui') else 1)"/>
+  <arg name="web_port" default="8080"/>
+  <arg name="env_file" default=""/>
+  <arg name="world" default="$(find px4_agent)/scene/worlds/obstacle_yard.world"/>
+  <arg name="ready_timeout" default="150"/>
+  <arg name="land_timeout" default="90"/>
+  <arg name="ev_profile" default="shadow"/>
+  <arg name="ev_test_faults" default="false"/>
+  <arg name="gazebo_sync" default="false"/>
+
+  <node pkg="px4_agent" type="start_system_roslaunch.sh" name="uav_system_manager"
+        output="screen" required="true">
+    <env name="PX4_DIR" value="$(arg px4_dir)"/>
+    <env name="GUI" value="$(arg gui)"/>
+    <env name="PX4_SIM_SPEED_FACTOR" value="$(arg sim_speed_factor)"/>
+    <env name="PX4_AGENT_WEB_PORT" value="$(arg web_port)"/>
+    <env name="PX4_AGENT_ENV_FILE" value="$(arg env_file)"/>
+    <env name="PX4_AGENT_WORLD" value="$(arg world)"/>
+    <env name="PX4_AGENT_READY_TIMEOUT" value="$(arg ready_timeout)"/>
+    <env name="PX4_AGENT_LAND_TIMEOUT" value="$(arg land_timeout)"/>
+    <env name="PX4_AGENT_EV_PROFILE" value="$(arg ev_profile)"/>
+    <env name="PX4_AGENT_EV_TEST_FAULTS" value="$(arg ev_test_faults)"/>
+    <env name="PX4_AGENT_GAZEBO_SYNC" value="$(eval 1 if arg('gazebo_sync') else 0)"/>
+  </node>
+</launch>

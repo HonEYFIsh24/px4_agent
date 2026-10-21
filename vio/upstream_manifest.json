@@ -1,0 +1,492 @@
+{
+  "repository": "HKUST-Aerial-Robotics/VINS-Fusion",
+  "ref": "master",
+  "files": [
+    {
+      "path": "camera_models/CMakeLists.txt",
+      "sha": "3b61190e70b2c388ce48aa97ee3c67965e668f7e",
+      "size": 1978,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/CMakeLists.txt"
+    },
+    {
+      "path": "camera_models/package.xml",
+      "sha": "7c28ebb0075e3ad7109dab89474c7bbb6c197e1f",
+      "size": 2050,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/package.xml"
+    },
+    {
+      "path": "vins_estimator/CMakeLists.txt",
+      "sha": "5daf0eef04225128b9dd139c058a2f3dddf5e626",
+      "size": 1726,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/CMakeLists.txt"
+    },
+    {
+      "path": "vins_estimator/package.xml",
+      "sha": "93df9c2a8c0407e46fc88696d6dfd175f308c4a4",
+      "size": 2241,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/package.xml"
+    },
+    {
+      "path": "camera_models/cmake/FindEigen.cmake",
+      "sha": "cdeb3055730058534c25b5da1f69df9b8ab0dc9a",
+      "size": 7887,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/cmake/FindEigen.cmake"
+    },
+    {
+      "path": "camera_models/src/intrinsic_calib.cc",
+      "sha": "7590a649d76075ee758f2555010803033470e673",
+      "size": 9566,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/intrinsic_calib.cc"
+    },
+    {
+      "path": "vins_estimator/cmake/FindEigen.cmake",
+      "sha": "cdeb3055730058534c25b5da1f69df9b8ab0dc9a",
+      "size": 7887,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/cmake/FindEigen.cmake"
+    },
+    {
+      "path": "vins_estimator/launch/vins_rviz.launch",
+      "sha": "988b4ca789f7e08be9c87930d0110b60f049a685",
+      "size": 148,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/launch/vins_rviz.launch"
+    },
+    {
+      "path": "vins_estimator/src/KITTIGPSTest.cpp",
+      "sha": "8c755760e4852d5a2f994f311f74024e3e873856",
+      "size": 6275,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/KITTIGPSTest.cpp"
+    },
+    {
+      "path": "vins_estimator/src/KITTIOdomTest.cpp",
+      "sha": "df4c3382d053fd0377193b6e5d83940393e8fcab",
+      "size": 3913,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/KITTIOdomTest.cpp"
+    },
+    {
+      "path": "vins_estimator/src/rosNodeTest.cpp",
+      "sha": "30598d1e4d6f67abe570c8e62231d0b68b0fa10b",
+      "size": 8272,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/rosNodeTest.cpp"
+    },
+    {
+      "path": "camera_models/src/calib/CameraCalibration.cc",
+      "sha": "10543e9c8a9488634042dc30fe7318b11ca132cd",
+      "size": 16543,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/calib/CameraCalibration.cc"
+    },
+    {
+      "path": "camera_models/src/camera_models/Camera.cc",
+      "sha": "0ba8dc30829b690108dd4032e2dbc31e205be5e6",
+      "size": 5759,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/camera_models/Camera.cc"
+    },
+    {
+      "path": "camera_models/src/camera_models/CameraFactory.cc",
+      "sha": "42e9ad15c25945a7afe7f16bb915a77589a5877b",
+      "size": 5889,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/camera_models/CameraFactory.cc"
+    },
+    {
+      "path": "camera_models/src/camera_models/CataCamera.cc",
+      "sha": "7eacaa52e717d89e7f1ccad0b66e593366134354",
+      "size": 26012,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/camera_models/CataCamera.cc"
+    },
+    {
+      "path": "camera_models/src/camera_models/CostFunctionFactory.cc",
+      "sha": "2bcdb146baf7b6c71db33c65a62a5fe83e72c727",
+      "size": 59568,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/camera_models/CostFunctionFactory.cc"
+    },
+    {
+      "path": "camera_models/src/camera_models/EquidistantCamera.cc",
+      "sha": "480f51ac231678b49f59ff63e486c08ab710451a",
+      "size": 20449,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/camera_models/EquidistantCamera.cc"
+    },
+    {
+      "path": "camera_models/src/camera_models/PinholeCamera.cc",
+      "sha": "98397241e8a37a39c12be09bee17bd90a9eb1041",
+      "size": 22110,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/camera_models/PinholeCamera.cc"
+    },
+    {
+      "path": "camera_models/src/camera_models/PinholeFullCamera.cc",
+      "sha": "5365c0647e8141602587cab67fead31d4726b4e8",
+      "size": 26659,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/camera_models/PinholeFullCamera.cc"
+    },
+    {
+      "path": "camera_models/src/camera_models/ScaramuzzaCamera.cc",
+      "sha": "3615594ab0ed3e517ab9d34f620da79b3aca0eee",
+      "size": 25873,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/camera_models/ScaramuzzaCamera.cc"
+    },
+    {
+      "path": "camera_models/src/chessboard/Chessboard.cc",
+      "sha": "4c0a761d34bf45e9c3a55600ea5597b3c77076df",
+      "size": 70141,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/chessboard/Chessboard.cc"
+    },
+    {
+      "path": "camera_models/src/gpl/EigenQuaternionParameterization.cc",
+      "sha": "e97b05760ce5b412c4248bdf8471e5dd03510404",
+      "size": 1409,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/gpl/EigenQuaternionParameterization.cc"
+    },
+    {
+      "path": "camera_models/src/gpl/gpl.cc",
+      "sha": "9142a3a7609c7bc020cd5bd9324fa5fd7cf14580",
+      "size": 25657,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/gpl/gpl.cc"
+    },
+    {
+      "path": "camera_models/src/sparse_graph/Transform.cc",
+      "sha": "db979e9fb7e531e9c9236f71094ea9d16814eedb",
+      "size": 1075,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/src/sparse_graph/Transform.cc"
+    },
+    {
+      "path": "vins_estimator/src/estimator/estimator.cpp",
+      "sha": "05bf4484fe9933b43994b9349c9a93c02e1ca7cf",
+      "size": 57233,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/estimator/estimator.cpp"
+    },
+    {
+      "path": "vins_estimator/src/estimator/estimator.h",
+      "sha": "05d5fde78f5bb331b926fb8d0460a6046da33cfe",
+      "size": 5847,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/estimator/estimator.h"
+    },
+    {
+      "path": "vins_estimator/src/estimator/feature_manager.cpp",
+      "sha": "f98958f094cc1a2605d80f6b4b6b52b59f88de73",
+      "size": 19107,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/estimator/feature_manager.cpp"
+    },
+    {
+      "path": "vins_estimator/src/estimator/feature_manager.h",
+      "sha": "f60927e7670c76f50cebe8cb18ab2ad737f42549",
+      "size": 3659,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/estimator/feature_manager.h"
+    },
+    {
+      "path": "vins_estimator/src/estimator/parameters.cpp",
+      "sha": "8c8b77a800c3bec09b13867640d17c65bad0c045",
+      "size": 5642,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/estimator/parameters.cpp"
+    },
+    {
+      "path": "vins_estimator/src/estimator/parameters.h",
+      "sha": "22cbc6a6469b28149e59182a01721e8fd59288bd",
+      "size": 2039,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/estimator/parameters.h"
+    },
+    {
+      "path": "vins_estimator/src/factor/imu_factor.h",
+      "sha": "9fe3ce0475dc1cb76feacaccd0ecfba9e1886854",
+      "size": 8867,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/imu_factor.h"
+    },
+    {
+      "path": "vins_estimator/src/factor/initial_bias_factor.h",
+      "sha": "0758a1ec344d98498a268c1abd09c6e299570e29",
+      "size": 1867,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/initial_bias_factor.h"
+    },
+    {
+      "path": "vins_estimator/src/factor/initial_pose_factor.h",
+      "sha": "47bd91cc922f169b21008abcb8acc82da3d80784",
+      "size": 3740,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/initial_pose_factor.h"
+    },
+    {
+      "path": "vins_estimator/src/factor/integration_base.h",
+      "sha": "0496881bccc55069bb305d829b47bef418f11452",
+      "size": 26573,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/integration_base.h"
+    },
+    {
+      "path": "vins_estimator/src/factor/marginalization_factor.cpp",
+      "sha": "68591a8db11914d61f0e5acd29ce190e0bc9d216",
+      "size": 15465,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/marginalization_factor.cpp"
+    },
+    {
+      "path": "vins_estimator/src/factor/marginalization_factor.h",
+      "sha": "b0fc1f9392888f34be5096072597832d3e5aa929",
+      "size": 2875,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/marginalization_factor.h"
+    },
+    {
+      "path": "vins_estimator/src/factor/pose_local_parameterization.cpp",
+      "sha": "a639781cf0f9e0de6d625ec4ccfd29bde485df58",
+      "size": 1184,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/pose_local_parameterization.cpp"
+    },
+    {
+      "path": "vins_estimator/src/factor/pose_local_parameterization.h",
+      "sha": "d4c8d19faf5f4d4e56f110667d59eb9a00e6a61a",
+      "size": 810,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/pose_local_parameterization.h"
+    },
+    {
+      "path": "vins_estimator/src/factor/projectionOneFrameTwoCamFactor.cpp",
+      "sha": "8e24cfa7fe27c3f129e064d70fb8d26d1c5f8ef2",
+      "size": 9776,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/projectionOneFrameTwoCamFactor.cpp"
+    },
+    {
+      "path": "vins_estimator/src/factor/projectionOneFrameTwoCamFactor.h",
+      "sha": "94d88fad1795bf0be98127bcffa4388df4d3ee97",
+      "size": 1305,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/projectionOneFrameTwoCamFactor.h"
+    },
+    {
+      "path": "vins_estimator/src/factor/projectionTwoFrameOneCamFactor.cpp",
+      "sha": "8af01e8bb8f588a4ef40ffde3869c1da9fb7f775",
+      "size": 11502,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/projectionTwoFrameOneCamFactor.cpp"
+    },
+    {
+      "path": "vins_estimator/src/factor/projectionTwoFrameOneCamFactor.h",
+      "sha": "a7650a1c4c375a363f5dc4603098ae921c97ab8f",
+      "size": 1293,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/projectionTwoFrameOneCamFactor.h"
+    },
+    {
+      "path": "vins_estimator/src/factor/projectionTwoFrameTwoCamFactor.cpp",
+      "sha": "f8a6e2a467aafe6c18426935e9231f5730967e96",
+      "size": 12908,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/projectionTwoFrameTwoCamFactor.cpp"
+    },
+    {
+      "path": "vins_estimator/src/factor/projectionTwoFrameTwoCamFactor.h",
+      "sha": "fb6220bf027ec913e1cf8149ea3913e930763c62",
+      "size": 1305,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/projectionTwoFrameTwoCamFactor.h"
+    },
+    {
+      "path": "vins_estimator/src/factor/projection_factor.cpp",
+      "sha": "64cf8e0e9a88d1dd62f97c3a84091f65bd30095e",
+      "size": 9652,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/projection_factor.cpp"
+    },
+    {
+      "path": "vins_estimator/src/factor/projection_factor.h",
+      "sha": "952cecca4417023fd31cdca16d8d8993224dec72",
+      "size": 1015,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/factor/projection_factor.h"
+    },
+    {
+      "path": "vins_estimator/src/featureTracker/feature_tracker.cpp",
+      "sha": "eb69c8870431070234b144d1ab7b543a9ab79926",
+      "size": 18609,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/featureTracker/feature_tracker.cpp"
+    },
+    {
+      "path": "vins_estimator/src/featureTracker/feature_tracker.h",
+      "sha": "00bfffa513c9f05bf6756a522ca1370ebea04c88",
+      "size": 3216,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/featureTracker/feature_tracker.h"
+    },
+    {
+      "path": "vins_estimator/src/initial/initial_aligment.cpp",
+      "sha": "fd9cc522bd907c927fc71bdab1c1fff81306ac94",
+      "size": 8073,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/initial/initial_aligment.cpp"
+    },
+    {
+      "path": "vins_estimator/src/initial/initial_alignment.h",
+      "sha": "4a6631f7db0553b074132d9ac3cc95bb958872c6",
+      "size": 1298,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/initial/initial_alignment.h"
+    },
+    {
+      "path": "vins_estimator/src/initial/initial_ex_rotation.cpp",
+      "sha": "28df5136b3e08d4434298b86d906ed4c90f69b96",
+      "size": 5369,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/initial/initial_ex_rotation.cpp"
+    },
+    {
+      "path": "vins_estimator/src/initial/initial_ex_rotation.h",
+      "sha": "7eba420302b88fae8726f45c1646dfe69c60d47a",
+      "size": 1496,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/initial/initial_ex_rotation.h"
+    },
+    {
+      "path": "vins_estimator/src/initial/initial_sfm.cpp",
+      "sha": "a23c01d56cd2ff2bf5cefe037ff948468c976c1e",
+      "size": 10383,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/initial/initial_sfm.cpp"
+    },
+    {
+      "path": "vins_estimator/src/initial/initial_sfm.h",
+      "sha": "0c702b3fbc4a57197551a7f6e78bfb644fe0fa74",
+      "size": 2406,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/initial/initial_sfm.h"
+    },
+    {
+      "path": "vins_estimator/src/initial/solve_5pts.cpp",
+      "sha": "991232d71634236c096b46b6f7ff217bbd35a83f",
+      "size": 8031,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/initial/solve_5pts.cpp"
+    },
+    {
+      "path": "vins_estimator/src/initial/solve_5pts.h",
+      "sha": "ee3f8d5af78f96fd102442dc4f8d404ed4de8ecb",
+      "size": 1116,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/initial/solve_5pts.h"
+    },
+    {
+      "path": "vins_estimator/src/utility/CameraPoseVisualization.cpp",
+      "sha": "16fd1b78bf262b045318907fa3d6da2831482d97",
+      "size": 7075,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/utility/CameraPoseVisualization.cpp"
+    },
+    {
+      "path": "vins_estimator/src/utility/CameraPoseVisualization.h",
+      "sha": "8339f18c0a9be88db7702306670334250917fbd0",
+      "size": 1703,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/utility/CameraPoseVisualization.h"
+    },
+    {
+      "path": "vins_estimator/src/utility/tic_toc.h",
+      "sha": "aeeee01c6c1d5860e9726921477014f4d5e80a40",
+      "size": 858,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/utility/tic_toc.h"
+    },
+    {
+      "path": "vins_estimator/src/utility/utility.cpp",
+      "sha": "d9f9b8210c86cfc6211671f1c1934a2d4a5c4b08",
+      "size": 803,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/utility/utility.cpp"
+    },
+    {
+      "path": "vins_estimator/src/utility/utility.h",
+      "sha": "6872696bb44449951a8b82ea88ce723248ae1047",
+      "size": 5129,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/utility/utility.h"
+    },
+    {
+      "path": "vins_estimator/src/utility/visualization.cpp",
+      "sha": "7e048389f9863b10b437cf907bbc59ee0dde1512",
+      "size": 16261,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/utility/visualization.cpp"
+    },
+    {
+      "path": "vins_estimator/src/utility/visualization.h",
+      "sha": "d2e7e4e75f6657e0a7a34ce9732190b42bfc875e",
+      "size": 2262,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/vins_estimator/src/utility/visualization.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/calib/CameraCalibration.h",
+      "sha": "ac80f690bb013ed50a2d8f77eff49f745e48b7e3",
+      "size": 2195,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/calib/CameraCalibration.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/camera_models/Camera.h",
+      "sha": "68e2bd7fbb5cd6423d5e83b810276247aab894d2",
+      "size": 5473,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/camera_models/Camera.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/camera_models/CameraFactory.h",
+      "sha": "e3c2f2825096a7a9d494d95d3a481d05f85cb2ba",
+      "size": 658,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/camera_models/CameraFactory.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/camera_models/CataCamera.h",
+      "sha": "14384a57340256d745fc4ec95bb4e892a4897cb0",
+      "size": 6561,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/camera_models/CataCamera.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/camera_models/CostFunctionFactory.h",
+      "sha": "40260da84dc7343720189b4aa63ccbe4e2bc9950",
+      "size": 3444,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/camera_models/CostFunctionFactory.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/camera_models/EquidistantCamera.h",
+      "sha": "4e172d3145510bfe01605089f56b5c49433c73e4",
+      "size": 6787,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/camera_models/EquidistantCamera.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/camera_models/PinholeCamera.h",
+      "sha": "f368a0b0972a28810e25673cc7df415de2e4f0b4",
+      "size": 5982,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/camera_models/PinholeCamera.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/camera_models/PinholeFullCamera.h",
+      "sha": "b391c8aa5548fe1befe1794850ba6ba1b3ace748",
+      "size": 8781,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/camera_models/PinholeFullCamera.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/camera_models/ScaramuzzaCamera.h",
+      "sha": "3d54aca0bf450898786b7e41230dfd1fcd4c85a4",
+      "size": 10407,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/camera_models/ScaramuzzaCamera.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/chessboard/Chessboard.h",
+      "sha": "fb421988af10ddac317fcbd73cfdb42c3a69e313",
+      "size": 3058,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/chessboard/Chessboard.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/chessboard/ChessboardCorner.h",
+      "sha": "8b0f2bbee993e890d29e52a968bd2d6fc7b6500a",
+      "size": 1196,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/chessboard/ChessboardCorner.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/chessboard/ChessboardQuad.h",
+      "sha": "9bb77846053a8f44a6d8d87c292bc0060b597a7a",
+      "size": 773,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/chessboard/ChessboardQuad.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/chessboard/Spline.h",
+      "sha": "5ac5809f2561b12ccd3b949c0a57b2fa33dc1742",
+      "size": 8626,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/chessboard/Spline.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/gpl/EigenQuaternionParameterization.h",
+      "sha": "3d08f0ea06f8a70de32904d33e6d0f628a992523",
+      "size": 1150,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/gpl/EigenQuaternionParameterization.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/gpl/EigenUtils.h",
+      "sha": "72b46c797ddd82720b5e26f81680b02c925bb346",
+      "size": 11621,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/gpl/EigenUtils.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/gpl/gpl.h",
+      "sha": "9f511f63023b9f6aa292de418ad20bda3fc259a1",
+      "size": 2414,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/gpl/gpl.h"
+    },
+    {
+      "path": "camera_models/include/camodocal/sparse_graph/Transform.h",
+      "sha": "c164b0a01ca0dc7bf222a565d26645eb33cc6b79",
+      "size": 744,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/camera_models/include/camodocal/sparse_graph/Transform.h"
+    },
+    {
+      "path": "README.md",
+      "sha": "b99857c1c1a88c6429900bb92b0d1a8ea2de9a0c",
+      "size": 10321,
+      "url": "https://raw.githubusercontent.com/HKUST-Aerial-Robotics/VINS-Fusion/master/README.md"
+    }
+  ]
+}

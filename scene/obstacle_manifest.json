@@ -1,0 +1,49 @@
+{
+  "id": "obstacle_yard",
+  "world_sha256": "1f5ee08c08a3ac0e25e4ca55d5c14e29bdf4b1058c3fa5de81eb8b9567a2d72c",
+  "ground_plane": {
+    "known": true,
+    "z_m": 0.003,
+    "bounds_xy_m": [
+      -20,
+      -20,
+      20,
+      20
+    ]
+  },
+  "flight_region": {
+    "frame": "gazebo_world",
+    "bounds_min_m": [
+      -3,
+      -8,
+      -0.2
+    ],
+    "bounds_max_m": [
+      16,
+      8,
+      6
+    ],
+    "margin_m": 0.6
+  },
+  "takeoff_pad": {
+    "center_world_m": [
+      0,
+      0,
+      0.003
+    ],
+    "radius_m": 1.0,
+    "vertical_clearance_m": 6
+  },
+  "navigation": {
+    "enabled": true,
+    "method": "lidar_grid",
+    "bounds_xy_m": [
+      -3.0,
+      -8.0,
+      16.0,
+      8.0
+    ],
+    "flight_altitude_m": 3.5,
+    "minimum_clearance_m": 1.0
+  }
+}

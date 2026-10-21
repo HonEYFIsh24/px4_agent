@@ -1,0 +1,218 @@
+--- a/vins_estimator/src/estimator/estimator.cpp
++++ b/vins_estimator/src/estimator/estimator.cpp
+@@ -10,10 +10,11 @@
+ #include "estimator.h"
+ #include "../utility/visualization.h"
+ #include "../factor/imu_bias_prior.h"
++#include "../factor/bias_native_diagnostics.h"
+ #include <std_msgs/Float64MultiArray.h>
+ #include <std_msgs/String.h>
+ #include <sstream>
+-// PX4_AGENT_STATIONARY_HEALTH_V4: real stereo/IMU ZUPT and native solution checks.
++// PX4_AGENT_STATIONARY_HEALTH_V5: sensor health and opt-in source matrix snapshots.
+ // PX4_AGENT_INITIAL_BIAS_PRIOR: native IMU statistics, added once then marginalized.
+ // PX4_AGENT_VIO_PATCH: health, guarded reset, and clean shutdown only.
+ 
+@@ -55,6 +56,10 @@
+     solver_initial_cost = solver_final_cost = solver_residual_rms = 0;
+     solver_health_reason.clear();
+     native_imu_optimizer_window_json = "{}";
++    native_bias_diagnostics_json = "{\"enabled\":false}";
++    bias_diagnostic_first_stamp = bias_diagnostic_last_stamp = -1;
++    bias_diagnostic_sequence = 0;
++    bias_diagnostic_file_entries.clear();
+     keyframe_visual_requested = keyframe_forced_by_imu_span = false;
+     keyframe_candidate_merged_imu_span_s = 0;
+     solver_iterations = solver_successful_steps = solver_unsuccessful_steps = 0;
+@@ -1146,7 +1151,7 @@
+     quaternion_json << "]";
+     // Sentinel values are finite, keeping diagnostics valid JSON even before
+     // the first IMU window or stereo pair has arrived.
+-    o << "{\"implementation_revision\":\"stationary_health_v4\",\"stamp\":" << stamp << ",\"tracking_ok\":" << ((solver_flag == NON_LINEAR && !failure_occur) ? "true" : "false")
++    o << "{\"implementation_revision\":\"stationary_health_v5\",\"stamp\":" << stamp << ",\"tracking_ok\":" << ((solver_flag == NON_LINEAR && !failure_occur) ? "true" : "false")
+       << ",\"solution_usable\":" << (solver_solution_usable ? "true" : "false")
+       << ",\"reason\":\"" << solver_health_reason << "\",\"initial_cost\":" << solver_initial_cost
+       << ",\"final_cost\":" << solver_final_cost << ",\"residual_rms\":" << solver_residual_rms
+@@ -1163,6 +1168,7 @@
+       << ",\"current_gyro_bias_rad_s\":" << vector_json(Bgs[frame_count])
+       << ",\"estimator_gravity_world_m_s2\":" << vector_json(g)
+       << ",\"imu_optimizer_window\":" << native_imu_optimizer_window_json
++      << ",\"bias_information_diagnostics\":" << native_bias_diagnostics_json
+       << ",\"zupt_enabled\":" << (ENABLE_ZUPT ? "true" : "false")
+       << ",\"stationary_source_gate\":" << (stationary_detector.instant_gate ? "true" : "false")
+       << ",\"stationary_confirmed\":" << ((ENABLE_ZUPT && USE_IMU && stationary_detector.active) ? "true" : "false")
+@@ -1395,6 +1401,22 @@
+     ROS_DEBUG("visual measurement count: %d", f_m_cnt);
+     //printf("prepare for ceres: %f \n", t_prepare.toc());
+ 
++    bool diagnostic_sample = false;
++    if (!BIAS_DIAGNOSTICS_DIR.empty() && USE_IMU && frame_count == WINDOW_SIZE)
++    {
++        const double stamp = Headers[frame_count];
++        if (bias_diagnostic_first_stamp < 0) bias_diagnostic_first_stamp = stamp;
++        diagnostic_sample = stamp - bias_diagnostic_first_stamp <= BIAS_DIAGNOSTICS_STARTUP_DENSE_S + 1e-9
++            || bias_diagnostic_last_stamp < 0 || stamp - bias_diagnostic_last_stamp >= BIAS_DIAGNOSTICS_PERIOD_S - 1e-9;
++        if (diagnostic_sample)
++        {
++            ++bias_diagnostic_sequence; bias_diagnostic_last_stamp = stamp;
++            bias_diagnostic_file_entries.clear();
++            biasDumpCurrentPrior(*this,problem,last_marginalization_info,last_marginalization_parameter_blocks,"prior_before_solve");
++            biasDumpProblem(*this,problem,"full_problem_before_solve");
++        }
++    }
++
+     ceres::Solver::Options options;
+ 
+     options.linear_solver_type = ceres::DENSE_SCHUR;
+@@ -1411,6 +1433,7 @@
+     TicToc t_solver;
+     ceres::Solver::Summary summary;
+     ceres::Solve(options, &problem, &summary);
++    if (diagnostic_sample) biasDumpProblem(*this,problem,"full_problem_after_solve_before_gauge");
+     solver_iterations = static_cast<int>(summary.iterations.size());
+     solver_successful_steps = summary.num_successful_steps;
+     solver_unsuccessful_steps = summary.num_unsuccessful_steps;
+@@ -1459,7 +1482,9 @@
+     if (marginalization_flag == MARGIN_OLD)
+     {
+         MarginalizationInfo *marginalization_info = new MarginalizationInfo();
++        marginalization_info->diagnostics_enabled = diagnostic_sample;
+         vector2double();
++        if (diagnostic_sample) biasDumpProblem(*this,problem,"full_problem_after_native_yaw_gauge");
+         if (add_initial_bias_prior)
+         {
+             marginalization_info->addResidualBlockInfo(new ResidualBlockInfo(
+@@ -1578,6 +1603,7 @@
+             return;
+         }
+         ROS_DEBUG("marginalization %f ms", t_margin.toc());
++        if (diagnostic_sample) biasDumpMarginalization(*this,problem,marginalization_info,"old");
+ 
+         std::unordered_map<long, double *> addr_shift;
+         for (int i = 1; i <= WINDOW_SIZE; i++)
+@@ -1606,7 +1632,9 @@
+         {
+ 
+             MarginalizationInfo *marginalization_info = new MarginalizationInfo();
++            marginalization_info->diagnostics_enabled = diagnostic_sample;
+             vector2double();
++            if (diagnostic_sample) biasDumpProblem(*this,problem,"full_problem_after_native_yaw_gauge");
+             if (last_marginalization_info && last_marginalization_info->valid)
+             {
+                 vector<int> drop_set;
+@@ -1643,6 +1671,7 @@
+             return;
+         }
+             ROS_DEBUG("end marginalization, %f ms", t_margin.toc());
++            if (diagnostic_sample) biasDumpMarginalization(*this,problem,marginalization_info,"second_new");
+             
+             std::unordered_map<long, double *> addr_shift;
+             for (int i = 0; i <= WINDOW_SIZE; i++)
+--- a/vins_estimator/src/estimator/estimator.h
++++ b/vins_estimator/src/estimator/estimator.h
+@@ -34,7 +34,7 @@
+ #include "../factor/projectionTwoFrameOneCamFactor.h"
+ #include "../factor/projectionTwoFrameTwoCamFactor.h"
+ #include "../factor/projectionOneFrameTwoCamFactor.h"
+-// PX4_AGENT_STATIONARY_HEALTH_V4: per-frame sensor support and native health.
++// PX4_AGENT_STATIONARY_HEALTH_V5: sensor health and opt-in matrix evidence.
+ #include "../factor/stationary_factors.h"
+ #include "../factor/imu_chain_health.h"
+ #include <set>
+@@ -192,6 +192,10 @@
+     std::set<int> previous_stereo_ids;
+     std::string native_stereo_tracks_json;
+     std::string native_imu_optimizer_window_json;
++    std::string native_bias_diagnostics_json;
++    std::vector<std::string> bias_diagnostic_file_entries;
++    double bias_diagnostic_first_stamp, bias_diagnostic_last_stamp;
++    int bias_diagnostic_sequence;
+     bool keyframe_visual_requested, keyframe_forced_by_imu_span;
+     double keyframe_candidate_merged_imu_span_s;
+     int solver_iterations, solver_successful_steps, solver_unsuccessful_steps, solver_termination_type;
+--- a/vins_estimator/src/estimator/parameters.cpp
++++ b/vins_estimator/src/estimator/parameters.cpp
+@@ -17,6 +17,8 @@
+ double ACC_BIAS_PRIOR_SIGMA = 0, GYR_BIAS_PRIOR_SIGMA = 0;
+ int ENABLE_ZUPT = 0;
+ double MAX_IMU_PREINTEGRATION_SPAN_S = 0; // opt-in; unchanged upstream keyframe policy by default
++std::string BIAS_DIAGNOSTICS_DIR; // empty disables all matrix snapshots
++double BIAS_DIAGNOSTICS_PERIOD_S = 1.0, BIAS_DIAGNOSTICS_STARTUP_DENSE_S = 3.0;
+ Eigen::Vector3d HEALTH_IMU_TO_BODY_FLU = Eigen::Vector3d::Zero();
+ double ZUPT_VELOCITY_SIGMA = 0.03, ZUPT_POSITION_SIGMA = 0.02, ZUPT_CAMERA_FX = 320;
+ double GYR_N, GYR_W;
+@@ -184,7 +186,19 @@
+     if (!fsSettings["acc_bias_prior_sigma"].empty()) fsSettings["acc_bias_prior_sigma"] >> ACC_BIAS_PRIOR_SIGMA;
+     if (!fsSettings["gyr_bias_prior_sigma"].empty()) fsSettings["gyr_bias_prior_sigma"] >> GYR_BIAS_PRIOR_SIGMA;
+     ROS_INFO("Initial native-IMU bias prior sigmas: acceleration=%f gyro=%f", ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA);
+-    // PX4_AGENT_STATIONARY_HEALTH_V4: optional sensor-supported ZUPT only.
++    // PX4_AGENT_STATIONARY_HEALTH_V5: optional sensor-supported ZUPT and matrix evidence.
++    if (!fsSettings["bias_information_diagnostics_dir"].empty())
++        fsSettings["bias_information_diagnostics_dir"] >> BIAS_DIAGNOSTICS_DIR;
++    if (!fsSettings["bias_information_period_s"].empty())
++        fsSettings["bias_information_period_s"] >> BIAS_DIAGNOSTICS_PERIOD_S;
++    if (!fsSettings["bias_information_startup_dense_s"].empty())
++        fsSettings["bias_information_startup_dense_s"] >> BIAS_DIAGNOSTICS_STARTUP_DENSE_S;
++    if (!std::isfinite(BIAS_DIAGNOSTICS_PERIOD_S) || BIAS_DIAGNOSTICS_PERIOD_S < 1.0
++        || !std::isfinite(BIAS_DIAGNOSTICS_STARTUP_DENSE_S) || BIAS_DIAGNOSTICS_STARTUP_DENSE_S < 0
++        || BIAS_DIAGNOSTICS_STARTUP_DENSE_S > 5.0)
++        throw std::runtime_error("invalid opt-in matrix diagnostic timing");
++    ROS_INFO("Bias matrix diagnostics: %s (empty disables), period=%.3fs startup_dense=%.3fs",
++        BIAS_DIAGNOSTICS_DIR.c_str(), BIAS_DIAGNOSTICS_PERIOD_S, BIAS_DIAGNOSTICS_STARTUP_DENSE_S);
+     if (!fsSettings["health_imu_to_body_flu"].empty())
+     {
+         const cv::FileNode offset = fsSettings["health_imu_to_body_flu"];
+--- a/vins_estimator/src/estimator/parameters.h
++++ b/vins_estimator/src/estimator/parameters.h
+@@ -31,9 +31,11 @@
+ 
+ extern double ACC_N, ACC_W;
+ extern double ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA;
+-// PX4_AGENT_STATIONARY_HEALTH_V4: optional Ceres ZUPT configuration.
++// PX4_AGENT_STATIONARY_HEALTH_V5: optional sensor and diagnostic configuration.
+ extern int ENABLE_ZUPT;
+ extern double MAX_IMU_PREINTEGRATION_SPAN_S;
++extern std::string BIAS_DIAGNOSTICS_DIR;
++extern double BIAS_DIAGNOSTICS_PERIOD_S, BIAS_DIAGNOSTICS_STARTUP_DENSE_S;
+ extern Eigen::Vector3d HEALTH_IMU_TO_BODY_FLU;
+ extern double ZUPT_VELOCITY_SIGMA, ZUPT_POSITION_SIGMA, ZUPT_CAMERA_FX;
+ extern double GYR_N, GYR_W;
+--- a/vins_estimator/src/factor/marginalization_factor.cpp
++++ b/vins_estimator/src/factor/marginalization_factor.cpp
+@@ -82,7 +82,7 @@
+     //ROS_WARN("release marginlizationinfo");
+     
+     for (auto it = parameter_block_data.begin(); it != parameter_block_data.end(); ++it)
+-        delete it->second;
++        delete[] it->second; // PX4_AGENT_MARG_ARRAY_DELETE: allocated with new double[size]
+ 
+     for (int i = 0; i < (int)factors.size(); i++)
+     {
+@@ -280,6 +280,7 @@
+     //TODO
+     Eigen::MatrixXd Amm = 0.5 * (A.block(0, 0, m, m) + A.block(0, 0, m, m).transpose());
+     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes(Amm);
++    if (diagnostics_enabled) diagnostic_amm_eigenvalues = saes.eigenvalues();
+ 
+     //ROS_ASSERT_MSG(saes.eigenvalues().minCoeff() >= -1e-4, "min eigenvalue %f", saes.eigenvalues().minCoeff());
+ 
+@@ -295,6 +296,7 @@
+     b = brr - Arm * Amm_inv * bmm;
+ 
+     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes2(A);
++    if (diagnostics_enabled) diagnostic_schur_eigenvalues = saes2.eigenvalues();
+     Eigen::VectorXd S = Eigen::VectorXd((saes2.eigenvalues().array() > eps).select(saes2.eigenvalues().array(), 0));
+     Eigen::VectorXd S_inv = Eigen::VectorXd((saes2.eigenvalues().array() > eps).select(saes2.eigenvalues().array().inverse(), 0));
+ 
+--- a/vins_estimator/src/factor/marginalization_factor.h
++++ b/vins_estimator/src/factor/marginalization_factor.h
+@@ -79,6 +79,9 @@
+     Eigen::VectorXd linearized_residuals;
+     const double eps = 1e-8;
+     bool valid;
++    // PX4_AGENT_BIAS_DIAGNOSTICS_V1: expose already-computed spectra only.
++    bool diagnostics_enabled = false;
++    Eigen::VectorXd diagnostic_amm_eigenvalues, diagnostic_schur_eigenvalues;
+ 
+ };
+ 

@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "status": "READY_PRIVATE_LIBRARY_ONLY",
+  "frozen_utc": "2026-10-08T14:41:19.786486+00:00",
+  "gazebo_version": "11.15.1",
+  "official_tag": "gazebo11_11.15.1",
+  "soname": "libgazebo_physics.so.11",
+  "library_dir": "/home/dut/px4_agent/vio/gazebo_sync/lib",
+  "library_name": "libgazebo_physics.so.11.15.1",
+  "library": {
+    "path": "/home/dut/px4_agent/vio/gazebo_sync/lib/libgazebo_physics.so.11.15.1",
+    "sha256": "f305b780960b8751a0e5980e525fd0ce0beabe6e362aaef639e28b84877a940f",
+    "size_bytes": 5950208
+  },
+  "soname_links": {
+    "libgazebo_physics.so.11": "libgazebo_physics.so.11.15.1",
+    "libgazebo_physics.so": "libgazebo_physics.so.11"
+  },
+  "source_patch_sha256": "50b7c8db8a6a4de6b26f56d5f57c3a2be78b5231db879252d2f6dc3a887cd3b8",
+  "official_archive_sha256": "77a952971eabfd79e16d2582a355ee017a2e22cc369b68453323c0984b725126",
+  "proposed_source_files": {
+    "proposed/gazebo/physics/MultiRayShape.cc": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/proposed/gazebo/physics/MultiRayShape.cc",
+      "sha256": "a1d81c1a7ecbc8e68d3c898f8760bddc06c6762020da0e3d99c69f4f1d53105f",
+      "size_bytes": 9243
+    },
+    "proposed/gazebo/physics/World.cc": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/proposed/gazebo/physics/World.cc",
+      "sha256": "825fb002ceb316c6381ce33b21a68590dcb9137f5e7baf95fadc86cf039f9e00",
+      "size_bytes": 104663
+    }
+  },
+  "installed_original_library": {
+    "path": "/usr/lib/x86_64-linux-gnu/libgazebo_physics.so.11.15.1",
+    "sha256": "92efa2659bf2cf1370f25dcf9e0d1661353da85dece4a40f3f3abe312736c40f",
+    "size_bytes": 4745168,
+    "realpath": "/usr/lib/x86_64-linux-gnu/libgazebo_physics.so.11.15.1",
+    "package_version": "11.15.1-1~focal"
+  },
+  "checks": {
+    "no_rpath_runpath": true,
+    "ldd_r_ok": true,
+    "rtld_now_ok": true,
+    "all_nonphysics_gazebo_deps_installed": true,
+    "public_physics_abi_exports_preserved": true,
+    "private_only_not_installed": true
+  },
+  "proof_paths": {
+    "first_build": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/build_result.json",
+    "final_checks": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/result.json",
+    "actual_dependency_load": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/loader.json",
+    "ldd_r": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/ldd_r.log",
+    "public_exports": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/abi_exports.json",
+    "allocated_sections": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/allocated_sections.json",
+    "native_metadata_cleanup": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/native_elf_cleanup_01/result.json",
+    "controlled_second_build_interruption": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/post_build_01/result.json",
+    "owned_compiler_cleanup": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/controlled_cancel_01/result.json",
+    "actual_lock_disassembly_review": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/disassembly_review.json",
+    "normal_epoch_fixture": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/epoch_validation.json",
+    "exact_lock_order_source_review": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/lock_and_epoch_audit.json",
+    "independent_source_review": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/independent_source_review_01/review.json",
+    "header_identity": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/public_header_identity.json",
+    "dependency_versions": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/dependency_versions.json"
+  },
+  "proof_records": {
+    "first_build": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/build_result.json",
+      "sha256": "e09df1e8457f9c968c339488b882ee3d25df8103ce9d82e68317b53e442fad03",
+      "size_bytes": 2880
+    },
+    "final_checks": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/result.json",
+      "sha256": "83cf85fa3b65b75d143a026d618bac62d92b3589d2a7db42ed74df71eaabc1a2",
+      "size_bytes": 8292
+    },
+    "actual_dependency_load": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/loader.json",
+      "sha256": "fcc74ce93ed4f9dc4fbd2fb551fb2d10e24afef7c2368c5ba087594488c24c06",
+      "size_bytes": 3040
+    },
+    "ldd_r": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/ldd_r.log",
+      "sha256": "947573b9a9220c5e445affea2f7c60b81dc57015bd4b675e7a8ff291fd173f49",
+      "size_bytes": 25064
+    },
+    "public_exports": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/abi_exports.json",
+      "sha256": "7c8db2b73ede529fb0afe2cd1ad6209b3e48b801cf45417cb35426a6bb0ada6a",
+      "size_bytes": 269
+    },
+    "allocated_sections": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/allocated_sections.json",
+      "sha256": "8f1ae7e76cd37cfcb1c07250de47a30294e170e21fac801cf0c89a80de98438f",
+      "size_bytes": 16821
+    },
+    "native_metadata_cleanup": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/native_elf_cleanup_01/result.json",
+      "sha256": "db3a44b1f238212636e0d2bfd24bb6e905bd2501cf5271d0dbab5bd94f3eab61",
+      "size_bytes": 1097
+    },
+    "controlled_second_build_interruption": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/post_build_01/result.json",
+      "sha256": "6581802ae2d56a584347e0c098417ba15dcadfd965d99f96fb60a03370d24834",
+      "size_bytes": 2687
+    },
+    "owned_compiler_cleanup": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/controlled_cancel_01/result.json",
+      "sha256": "11932f82b783400149da225eaaf25f19ec822ba5313886e59ea3c35cb33ca340",
+      "size_bytes": 1772
+    },
+    "actual_lock_disassembly_review": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/disassembly_review.json",
+      "sha256": "5321624fd9204880d9a12969c0c16db0d15a754fb4a6f7b7487f6f33d955f9b6",
+      "size_bytes": 2763
+    },
+    "normal_epoch_fixture": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/final_validation_01/epoch_validation.json",
+      "sha256": "b0e4a76802ad8c5848a1a996132ccb9340710a400b6a825dc2e494c8947795de",
+      "size_bytes": 1554
+    },
+    "exact_lock_order_source_review": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/lock_and_epoch_audit.json",
+      "sha256": "147e0254f9c05365fe3b7d702460a30948193643ffd48cf0536631e67e7da141",
+      "size_bytes": 5897
+    },
+    "independent_source_review": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/independent_source_review_01/review.json",
+      "sha256": "3417ab894220c2a2d70ffc6b773af58d2a476e946432a1d3b3c349823d3a356d",
+      "size_bytes": 9700
+    },
+    "header_identity": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/public_header_identity.json",
+      "sha256": "c9ef541907d032929f88db23716d2148930caa5a0b4c7ce32ae3bb68f5090094",
+      "size_bytes": 2532
+    },
+    "dependency_versions": {
+      "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/dependency_versions.json",
+      "sha256": "62c3a80c67cfbb919696fb309207d7c10bc01821773d5b9b9f944a1b57e020ad",
+      "size_bytes": 3924
+    }
+  },
+  "DT_NEEDED": [
+    "libgazebo_util.so.11",
+    "libgazebo_ode.so.11",
+    "libboost_regex.so.1.71.0",
+    "libBulletDynamics.so.2.88",
+    "libBulletCollision.so.2.88",
+    "libLinearMath.so.2.88",
+    "libdart-collision-bullet.so.6",
+    "libSimTKsimbody.so.3.6",
+    "libignition-transport8.so.8",
+    "libgazebo_transport.so.11",
+    "libgazebo_msgs.so.11",
+    "libgazebo_common.so.11",
+    "libignition-common3.so.3",
+    "libdl.so.2",
+    "libsdformat9.so.9",
+    "libprotobuf.so.17",
+    "libignition-msgs5.so.5",
+    "libignition-math6.so.6",
+    "libpthread.so.0",
+    "libode.so.8",
+    "libdart.so.6",
+    "libassimp.so.5",
+    "libSimTKmath.so.3.6",
+    "libSimTKcommon.so.3.6",
+    "libstdc++.so.6",
+    "libm.so.6",
+    "libgcc_s.so.1",
+    "libc.so.6"
+  ],
+  "initial_pass_SO": {
+    "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/post_build_01/initial_with_build_runpath.so",
+    "sha256": "cab5f0abe6928c48eac086ff7d0afdf7c46ca3726005c91516d3fcb012b011f3",
+    "size_bytes": 468369112
+  },
+  "clean_unstripped_SO": {
+    "path": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/native_elf_cleanup_01/unstripped_no_rpath.so",
+    "sha256": "532112ee341948b3ea358738fbdbe65f9c33f2b41d3888f3d85be556596b30dc",
+    "size_bytes": 468369112
+  },
+  "production_changes": false,
+  "installed_replacement": false,
+  "World_or_runtime_started": false,
+  "runtime_acceptance": "PENDING_NEW_COMPLETE_BASELINE",
+  "limitations": [
+    "Final SO disassembly, not currently absent object files. No manual direct link completed.",
+    "Neither actual MultiRay.Update nor World.Update was called; this is code/load/source proof, not Gazebo runtime acceptance.",
+    "No comprehensive lock-cycle proof for arbitrary plugins/engines/external Entity setters or direct SetRay.",
+    "Header stamp and laserMsg world pose remain later reads outside shape lock.",
+    "No previous short-return or allocator-abort causal attribution."
+  ],
+  "runtime_relocation": {
+    "source_manifest": "/home/dut/px4_agent/logs/ev/atomic_ray_update_sync_design_01/source_patch_01/private_build_01/physics_only_prefix/manifest.json",
+    "source_manifest_sha256": "5a300b1b1fd6469c27c3dd454f1e9325de586dc36b5ce3ee24c2dd2cbd21694a",
+    "relocated_utc": "2026-10-08T14:45:00.675185+00:00",
+    "byte_identical_library": true,
+    "root_actual_build_records_reviewed": true,
+    "independent_build_review": "pending_before_runtime_arm"
+  }
+}

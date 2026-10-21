@@ -1,0 +1,75 @@
+--- a/gazebo/physics/MultiRayShape.cc
++++ b/gazebo/physics/MultiRayShape.cc
+@@ -16,6 +16,8 @@
+ */
+ #include "gazebo/common/Exception.hh"
+ #include "gazebo/msgs/msgs.hh"
++#include "gazebo/physics/PhysicsEngine.hh"
++#include "gazebo/physics/World.hh"
+ #include "gazebo/physics/MultiRayShape.hh"
+ 
+ using namespace gazebo;
+@@ -167,25 +169,31 @@
+ //////////////////////////////////////////////////
+ void MultiRayShape::Update()
+ {
+-  // The measurable range is (max-min)
+-  double fullRange = this->GetMaxRange() - this->GetMinRange();
+-
+-  // Reset the ray lengths and mark the collisions as dirty (so they get
+-  // redrawn)
+-  unsigned int raySize = this->rays.size();
+-  for (unsigned int i = 0; i < raySize; ++i)
+-  {
+-    this->rays[i]->SetLength(fullRange);
+-    this->rays[i]->SetRetro(0.0);
+-
+-    // Get the global points of the line
+-    this->rays[i]->Update();
+-  }
+-
+-  // do actual collision checks
+-  this->UpdateRays();
+-
+-  // for plugin
++  {
++    // Keep endpoint transforms and collision queries in one physics epoch.
++    boost::recursive_mutex::scoped_lock lock(
++        *this->GetWorld()->Physics()->GetPhysicsUpdateMutex());
++
++    // The measurable range is (max-min)
++    double fullRange = this->GetMaxRange() - this->GetMinRange();
++
++    // Reset the ray lengths and mark the collisions as dirty (so they get
++    // redrawn)
++    unsigned int raySize = this->rays.size();
++    for (unsigned int i = 0; i < raySize; ++i)
++    {
++      this->rays[i]->SetLength(fullRange);
++      this->rays[i]->SetRetro(0.0);
++
++      // Get the global points of the line
++      this->rays[i]->Update();
++    }
++
++    // do actual collision checks
++    this->UpdateRays();
++  }
++
++  // Invoke plugin callbacks after releasing the physics mutex.
+   this->newLaserScans();
+ }
+ 
+--- a/gazebo/physics/World.cc
++++ b/gazebo/physics/World.cc
+@@ -963,6 +963,10 @@
+   // Update the physics engine
+   if (this->dataPtr->enablePhysicsEngine && this->dataPtr->physicsEngine)
+   {
++    // Publish cached entity poses before a sensor can query stepped geometry.
++    boost::recursive_mutex::scoped_lock updateLock(
++        *this->dataPtr->physicsEngine->GetPhysicsUpdateMutex());
++
+     IGN_PROFILE_BEGIN("UpdatePhysics");
+     // This must be called directly after PhysicsEngine::UpdateCollision.
+     this->dataPtr->physicsEngine->UpdatePhysics();

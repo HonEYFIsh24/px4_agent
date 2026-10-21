@@ -1,0 +1,250 @@
+--- a/vins_estimator/src/estimator/estimator.cpp
++++ b/vins_estimator/src/estimator/estimator.cpp
+@@ -13,7 +13,7 @@
+ #include <std_msgs/Float64MultiArray.h>
+ #include <std_msgs/String.h>
+ #include <sstream>
+-// PX4_AGENT_STATIONARY_HEALTH_V3: real stereo/IMU ZUPT and native solution checks.
++// PX4_AGENT_STATIONARY_HEALTH_V4: real stereo/IMU ZUPT and native solution checks.
+ // PX4_AGENT_INITIAL_BIAS_PRIOR: native IMU statistics, added once then marginalized.
+ // PX4_AGENT_VIO_PATCH: health, guarded reset, and clean shutdown only.
+ 
+@@ -54,6 +54,12 @@
+     solver_solution_usable = true;
+     solver_initial_cost = solver_final_cost = solver_residual_rms = 0;
+     solver_health_reason.clear();
++    native_imu_optimizer_window_json = "{}";
++    keyframe_visual_requested = keyframe_forced_by_imu_span = false;
++    keyframe_candidate_merged_imu_span_s = 0;
++    solver_iterations = solver_successful_steps = solver_unsuccessful_steps = 0;
++    solver_termination_type = -1;
++    solver_wall_time_s = solver_budget_s = solver_last_gradient_max_norm = 0;
+     have_validated_optimized = false;
+     last_validated_optimized_t = -1;
+     prevTime = -1;
+@@ -480,7 +486,20 @@
+     updateStationaryEvidence(image, header);
+     ROS_DEBUG("new image coming ------------------------------------------");
+     ROS_DEBUG("Adding feature points %lu", image.size());
+-    if (f_manager.addFeatureCheckParallax(frame_count, image, td))
++    keyframe_visual_requested = f_manager.addFeatureCheckParallax(frame_count, image, td);
++    keyframe_candidate_merged_imu_span_s = 0;
++    keyframe_forced_by_imu_span = false;
++    if (USE_IMU && frame_count == WINDOW_SIZE && pre_integrations[frame_count-1] && pre_integrations[frame_count])
++    {
++        keyframe_candidate_merged_imu_span_s = pre_integrations[frame_count-1]->sum_dt
++            + pre_integrations[frame_count]->sum_dt;
++        keyframe_forced_by_imu_span = forceKeyframeForImuSpan(USE_IMU, true,
++            pre_integrations[frame_count-1]->sum_dt, pre_integrations[frame_count]->sum_dt,
++            MAX_IMU_PREINTEGRATION_SPAN_S);
++    }
++    // Preserve the existing parallax decision; additionally retain a keyframe
++    // before SECOND_NEW would discard an IMU bridge after prolonged stillness.
++    if (keyframe_visual_requested || keyframe_forced_by_imu_span)
+     {
+         marginalization_flag = MARGIN_OLD;
+         //printf("keyframe\n");
+@@ -1113,17 +1132,49 @@
+ {
+     std::ostringstream o;
+     o.precision(12);
++    const auto vector_json = [](const Eigen::Vector3d& vector) {
++        std::ostringstream a; a.precision(12); a << "[";
++        for (int axis = 0; axis < 3; ++axis)
++        { if (axis) a << ","; if (std::isfinite(vector[axis])) a << vector[axis]; else a << "null"; }
++        a << "]"; return a.str();
++    };
++    const Eigen::Quaterniond q(Rs[frame_count]);
++    std::ostringstream quaternion_json; quaternion_json.precision(12); quaternion_json << "[";
++    const double quaternion_values[4] = {q.x(), q.y(), q.z(), q.w()};
++    for (int axis = 0; axis < 4; ++axis)
++    { if (axis) quaternion_json << ","; if (std::isfinite(quaternion_values[axis])) quaternion_json << quaternion_values[axis]; else quaternion_json << "null"; }
++    quaternion_json << "]";
+     // Sentinel values are finite, keeping diagnostics valid JSON even before
+     // the first IMU window or stereo pair has arrived.
+-    o << "{\"implementation_revision\":\"stationary_health_v3\",\"stamp\":" << stamp << ",\"tracking_ok\":" << ((solver_flag == NON_LINEAR && !failure_occur) ? "true" : "false")
++    o << "{\"implementation_revision\":\"stationary_health_v4\",\"stamp\":" << stamp << ",\"tracking_ok\":" << ((solver_flag == NON_LINEAR && !failure_occur) ? "true" : "false")
+       << ",\"solution_usable\":" << (solver_solution_usable ? "true" : "false")
+       << ",\"reason\":\"" << solver_health_reason << "\",\"initial_cost\":" << solver_initial_cost
+       << ",\"final_cost\":" << solver_final_cost << ",\"residual_rms\":" << solver_residual_rms
++      << ",\"solver_iterations\":" << solver_iterations << ",\"solver_successful_steps\":" << solver_successful_steps
++      << ",\"solver_unsuccessful_steps\":" << solver_unsuccessful_steps << ",\"solver_termination_type\":" << solver_termination_type
++      << ",\"solver_wall_time_s\":" << solver_wall_time_s << ",\"solver_budget_s\":" << solver_budget_s
++      << ",\"solver_last_gradient_max_norm\":" << solver_last_gradient_max_norm
++      << ",\"current_state_stamp_sim_s\":" << Headers[frame_count]
++      << ",\"current_state_snapshot_phase\":\"after_process_image_and_slide\""
++      << ",\"current_position_world_m\":" << vector_json(Ps[frame_count])
++      << ",\"current_velocity_world_m_s\":" << vector_json(Vs[frame_count])
++      << ",\"current_orientation_xyzw\":" << quaternion_json.str()
++      << ",\"current_acc_bias_m_s2\":" << vector_json(Bas[frame_count])
++      << ",\"current_gyro_bias_rad_s\":" << vector_json(Bgs[frame_count])
++      << ",\"estimator_gravity_world_m_s2\":" << vector_json(g)
++      << ",\"imu_optimizer_window\":" << native_imu_optimizer_window_json
+       << ",\"zupt_enabled\":" << (ENABLE_ZUPT ? "true" : "false")
+       << ",\"stationary_source_gate\":" << (stationary_detector.instant_gate ? "true" : "false")
+       << ",\"stationary_confirmed\":" << ((ENABLE_ZUPT && USE_IMU && stationary_detector.active) ? "true" : "false")
+       << ",\"stationary_support_s\":" << (stationary_detector.supported_since < 0 ? 0 : stamp - stationary_detector.supported_since)
+       << ",\"imu_samples\":" << stationary_evidence.imu_samples << ",\"imu_span_s\":" << stationary_evidence.imu_span_s
++      << ",\"imu_window_first_source_stamp_sim_s\":" << stationary_evidence.imu_first_source_stamp_s
++      << ",\"imu_window_last_source_stamp_sim_s\":" << stationary_evidence.imu_last_source_stamp_s
++      << ",\"imu_window_acc_mean_m_s2\":" << vector_json(stationary_evidence.acc_mean)
++      << ",\"imu_window_gyro_mean_rad_s\":" << vector_json(stationary_evidence.gyro_mean)
++      << ",\"imu_window_acc_std_m_s2\":" << vector_json(stationary_evidence.acc_std)
++      << ",\"imu_window_gyro_std_rad_s\":" << vector_json(stationary_evidence.gyro_std)
++      << ",\"imu_window_gyro_mean_minus_estimated_bias_rad_s\":" << vector_json(stationary_evidence.gyro_mean - Bgs[frame_count])
+       << ",\"imu_age_s\":" << stationary_evidence.imu_age_s << ",\"gyro_mean_norm\":" << stationary_evidence.gyro_mean_norm
+       << ",\"gyro_std_norm\":" << stationary_evidence.gyro_std_norm << ",\"acc_std_norm\":" << stationary_evidence.acc_std_norm
+       << ",\"gravity_norm_error\":" << stationary_evidence.gravity_norm_error << ",\"near_stereo_tracks\":" << stationary_evidence.near_stereo_tracks
+@@ -1139,7 +1190,12 @@
+       << ",\"refresh_previous_published_stamp_sim_s\":" << propagation_refresh_evidence.previous_published_stamp_sim_s
+       << ",\"refresh_candidate_base_stamp_sim_s\":" << propagation_refresh_evidence.candidate_base_stamp_sim_s
+       << ",\"refresh_pending_old_forward_dt_s\":" << propagation_refresh_evidence.pending_old_forward_dt_s
+-      << ",\"stereo_tracks\":" << native_stereo_tracks_json << "}";
++      << ",\"stereo_tracks\":" << native_stereo_tracks_json;
++    if (!stationary_detector.imu.empty())
++        o << ",\"current_raw_imu_source_stamp_sim_s\":" << stationary_detector.imu.back().t
++          << ",\"current_raw_acc_m_s2\":" << vector_json(stationary_detector.imu.back().acc)
++          << ",\"current_raw_gyro_rad_s\":" << vector_json(stationary_detector.imu.back().gyro);
++    o << "}";
+     return o.str();
+ }
+ 
+@@ -1177,6 +1233,52 @@
+     ceres::Problem problem;
+     const bool add_initial_bias_prior = USE_IMU && ACC_BIAS_PRIOR_SIGMA > 0 && GYR_BIAS_PRIOR_SIGMA > 0
+         && (!last_marginalization_info || !last_marginalization_info->valid);
++    // Capture the exact topology and real integration durations supplied to
++    // this solve, before OLD/SECOND_NEW changes any window slot. Membership
++    // of a prior SpeedBias block is not a proof of bias-information rank.
++    std::vector<bool> prior_roots(frame_count + 1, false), included_edges;
++    if (add_initial_bias_prior) prior_roots[0] = true;
++    if (last_marginalization_info && last_marginalization_info->valid)
++        for (double* block : last_marginalization_parameter_blocks)
++            for (int i = 0; i <= frame_count; ++i)
++                if (block == para_SpeedBias[i]) prior_roots[i] = true;
++    std::ostringstream chain; chain.precision(12);
++    chain << "{\"snapshot_phase\":\"before_solve_and_slide\",\"solve_image_stamp_sim_s\":" << Headers[frame_count]
++          << ",\"marginalization_flag\":" << static_cast<int>(marginalization_flag)
++          << ",\"visual_keyframe_requested\":" << (keyframe_visual_requested ? "true" : "false")
++          << ",\"keyframe_forced_by_imu_span\":" << (keyframe_forced_by_imu_span ? "true" : "false")
++          << ",\"candidate_merged_imu_span_s\":" << keyframe_candidate_merged_imu_span_s
++          << ",\"configured_span_bound_s\":" << MAX_IMU_PREINTEGRATION_SPAN_S
++          << ",\"initial_bias_prior_added_this_solve\":" << (add_initial_bias_prior ? "true" : "false")
++          << ",\"marginalization_prior_valid_before_solve\":" << ((last_marginalization_info && last_marginalization_info->valid) ? "true" : "false")
++          << ",\"prior_information_rank_inferred\":false,\"prior_speedbias_parameter_indices\":[";
++    bool first_prior = true;
++    for (int i = 0; i <= frame_count; ++i) if (prior_roots[i])
++    { if (!first_prior) chain << ","; chain << i; first_prior = false; }
++    chain << "],\"camera_state_stamps_sim_s\":[";
++    for (int i = 0; i <= frame_count; ++i) { if (i) chain << ","; chain << Headers[i]; }
++    chain << "],\"preintegration_intervals\":[";
++    int included_imu_count = 0, skipped_imu_count = 0;
++    for (int j = 1; j <= frame_count && USE_IMU; ++j)
++    {
++        const bool included = pre_integrations[j]->sum_dt <= 10.0;
++        included_edges.push_back(included);
++        included ? ++included_imu_count : ++skipped_imu_count;
++        if (j > 1) chain << ",";
++        chain << "{\"from_camera_stamp_sim_s\":" << Headers[j-1]
++              << ",\"to_camera_stamp_sim_s\":" << Headers[j]
++              << ",\"actual_integrated_imu_span_s\":" << pre_integrations[j]->sum_dt
++              << ",\"original_sample_step_count\":" << pre_integrations[j]->dt_buf.size()
++              << ",\"optimization_factor_included\":" << (included ? "true" : "false") << "}";
++    }
++    const bool old_bridge_included = USE_IMU && marginalization_flag == MARGIN_OLD
++        && frame_count == WINDOW_SIZE && pre_integrations[1]->sum_dt < 10.0;
++    chain << "],\"included_imu_factor_count\":" << included_imu_count << ",\"skipped_imu_factor_count\":" << skipped_imu_count
++          << ",\"prior_speedbias_topology_reaches_latest_via_imu\":" << (priorReachesLatestViaImu(prior_roots, included_edges) ? "true" : "false")
++          << ",\"old_marginalization_imu_bridge_included\":" << (old_bridge_included ? "true" : "false")
++          << ",\"old_marginalization_bridge_skipped_due_span\":" << ((USE_IMU && marginalization_flag == MARGIN_OLD
++              && frame_count == WINDOW_SIZE && pre_integrations[1]->sum_dt >= 10.0) ? "true" : "false") << "}";
++    native_imu_optimizer_window_json = chain.str();
+     ceres::LossFunction *loss_function;
+     //loss_function = NULL;
+     loss_function = new ceres::HuberLoss(1.0);
+@@ -1309,6 +1411,14 @@
+     TicToc t_solver;
+     ceres::Solver::Summary summary;
+     ceres::Solve(options, &problem, &summary);
++    solver_iterations = static_cast<int>(summary.iterations.size());
++    solver_successful_steps = summary.num_successful_steps;
++    solver_unsuccessful_steps = summary.num_unsuccessful_steps;
++    solver_termination_type = static_cast<int>(summary.termination_type);
++    solver_wall_time_s = std::isfinite(summary.total_time_in_seconds) ? summary.total_time_in_seconds : -1;
++    solver_budget_s = options.max_solver_time_in_seconds;
++    solver_last_gradient_max_norm = summary.iterations.empty() ? -1 : summary.iterations.back().gradient_max_norm;
++    if (!std::isfinite(solver_last_gradient_max_norm)) solver_last_gradient_max_norm = -1;
+     //cout << summary.BriefReport() << endl;
+     ROS_DEBUG("Iterations : %d", static_cast<int>(summary.iterations.size()));
+     //printf("solver costs: %f \n", t_solver.toc());
+--- a/vins_estimator/src/estimator/estimator.h
++++ b/vins_estimator/src/estimator/estimator.h
+@@ -34,8 +34,9 @@
+ #include "../factor/projectionTwoFrameOneCamFactor.h"
+ #include "../factor/projectionTwoFrameTwoCamFactor.h"
+ #include "../factor/projectionOneFrameTwoCamFactor.h"
+-// PX4_AGENT_STATIONARY_HEALTH_V3: per-frame sensor support and native health.
++// PX4_AGENT_STATIONARY_HEALTH_V4: per-frame sensor support and native health.
+ #include "../factor/stationary_factors.h"
++#include "../factor/imu_chain_health.h"
+ #include <set>
+ #include <string>
+ #include <atomic>
+@@ -190,6 +191,11 @@
+     bool stationary_intervals[WINDOW_SIZE + 1]; // [i] supports interval i-1 -> i
+     std::set<int> previous_stereo_ids;
+     std::string native_stereo_tracks_json;
++    std::string native_imu_optimizer_window_json;
++    bool keyframe_visual_requested, keyframe_forced_by_imu_span;
++    double keyframe_candidate_merged_imu_span_s;
++    int solver_iterations, solver_successful_steps, solver_unsuccessful_steps, solver_termination_type;
++    double solver_wall_time_s, solver_budget_s, solver_last_gradient_max_norm;
+     bool solver_solution_usable;
+     double solver_initial_cost, solver_final_cost, solver_residual_rms;
+     std::string solver_health_reason;
+--- a/vins_estimator/src/estimator/parameters.cpp
++++ b/vins_estimator/src/estimator/parameters.cpp
+@@ -16,6 +16,7 @@
+ double ACC_N, ACC_W;
+ double ACC_BIAS_PRIOR_SIGMA = 0, GYR_BIAS_PRIOR_SIGMA = 0;
+ int ENABLE_ZUPT = 0;
++double MAX_IMU_PREINTEGRATION_SPAN_S = 0; // opt-in; unchanged upstream keyframe policy by default
+ Eigen::Vector3d HEALTH_IMU_TO_BODY_FLU = Eigen::Vector3d::Zero();
+ double ZUPT_VELOCITY_SIGMA = 0.03, ZUPT_POSITION_SIGMA = 0.02, ZUPT_CAMERA_FX = 320;
+ double GYR_N, GYR_W;
+@@ -183,7 +184,7 @@
+     if (!fsSettings["acc_bias_prior_sigma"].empty()) fsSettings["acc_bias_prior_sigma"] >> ACC_BIAS_PRIOR_SIGMA;
+     if (!fsSettings["gyr_bias_prior_sigma"].empty()) fsSettings["gyr_bias_prior_sigma"] >> GYR_BIAS_PRIOR_SIGMA;
+     ROS_INFO("Initial native-IMU bias prior sigmas: acceleration=%f gyro=%f", ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA);
+-    // PX4_AGENT_STATIONARY_HEALTH_V3: optional sensor-supported ZUPT only.
++    // PX4_AGENT_STATIONARY_HEALTH_V4: optional sensor-supported ZUPT only.
+     if (!fsSettings["health_imu_to_body_flu"].empty())
+     {
+         const cv::FileNode offset = fsSettings["health_imu_to_body_flu"];
+@@ -192,6 +193,13 @@
+         if (!HEALTH_IMU_TO_BODY_FLU.allFinite()) throw std::runtime_error("nonfinite native health IMU/body lever arm");
+     }
+     if (!fsSettings["enable_zupt"].empty()) fsSettings["enable_zupt"] >> ENABLE_ZUPT;
++    if (!fsSettings["max_imu_preintegration_span_s"].empty())
++        fsSettings["max_imu_preintegration_span_s"] >> MAX_IMU_PREINTEGRATION_SPAN_S;
++    if (!std::isfinite(MAX_IMU_PREINTEGRATION_SPAN_S) || MAX_IMU_PREINTEGRATION_SPAN_S < 0
++        || (MAX_IMU_PREINTEGRATION_SPAN_S > 0
++            && (MAX_IMU_PREINTEGRATION_SPAN_S < 0.2 || MAX_IMU_PREINTEGRATION_SPAN_S > 5.0)))
++        throw std::runtime_error("max_imu_preintegration_span_s must be 0 (disabled) or 0.2..5 seconds");
++    ROS_INFO("Measured IMU-span keyframe limit: %.3f s (0 disables)", MAX_IMU_PREINTEGRATION_SPAN_S);
+     if (!fsSettings["zupt_velocity_sigma"].empty()) fsSettings["zupt_velocity_sigma"] >> ZUPT_VELOCITY_SIGMA;
+     if (!fsSettings["zupt_position_sigma"].empty()) fsSettings["zupt_position_sigma"] >> ZUPT_POSITION_SIGMA;
+     if (!fsSettings["zupt_camera_fx"].empty()) fsSettings["zupt_camera_fx"] >> ZUPT_CAMERA_FX;
+--- a/vins_estimator/src/estimator/parameters.h
++++ b/vins_estimator/src/estimator/parameters.h
+@@ -31,8 +31,9 @@
+ 
+ extern double ACC_N, ACC_W;
+ extern double ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA;
+-// PX4_AGENT_STATIONARY_HEALTH_V3: optional Ceres ZUPT configuration.
++// PX4_AGENT_STATIONARY_HEALTH_V4: optional Ceres ZUPT configuration.
+ extern int ENABLE_ZUPT;
++extern double MAX_IMU_PREINTEGRATION_SPAN_S;
+ extern Eigen::Vector3d HEALTH_IMU_TO_BODY_FLU;
+ extern double ZUPT_VELOCITY_SIGMA, ZUPT_POSITION_SIGMA, ZUPT_CAMERA_FX;
+ extern double GYR_N, GYR_W;

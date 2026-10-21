@@ -1,18 +1,55 @@
-# Build and Release Folders
-bin-debug/
-bin-release/
-[Oo]bj/
-[Bb]in/
+# Local credentials and environment files. Keep the public configuration template.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
 
-# Other files and folders
-.settings/
+# Dependencies and interpreter caches.
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# Executables
-*.swf
-*.air
-*.ipa
-*.apk
+# Local experiment evidence, ROS recordings and simulator state.
+logs/
+*.log
+*.bag
+*.bag.active
+*.db3
+*.mcap
+*.ulg
+*.ulg.*
+.ros/
+.catkin_tools/
 
-# Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
-# should NOT be excluded as they contain compiler settings and other important
-# information for Eclipse / Flash Builder.
+# Rebuild Catkin outputs and native libraries on the target machine.
+build/
+devel/
+install/
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+/vio_ws/src/CMakeLists.txt
+
+# Editor and operating-system files.
+.idea/
+.vscode/
+.DS_Store
+*~
+*.swp
+*.swo

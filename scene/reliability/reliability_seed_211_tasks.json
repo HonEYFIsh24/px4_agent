@@ -1,0 +1,23 @@
+{
+  "name": "reliability_seed_211_goal_only",
+  "model": "qwen3-vl-plus",
+  "body_radius_m": 0.45,
+  "tracking_margin_m": 0.25,
+  "expected_clearance_m": 1.0,
+  "ground_truth_policy": "Collision layout is read only by the evaluator; only each prompt and min_observations are submitted to the Agent.",
+  "tasks": [
+    {
+      "id": "autonomous_goal_round_trip",
+      "goal_enu_m": [
+        13,
+        0,
+        3.5
+      ],
+      "min_observations": 0,
+      "expected_hold_seconds": 2,
+      "prompt": "请执行一次自主绕障往返任务：起飞到本地 ENU 高度3.5米，使用系统当前真实激光雷达自主绕开静态障碍，到达目标本地 ENU 坐标(x=13,y=0,z=3.5)。我只指定这个目标，不提供任何绕行中间航点，你也不要预先指定中间点，路径由执行器根据当前传感器测量生成。到达目标后悬停2秒，然后使用系统自主返航功能return_home绕障返回本次起飞点，再降落并等待落地上锁。使用固定高度3.5米，不爬升越过障碍。没有安全路线或传感器失效时如实报告并停止，不自动重试。每次execute_mission提供steps和description，最终依据真实navigation_plans和任务事件说明执行结果。",
+      "expected_outcome": "success"
+    }
+  ],
+  "expected_outcome": "success"
+}

@@ -1,0 +1,18 @@
+{
+  "upstream": "https://github.com/PX4/PX4-Autopilot",
+  "base_commit": "b8c541dd7277ed735139d7d1bfb829d61fbe29fb",
+  "source_scope": [
+    "Tools/simulation/gazebo-classic/sitl_run.sh",
+    "platforms/posix/src/px4/common/px4_daemon/server.cpp",
+    "platforms/posix/src/px4/common/px4_daemon/server.h",
+    "src/systemcmds/topic_listener/listener_main.cpp"
+  ],
+  "patch_sha256": "89bb79d9c4a1d32a9c7c0d083c1814cf5b84e35a53464430a58dab298bd3a9e3",
+  "current_source_sha256": {
+    "Tools/simulation/gazebo-classic/sitl_run.sh": "45346364b544f64d7ff75116da36309bd393e5cce6d29bfb48ccc96e994091d9",
+    "platforms/posix/src/px4/common/px4_daemon/server.cpp": "6e12f363f280ac1aaf1d3e0f8cccdc0d70e2ce720cdead0bb6ec6533110f6d69",
+    "platforms/posix/src/px4/common/px4_daemon/server.h": "4b8aa0f30d7a72c6c385d7a141251776867e3952c48c22ff141ef59d45d66f24",
+    "src/systemcmds/topic_listener/listener_main.cpp": "833d5ce7552476f6631377292c02ca2f638b94314a792e6ff9f9ddc36c55b8d7"
+  },
+  "note": "Export of the existing local tracked PX4 changes; not a new patch or a new build. Apply to the recorded upstream base and rebuild before independent validation."
+}

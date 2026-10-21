@@ -1,0 +1,1429 @@
+{
+  "scene_id": "reliability_blocked_17",
+  "name": "完全封路安全停止试验",
+  "ground_truth_only": true,
+  "world_sha256": "56181236908b76cc6cdc824f3d705cc35cab895263292e4d9e1f6c73e8005c2c",
+  "ground": {
+    "known": true,
+    "z_m": 0.003,
+    "bounds_xy_m": [
+      -20,
+      -20,
+      20,
+      20
+    ]
+  },
+  "navigation_constraints": {
+    "enabled": true,
+    "method": "lidar_grid",
+    "bounds_xy_m": [
+      -3.0,
+      -8.0,
+      16.0,
+      8.0
+    ],
+    "flight_altitude_m": 3.5,
+    "minimum_clearance_m": 1.0
+  },
+  "objects": [
+    {
+      "id": "obstacle_wall_1",
+      "label": "first tall industrial wall",
+      "position_world_m": [
+        4.078,
+        0.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        1.06,
+        16.12,
+        5.5
+      ],
+      "aabb_world_m": {
+        "x": [
+          3.548,
+          4.608
+        ],
+        "y": [
+          -8.06,
+          8.06
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          3.578,
+          4.578
+        ],
+        "y": [
+          -8.0,
+          8.0
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "inside_navigation_xy": true
+    },
+    {
+      "id": "obstacle_wall_2",
+      "label": "second tall industrial wall",
+      "position_world_m": [
+        9.971,
+        2.9055,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        1.06,
+        6.25089,
+        5.5
+      ],
+      "aabb_world_m": {
+        "x": [
+          9.441,
+          10.501
+        ],
+        "y": [
+          -0.219945,
+          6.030945
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          9.471,
+          10.471
+        ],
+        "y": [
+          -0.189,
+          6.0
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "inside_navigation_xy": true
+    },
+    {
+      "id": "north_boundary_cargo_stack",
+      "label": "tall northern cargo stack",
+      "position_world_m": [
+        9.971,
+        7.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        1.06,
+        2.06,
+        5.5
+      ],
+      "aabb_world_m": {
+        "x": [
+          9.441,
+          10.501
+        ],
+        "y": [
+          5.97,
+          8.03
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          9.471,
+          10.471
+        ],
+        "y": [
+          6.0,
+          8.0
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "inside_navigation_xy": true
+    },
+    {
+      "id": "utility_pillar_southwest",
+      "label": "tall concrete utility pillar",
+      "position_world_m": [
+        1.213,
+        -5.755,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.8,
+        0.8,
+        5.5
+      ],
+      "aabb_world_m": {
+        "x": [
+          0.813,
+          1.613
+        ],
+        "y": [
+          -6.155,
+          -5.355
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          0.873,
+          1.553
+        ],
+        "y": [
+          -6.095,
+          -5.415
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "inside_navigation_xy": true
+    },
+    {
+      "id": "utility_pillar_northeast",
+      "label": "tall concrete utility pillar",
+      "position_world_m": [
+        13.328,
+        5.688,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.8,
+        0.8,
+        5.5
+      ],
+      "aabb_world_m": {
+        "x": [
+          12.928,
+          13.728
+        ],
+        "y": [
+          5.288,
+          6.088
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          12.988,
+          13.668
+        ],
+        "y": [
+          5.348,
+          6.028
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "inside_navigation_xy": true
+    },
+    {
+      "id": "utility_pillar_southeast",
+      "label": "tall concrete utility pillar",
+      "position_world_m": [
+        13.132,
+        -6.116,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.8,
+        0.8,
+        5.5
+      ],
+      "aabb_world_m": {
+        "x": [
+          12.732,
+          13.532
+        ],
+        "y": [
+          -6.516,
+          -5.716
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          12.792,
+          13.472
+        ],
+        "y": [
+          -6.456,
+          -5.776
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "inside_navigation_xy": true
+    },
+    {
+      "id": "red_shipping_container",
+      "label": "red corrugated shipping container",
+      "position_world_m": [
+        18.5,
+        0.0,
+        0.003
+      ],
+      "yaw_rad": 1.5707963267948966,
+      "dimensions_model_m": [
+        6.12,
+        2.5,
+        2.66
+      ],
+      "aabb_world_m": {
+        "x": [
+          17.209999,
+          19.790001
+        ],
+        "y": [
+          -3.1175,
+          3.1
+        ],
+        "z": [
+          0.003,
+          2.653
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          17.280999,
+          19.719001
+        ],
+        "y": [
+          -3.029,
+          3.029
+        ],
+        "z": [
+          0.003,
+          2.594
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "white_delivery_van",
+      "label": "white delivery van with black wheels",
+      "position_world_m": [
+        14.2,
+        -9.2,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        5.3,
+        2.22,
+        2.82
+      ],
+      "aabb_world_m": {
+        "x": [
+          11.58,
+          16.7
+        ],
+        "y": [
+          -10.3275,
+          -8.0725
+        ],
+        "z": [
+          0.003,
+          2.788
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          11.75,
+          16.55
+        ],
+        "y": [
+          -10.31,
+          -8.09
+        ],
+        "z": [
+          0.003,
+          2.788
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "blue_drum",
+      "label": "blue metal drum",
+      "position_world_m": [
+        16.7,
+        -1.8,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.69,
+        0.69,
+        1.02
+      ],
+      "aabb_world_m": {
+        "x": [
+          16.358,
+          17.042
+        ],
+        "y": [
+          -2.142,
+          -1.458
+        ],
+        "z": [
+          0.013,
+          1.009
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          16.38,
+          17.02
+        ],
+        "y": [
+          -2.12,
+          -1.48
+        ],
+        "z": [
+          0.013,
+          0.953
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "blue_drum_rear",
+      "label": "blue metal drum",
+      "position_world_m": [
+        16.7,
+        1.8,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.69,
+        0.69,
+        1.02
+      ],
+      "aabb_world_m": {
+        "x": [
+          16.358,
+          17.042
+        ],
+        "y": [
+          1.458,
+          2.142
+        ],
+        "z": [
+          0.013,
+          1.009
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          16.38,
+          17.02
+        ],
+        "y": [
+          1.48,
+          2.12
+        ],
+        "z": [
+          0.013,
+          0.953
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "traffic_cone_1",
+      "label": "orange and white traffic cone",
+      "position_world_m": [
+        16.5,
+        -4.8,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.54,
+        0.54,
+        0.77
+      ],
+      "aabb_world_m": {
+        "x": [
+          16.23,
+          16.77
+        ],
+        "y": [
+          -5.07,
+          -4.53
+        ],
+        "z": [
+          0.003,
+          0.758
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          16.23,
+          16.77
+        ],
+        "y": [
+          -5.07,
+          -4.53
+        ],
+        "z": [
+          0.003,
+          0.758
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "traffic_cone_2",
+      "label": "orange and white traffic cone",
+      "position_world_m": [
+        17.3,
+        -5.7,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.54,
+        0.54,
+        0.77
+      ],
+      "aabb_world_m": {
+        "x": [
+          17.03,
+          17.57
+        ],
+        "y": [
+          -5.97,
+          -5.43
+        ],
+        "z": [
+          0.003,
+          0.758
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          17.03,
+          17.57
+        ],
+        "y": [
+          -5.97,
+          -5.43
+        ],
+        "z": [
+          0.003,
+          0.758
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "brick_warehouse",
+      "label": "brick warehouse with loading door",
+      "position_world_m": [
+        15.0,
+        -13.9,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        8.3,
+        7.3,
+        5.45
+      ],
+      "aabb_world_m": {
+        "x": [
+          10.25,
+          19.125
+        ],
+        "y": [
+          -17.525,
+          -10.275
+        ],
+        "z": [
+          0.003,
+          5.213
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          10.25,
+          19.125
+        ],
+        "y": [
+          -17.525,
+          -10.275
+        ],
+        "z": [
+          0.003,
+          5.213
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "park_office",
+      "label": "two-storey office building with windows and entrance",
+      "position_world_m": [
+        16.0,
+        12.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        6.25,
+        6.25,
+        6.4
+      ],
+      "aabb_world_m": {
+        "x": [
+          12.835,
+          19.1
+        ],
+        "y": [
+          8.9,
+          15.1
+        ],
+        "z": [
+          0.003,
+          6.283
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          12.9,
+          19.1
+        ],
+        "y": [
+          8.9,
+          15.1
+        ],
+        "z": [
+          0.003,
+          6.283
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "cartons_pallet_1",
+      "label": "wooden pallet with stacked brown cartons",
+      "position_world_m": [
+        10.95,
+        -9.4,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        1.25,
+        1.05,
+        1.05
+      ],
+      "aabb_world_m": {
+        "x": [
+          10.35,
+          11.55
+        ],
+        "y": [
+          -9.9,
+          -8.9
+        ],
+        "z": [
+          0.003,
+          1.082
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          10.35,
+          11.55
+        ],
+        "y": [
+          -9.9,
+          -8.9
+        ],
+        "z": [
+          0.003,
+          1.073
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "cartons_pallet_2",
+      "label": "wooden pallet with stacked brown cartons",
+      "position_world_m": [
+        17.8,
+        6.2,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        1.25,
+        1.05,
+        1.05
+      ],
+      "aabb_world_m": {
+        "x": [
+          17.2,
+          18.4
+        ],
+        "y": [
+          5.7,
+          6.7
+        ],
+        "z": [
+          0.003,
+          1.082
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          17.2,
+          18.4
+        ],
+        "y": [
+          5.7,
+          6.7
+        ],
+        "z": [
+          0.003,
+          1.073
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "yard_tree_1",
+      "label": "leafy tree",
+      "position_world_m": [
+        -13.0,
+        -9.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        3.57,
+        3.57,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          -14.7,
+          -11.3
+        ],
+        "y": [
+          -10.7,
+          -7.3
+        ],
+        "z": [
+          0.003,
+          5.878
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          -14.7,
+          -11.3
+        ],
+        "y": [
+          -10.7,
+          -7.3
+        ],
+        "z": [
+          0.003,
+          5.653
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "yard_tree_2",
+      "label": "leafy tree",
+      "position_world_m": [
+        -13.0,
+        7.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        3.3600000000000003,
+        3.3600000000000003,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          -14.6,
+          -11.4
+        ],
+        "y": [
+          5.4,
+          8.6
+        ],
+        "z": [
+          0.003,
+          5.803
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          -14.6,
+          -11.4
+        ],
+        "y": [
+          5.4,
+          8.6
+        ],
+        "z": [
+          0.003,
+          5.553
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "yard_tree_3",
+      "label": "leafy tree",
+      "position_world_m": [
+        -8.0,
+        14.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        3.57,
+        3.57,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          -9.7,
+          -6.3
+        ],
+        "y": [
+          12.3,
+          15.7
+        ],
+        "z": [
+          0.003,
+          5.878
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          -9.7,
+          -6.3
+        ],
+        "y": [
+          12.3,
+          15.7
+        ],
+        "z": [
+          0.003,
+          5.653
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "yard_tree_4",
+      "label": "leafy tree",
+      "position_world_m": [
+        5.0,
+        13.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        3.3600000000000003,
+        3.3600000000000003,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          3.4,
+          6.6
+        ],
+        "y": [
+          11.4,
+          14.6
+        ],
+        "z": [
+          0.003,
+          5.803
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          3.4,
+          6.6
+        ],
+        "y": [
+          11.4,
+          14.6
+        ],
+        "z": [
+          0.003,
+          5.553
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "yard_tree_5",
+      "label": "leafy tree",
+      "position_world_m": [
+        4.0,
+        -13.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        3.465,
+        3.465,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          2.35,
+          5.65
+        ],
+        "y": [
+          -14.65,
+          -11.35
+        ],
+        "z": [
+          0.003,
+          5.8405
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          2.35,
+          5.65
+        ],
+        "y": [
+          -14.65,
+          -11.35
+        ],
+        "z": [
+          0.003,
+          5.603
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "yard_tree_6",
+      "label": "leafy tree",
+      "position_world_m": [
+        17.0,
+        17.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        2.625,
+        2.625,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          15.75,
+          18.25
+        ],
+        "y": [
+          15.75,
+          18.25
+        ],
+        "z": [
+          0.003,
+          5.5405
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          15.75,
+          18.25
+        ],
+        "y": [
+          15.75,
+          18.25
+        ],
+        "z": [
+          0.003,
+          5.203
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "yard_tree_7",
+      "label": "leafy tree",
+      "position_world_m": [
+        7.0,
+        -15.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        2.7300000000000004,
+        2.7300000000000004,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          5.7,
+          8.3
+        ],
+        "y": [
+          -16.3,
+          -13.7
+        ],
+        "z": [
+          0.003,
+          5.578
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          5.7,
+          8.3
+        ],
+        "y": [
+          -16.3,
+          -13.7
+        ],
+        "z": [
+          0.003,
+          5.253
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "street_lamp_south",
+      "label": "yard street lamp",
+      "position_world_m": [
+        17.0,
+        -7.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        1.1,
+        0.6,
+        6.35
+      ],
+      "aabb_world_m": {
+        "x": [
+          16.33,
+          17.15
+        ],
+        "y": [
+          -7.18,
+          -6.82
+        ],
+        "z": [
+          0.003,
+          6.238
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          16.925,
+          17.075
+        ],
+        "y": [
+          -7.075,
+          -6.925
+        ],
+        "z": [
+          0.003,
+          6.153
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "street_lamp_north",
+      "label": "yard street lamp",
+      "position_world_m": [
+        17.0,
+        7.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        1.1,
+        0.6,
+        6.35
+      ],
+      "aabb_world_m": {
+        "x": [
+          16.33,
+          17.15
+        ],
+        "y": [
+          6.82,
+          7.18
+        ],
+        "z": [
+          0.003,
+          6.238
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          16.925,
+          17.075
+        ],
+        "y": [
+          6.925,
+          7.075
+        ],
+        "z": [
+          0.003,
+          6.153
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "north_fence",
+      "label": "perimeter metal fence",
+      "position_world_m": [
+        0.0,
+        19.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        38,
+        0.12,
+        1.8
+      ],
+      "aabb_world_m": {
+        "x": [
+          -19.04,
+          19.04
+        ],
+        "y": [
+          18.94,
+          19.06
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          -19.0,
+          19.0
+        ],
+        "y": [
+          18.94,
+          19.06
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "south_fence",
+      "label": "perimeter metal fence",
+      "position_world_m": [
+        0.0,
+        -19.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        38,
+        0.12,
+        1.8
+      ],
+      "aabb_world_m": {
+        "x": [
+          -19.04,
+          19.04
+        ],
+        "y": [
+          -19.06,
+          -18.94
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          -19.0,
+          19.0
+        ],
+        "y": [
+          -19.06,
+          -18.94
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "east_fence",
+      "label": "perimeter metal fence",
+      "position_world_m": [
+        19.94,
+        0.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.12,
+        38,
+        1.8
+      ],
+      "aabb_world_m": {
+        "x": [
+          19.88,
+          20.0
+        ],
+        "y": [
+          -19.04,
+          19.04
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          19.88,
+          20.0
+        ],
+        "y": [
+          -19.0,
+          19.0
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      },
+      "inside_navigation_xy": false
+    },
+    {
+      "id": "west_fence",
+      "label": "perimeter metal fence",
+      "position_world_m": [
+        -19.0,
+        0.0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.12,
+        38,
+        1.8
+      ],
+      "aabb_world_m": {
+        "x": [
+          -19.06,
+          -18.94
+        ],
+        "y": [
+          -19.04,
+          19.04
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union",
+      "collision_aabb_world_m": {
+        "x": [
+          -19.06,
+          -18.94
+        ],
+        "y": [
+          -19.0,
+          19.0
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      },
+      "inside_navigation_xy": false
+    }
+  ],
+  "validation": {
+    "xml_parse": true,
+    "home_radius_1_5m_clear": true,
+    "all_active_obstacles_cover_lidar_plane": true,
+    "active_obstacles": [
+      "obstacle_wall_1",
+      "obstacle_wall_2",
+      "north_boundary_cargo_stack",
+      "utility_pillar_southwest",
+      "utility_pillar_northeast",
+      "utility_pillar_southeast"
+    ],
+    "witness_hidden_from_agent": true,
+    "feasible_path_exists": false,
+    "blocked_path_certificate": {
+      "type": "continuous_full_width_collision_barrier",
+      "object_id": "obstacle_wall_1",
+      "collision_aabb_world_m": {
+        "x": [
+          3.578,
+          4.578
+        ],
+        "y": [
+          -8.0,
+          8.0
+        ],
+        "z": [
+          0.003,
+          5.503
+        ]
+      },
+      "home_and_goal_on_opposite_x_sides": true,
+      "fixed_altitude_only": true,
+      "known_boundary_bypass_available": false
+    }
+  },
+  "feasibility_witness_world_m": [],
+  "recommended_goal_enu_m": [
+    13.0,
+    0.0,
+    3.5
+  ],
+  "randomization": {
+    "seed": 17,
+    "first_wall_x_m": 4.078,
+    "first_wall_upper_y_m": 2.414,
+    "second_wall_x_m": 9.971,
+    "second_wall_lower_y_m": -0.189,
+    "pillar_positions_world_xy_m": {
+      "utility_pillar_southwest": [
+        1.213,
+        -5.755
+      ],
+      "utility_pillar_northeast": [
+        13.328,
+        5.688
+      ],
+      "utility_pillar_southeast": [
+        13.132,
+        -6.116
+      ]
+    },
+    "fully_blocked": true
+  },
+  "coordinate_note": "Align live ENU and own-aircraft Gazebo pose when evaluating. Layout and certificate are never runtime inputs."
+}

@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "path_base": "index_directory",
+  "ground_truth_policy": "Only world, public manifest, prompt and min_observations belong in runtime. Layout, seed certificate and witness are evaluator-only.",
+  "baseline": {
+    "world": "scene/worlds/obstacle_yard.world",
+    "world_sha256": "1f5ee08c08a3ac0e25e4ca55d5c14e29bdf4b1058c3fa5de81eb8b9567a2d72c"
+  },
+  "scenes": [
+    {
+      "id": "reliability_seed_17",
+      "seed": 17,
+      "expected_outcome": "success",
+      "world": "reliability_seed_17.world",
+      "manifest": "reliability_seed_17_manifest.json",
+      "layout": "reliability_seed_17_layout.json",
+      "tasks": "reliability_seed_17_tasks.json",
+      "world_sha256": "cb0bfd626f96c258a5402192e72ed0c55cd1b6424f8bb3e7114dc41d2bf7ebc7",
+      "asset_sha256": {
+        "world": "cb0bfd626f96c258a5402192e72ed0c55cd1b6424f8bb3e7114dc41d2bf7ebc7",
+        "manifest": "2a0ef42949e32d72a9aec9abebef4195202a2af70cda4e172bb61b76ab83645b",
+        "layout": "1edd62e1b2fc00ce70ae4734eb6c0a4a111e34c86a2ad54813d3f2b7108274c2",
+        "tasks": "8a33afb5ec4de71884dfdff35ef1e109c5ece489dae5ee4f6f5e03b1740e0afd"
+      }
+    },
+    {
+      "id": "reliability_seed_73",
+      "seed": 73,
+      "expected_outcome": "success",
+      "world": "reliability_seed_73.world",
+      "manifest": "reliability_seed_73_manifest.json",
+      "layout": "reliability_seed_73_layout.json",
+      "tasks": "reliability_seed_73_tasks.json",
+      "world_sha256": "2fb67ec80477d064a6b59ff39ccde9d4183ac290a179b08893b457e10cac05e6",
+      "asset_sha256": {
+        "world": "2fb67ec80477d064a6b59ff39ccde9d4183ac290a179b08893b457e10cac05e6",
+        "manifest": "45d284671091a4c6e95af73324ec186e21fa8a10ed112f559bca070a7028b8d7",
+        "layout": "9ee2e1d6f6ab48489962997a7bfb8ad754f33de40f2155ce274d1f40c9cca5a8",
+        "tasks": "a03f5af8cfcb18a014d23efeed30b508c1926f8c725c8297d884dc545f9e1ea9"
+      }
+    },
+    {
+      "id": "reliability_seed_211",
+      "seed": 211,
+      "expected_outcome": "success",
+      "world": "reliability_seed_211.world",
+      "manifest": "reliability_seed_211_manifest.json",
+      "layout": "reliability_seed_211_layout.json",
+      "tasks": "reliability_seed_211_tasks.json",
+      "world_sha256": "e3a910f005cc41567a70d1503b563524716ce6ef7142941293a4e5dfe0404d4c",
+      "asset_sha256": {
+        "world": "e3a910f005cc41567a70d1503b563524716ce6ef7142941293a4e5dfe0404d4c",
+        "manifest": "b6bf827f9fe5c0b53b52472cc5208d468a6b3db3d71d1c85fa5faed6cdad593a",
+        "layout": "e6bd8168ebe4c9c0b9db2bfc82914c2f77c547a5f34f7fb2ebf6bde2ff6df9f8",
+        "tasks": "bf3954dec88148fd1cd2d078dab6ac5fc0a4a9e198b4da1e7ce3a3760834b655"
+      }
+    },
+    {
+      "id": "reliability_blocked_17",
+      "seed": 17,
+      "expected_outcome": "no_route",
+      "world": "reliability_blocked_17.world",
+      "manifest": "reliability_blocked_17_manifest.json",
+      "layout": "reliability_blocked_17_layout.json",
+      "tasks": "reliability_blocked_17_tasks.json",
+      "world_sha256": "56181236908b76cc6cdc824f3d705cc35cab895263292e4d9e1f6c73e8005c2c",
+      "asset_sha256": {
+        "world": "56181236908b76cc6cdc824f3d705cc35cab895263292e4d9e1f6c73e8005c2c",
+        "manifest": "81494ecd47f15996f4a8fe0618ef311eb56aa85d0a9ea96318b2573dc5fbbbc8",
+        "layout": "af6402c87ce8b0f6108e618475b66a37878b46d25b9137467f81fc11a247514a",
+        "tasks": "4a44529fb87186dafea7b471f10af2576f0f982bc82aa0e1c6ac986db42c2cf9"
+      }
+    }
+  ]
+}

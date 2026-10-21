@@ -1,0 +1,813 @@
+{
+  "scene_id": "logistics_yard_v1",
+  "name": "小型物流园区",
+  "world_file": "/home/dut/px4_agent/scene/worlds/logistics_yard.world",
+  "offline_assets": true,
+  "ground_truth_only": true,
+  "ground": {
+    "frame": "gazebo_world",
+    "z_m": 0.003,
+    "bounds_m": {
+      "x": [
+        -20,
+        20
+      ],
+      "y": [
+        -20,
+        20
+      ]
+    },
+    "surface": "coplanar asphalt, grass and concrete"
+  },
+  "free_region_world_m": {
+    "x": [
+      -3.0,
+      8.0
+    ],
+    "y": [
+      -4.0,
+      4.0
+    ],
+    "z": [
+      0.0,
+      6.0
+    ]
+  },
+  "minimum_obstacle_clearance_m": 2,
+  "home_world_m": [
+    0,
+    0,
+    0.003
+  ],
+  "coordinate_note": "Candidate ENU routes assume simulator spawn at (0,0,0), zero heading; confirm live MAVROS home alignment before flight.",
+  "camera": {
+    "heading_body": "+X",
+    "pitch_down_rad": 0.35,
+    "horizontal_fov_rad": 1.5707963267948966
+  },
+  "objects": [
+    {
+      "id": "red_shipping_container",
+      "label": "red corrugated shipping container",
+      "position_world_m": [
+        13,
+        -2,
+        0.003
+      ],
+      "yaw_rad": 1.5707963267948966,
+      "dimensions_model_m": [
+        6.12,
+        2.5,
+        2.66
+      ],
+      "aabb_world_m": {
+        "x": [
+          11.709999,
+          14.290001
+        ],
+        "y": [
+          -5.1175,
+          1.1
+        ],
+        "z": [
+          0.003,
+          2.653
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "white_delivery_van",
+      "label": "white delivery van with black wheels",
+      "position_world_m": [
+        13,
+        3.5,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        5.3,
+        2.22,
+        2.82
+      ],
+      "aabb_world_m": {
+        "x": [
+          10.38,
+          15.5
+        ],
+        "y": [
+          2.3725,
+          4.6275
+        ],
+        "z": [
+          0.003,
+          2.788
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "blue_drum",
+      "label": "blue metal drum",
+      "position_world_m": [
+        10.8,
+        0.7,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.69,
+        0.69,
+        1.02
+      ],
+      "aabb_world_m": {
+        "x": [
+          10.458,
+          11.142
+        ],
+        "y": [
+          0.358,
+          1.042
+        ],
+        "z": [
+          0.013,
+          1.009
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "blue_drum_rear",
+      "label": "blue metal drum",
+      "position_world_m": [
+        10.8,
+        1.6,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.69,
+        0.69,
+        1.02
+      ],
+      "aabb_world_m": {
+        "x": [
+          10.458,
+          11.142
+        ],
+        "y": [
+          1.258,
+          1.942
+        ],
+        "z": [
+          0.013,
+          1.009
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "traffic_cone_1",
+      "label": "orange and white traffic cone",
+      "position_world_m": [
+        10.5,
+        -4.8,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.54,
+        0.54,
+        0.77
+      ],
+      "aabb_world_m": {
+        "x": [
+          10.23,
+          10.77
+        ],
+        "y": [
+          -5.07,
+          -4.53
+        ],
+        "z": [
+          0.003,
+          0.758
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "traffic_cone_2",
+      "label": "orange and white traffic cone",
+      "position_world_m": [
+        12,
+        -5.7,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.54,
+        0.54,
+        0.77
+      ],
+      "aabb_world_m": {
+        "x": [
+          11.73,
+          12.27
+        ],
+        "y": [
+          -5.97,
+          -5.43
+        ],
+        "z": [
+          0.003,
+          0.758
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "brick_warehouse",
+      "label": "brick warehouse with loading door",
+      "position_world_m": [
+        15,
+        -11,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        8.3,
+        7.3,
+        5.45
+      ],
+      "aabb_world_m": {
+        "x": [
+          10.25,
+          19.125
+        ],
+        "y": [
+          -14.625,
+          -7.375
+        ],
+        "z": [
+          0.003,
+          5.213
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "park_office",
+      "label": "two-storey office building with windows and entrance",
+      "position_world_m": [
+        16,
+        11,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        6.25,
+        6.25,
+        6.4
+      ],
+      "aabb_world_m": {
+        "x": [
+          12.835,
+          19.1
+        ],
+        "y": [
+          7.9,
+          14.1
+        ],
+        "z": [
+          0.003,
+          6.283
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "cartons_pallet_1",
+      "label": "wooden pallet with stacked brown cartons",
+      "position_world_m": [
+        10.95,
+        -6.9,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        1.25,
+        1.05,
+        1.05
+      ],
+      "aabb_world_m": {
+        "x": [
+          10.35,
+          11.55
+        ],
+        "y": [
+          -7.4,
+          -6.4
+        ],
+        "z": [
+          0.003,
+          1.082
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "cartons_pallet_2",
+      "label": "wooden pallet with stacked brown cartons",
+      "position_world_m": [
+        13.25,
+        -6.9,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        1.25,
+        1.05,
+        1.05
+      ],
+      "aabb_world_m": {
+        "x": [
+          12.65,
+          13.85
+        ],
+        "y": [
+          -7.4,
+          -6.4
+        ],
+        "z": [
+          0.003,
+          1.082
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "yard_tree_1",
+      "label": "leafy tree",
+      "position_world_m": [
+        -13,
+        -9,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        3.57,
+        3.57,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          -14.7,
+          -11.3
+        ],
+        "y": [
+          -10.7,
+          -7.3
+        ],
+        "z": [
+          0.003,
+          5.878
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "yard_tree_2",
+      "label": "leafy tree",
+      "position_world_m": [
+        -13,
+        7,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        3.3600000000000003,
+        3.3600000000000003,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          -14.6,
+          -11.4
+        ],
+        "y": [
+          5.4,
+          8.6
+        ],
+        "z": [
+          0.003,
+          5.803
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "yard_tree_3",
+      "label": "leafy tree",
+      "position_world_m": [
+        -8,
+        14,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        3.57,
+        3.57,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          -9.7,
+          -6.3
+        ],
+        "y": [
+          12.3,
+          15.7
+        ],
+        "z": [
+          0.003,
+          5.878
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "yard_tree_4",
+      "label": "leafy tree",
+      "position_world_m": [
+        5,
+        13,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        3.3600000000000003,
+        3.3600000000000003,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          3.4,
+          6.6
+        ],
+        "y": [
+          11.4,
+          14.6
+        ],
+        "z": [
+          0.003,
+          5.803
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "yard_tree_5",
+      "label": "leafy tree",
+      "position_world_m": [
+        4,
+        -13,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        3.465,
+        3.465,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          2.35,
+          5.65
+        ],
+        "y": [
+          -14.65,
+          -11.35
+        ],
+        "z": [
+          0.003,
+          5.8405
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "yard_tree_6",
+      "label": "leafy tree",
+      "position_world_m": [
+        17,
+        17,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        2.625,
+        2.625,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          15.75,
+          18.25
+        ],
+        "y": [
+          15.75,
+          18.25
+        ],
+        "z": [
+          0.003,
+          5.5405
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "yard_tree_7",
+      "label": "leafy tree",
+      "position_world_m": [
+        17,
+        -17,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        2.7300000000000004,
+        2.7300000000000004,
+        5.65
+      ],
+      "aabb_world_m": {
+        "x": [
+          15.7,
+          18.3
+        ],
+        "y": [
+          -18.3,
+          -15.7
+        ],
+        "z": [
+          0.003,
+          5.578
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "street_lamp_south",
+      "label": "yard street lamp",
+      "position_world_m": [
+        12,
+        -6.4,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        1.1,
+        0.6,
+        6.35
+      ],
+      "aabb_world_m": {
+        "x": [
+          11.33,
+          12.15
+        ],
+        "y": [
+          -6.58,
+          -6.22
+        ],
+        "z": [
+          0.003,
+          6.238
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "street_lamp_north",
+      "label": "yard street lamp",
+      "position_world_m": [
+        12,
+        6.4,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        1.1,
+        0.6,
+        6.35
+      ],
+      "aabb_world_m": {
+        "x": [
+          11.33,
+          12.15
+        ],
+        "y": [
+          6.22,
+          6.58
+        ],
+        "z": [
+          0.003,
+          6.238
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "north_fence",
+      "label": "perimeter metal fence",
+      "position_world_m": [
+        0,
+        19,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        38,
+        0.12,
+        1.8
+      ],
+      "aabb_world_m": {
+        "x": [
+          -19.04,
+          19.04
+        ],
+        "y": [
+          18.94,
+          19.06
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "south_fence",
+      "label": "perimeter metal fence",
+      "position_world_m": [
+        0,
+        -19,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        38,
+        0.12,
+        1.8
+      ],
+      "aabb_world_m": {
+        "x": [
+          -19.04,
+          19.04
+        ],
+        "y": [
+          -19.06,
+          -18.94
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "east_fence",
+      "label": "perimeter metal fence",
+      "position_world_m": [
+        19,
+        0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.12,
+        38,
+        1.8
+      ],
+      "aabb_world_m": {
+        "x": [
+          18.94,
+          19.06
+        ],
+        "y": [
+          -19.04,
+          19.04
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    },
+    {
+      "id": "west_fence",
+      "label": "perimeter metal fence",
+      "position_world_m": [
+        -19,
+        0,
+        0.003
+      ],
+      "yaw_rad": 0,
+      "dimensions_model_m": [
+        0.12,
+        38,
+        1.8
+      ],
+      "aabb_world_m": {
+        "x": [
+          -19.06,
+          -18.94
+        ],
+        "y": [
+          -19.04,
+          19.04
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      },
+      "ground_contact": true,
+      "bounds_source": "actual_sdf_visual_and_collision_union"
+    }
+  ],
+  "task_candidates": [
+    {
+      "id": "container_inspection",
+      "waypoints_enu_m": [
+        [
+          5,
+          -2,
+          3.5
+        ]
+      ],
+      "natural_language": "起飞到 3.5 米，飞到 ENU 坐标 (5,-2,3.5)，保持位置观察前方，寻找红色货运集装箱，报告它的位置方向和周围物体，然后返航并降落。"
+    },
+    {
+      "id": "delivery_vehicle_inspection",
+      "waypoints_enu_m": [
+        [
+          5,
+          3,
+          3.5
+        ],
+        [
+          7,
+          3,
+          3.5
+        ]
+      ],
+      "natural_language": "起飞到 3.5 米，先去 ENU (5,3,3.5) 观察白色货车及停车区，再沿原高度到 (7,3,3.5) 重新观察并比较两次结果，返航降落。"
+    },
+    {
+      "id": "two_station_patrol",
+      "waypoints_enu_m": [
+        [
+          5,
+          -2,
+          3.5
+        ],
+        [
+          7,
+          0,
+          3.0
+        ]
+      ],
+      "natural_language": "起飞到 3.5 米，按 ENU (5,-2,3.5) 和 (7,0,3) 两个站点巡检，每站悬停拍摄。第一站找红色集装箱和锥桶，第二站找蓝色圆桶并描述附近的车辆、建筑；全部观察结束后返航降落。"
+    }
+  ],
+  "validation": {
+    "xml_parse": true,
+    "obstacle_free_region": true,
+    "horizontal_clearance_at_least_2m": true
+  }
+}

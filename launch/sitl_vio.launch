@@ -1,0 +1,72 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Project overlay of PX4 v1.14 mavros_posix_sitl/posix_sitl launches.
+       Camera/physics lockstep is passed through gazebo_ros without changing
+       the upstream PX4 checkout. All original flight and spawn args remain. -->
+  <arg name="x" default="0"/>
+  <arg name="y" default="0"/>
+  <arg name="z" default="0"/>
+  <arg name="R" default="0"/>
+  <arg name="P" default="0"/>
+  <arg name="Y" default="0"/>
+  <arg name="est" default="ekf2"/>
+  <arg name="vehicle" default="iris"/>
+  <arg name="world" default="$(find mavlink_sitl_gazebo)/worlds/empty.world"/>
+  <arg name="sdf" default="$(find mavlink_sitl_gazebo)/models/$(arg vehicle)/$(arg vehicle).sdf"/>
+  <arg name="gui" default="true"/>
+  <arg name="debug" default="false"/>
+  <arg name="verbose" default="false"/>
+  <arg name="paused" default="false"/>
+  <arg name="respawn_gazebo" default="false"/>
+  <arg name="fcu_url" default="udp://:14540@localhost:14557"/>
+  <arg name="respawn_mavros" default="false"/>
+  <arg name="interactive" default="true"/>
+  <arg name="extra_gazebo_args" default="--lockstep"/>
+  <!-- Empty preserves the inherited loader path; the validated wrapper supplies
+       an approved private directory only for the explicit experimental backend. -->
+  <arg name="gazebo_physics_library_path" default=""/>
+
+  <group>
+    <env name="PX4_SIM_MODEL" value="gazebo-classic_$(arg vehicle)"/>
+    <arg unless="$(arg interactive)" name="px4_command_arg1" value="-d"/>
+    <arg if="$(arg interactive)" name="px4_command_arg1" value=""/>
+    <node name="sitl" pkg="px4" type="px4" output="screen"
+          args="$(find px4)/build/px4_sitl_default/etc -s etc/init.d-posix/rcS $(arg px4_command_arg1)"
+          required="true"/>
+
+    <group>
+      <!-- Bound server llvmpipe rendering workers; sensor and physics settings stay as declared. -->
+      <env name="LP_NUM_THREADS" value="4"/>
+      <env if="$(eval arg('gazebo_physics_library_path') != '')" name="LD_LIBRARY_PATH"
+           value="$(eval arg('gazebo_physics_library_path') + (':' + optenv('LD_LIBRARY_PATH') if optenv('LD_LIBRARY_PATH') else ''))"/>
+      <include file="$(find gazebo_ros)/launch/empty_world.launch">
+        <!-- The GUI node below has its own renderer thread budget. -->
+        <arg name="gui" value="false"/>
+        <arg name="world_name" value="$(arg world)"/>
+        <arg name="debug" value="$(arg debug)"/>
+        <arg name="verbose" value="$(arg verbose)"/>
+        <arg name="paused" value="$(arg paused)"/>
+        <arg name="respawn_gazebo" value="$(arg respawn_gazebo)"/>
+        <arg name="extra_gazebo_args" value="$(arg extra_gazebo_args)"/>
+      </include>
+    </group>
+    <!-- Limit only the operator GUI's llvmpipe rendering workers. Gazebo
+         server rendering has its separate budget above. -->
+    <group if="$(arg gui)">
+      <arg unless="$(arg verbose)" name="gui_verbose_arg" value=""/>
+      <arg if="$(arg verbose)" name="gui_verbose_arg" value="--verbose"/>
+      <node name="gazebo_gui" pkg="gazebo_ros" type="gzclient" respawn="false"
+            output="screen" args="$(arg gui_verbose_arg)" required="false">
+        <env name="LP_NUM_THREADS" value="2"/>
+      </node>
+    </group>
+    <node name="$(anon vehicle_spawn)" pkg="gazebo_ros" type="spawn_model" output="screen"
+          args="-sdf -file $(arg sdf) -model $(arg vehicle) -x $(arg x) -y $(arg y) -z $(arg z) -R $(arg R) -P $(arg P) -Y $(arg Y)"/>
+  </group>
+
+  <include file="$(find mavros)/launch/px4.launch">
+    <arg name="gcs_url" value=""/>
+    <arg name="fcu_url" value="$(arg fcu_url)"/>
+    <arg name="respawn_mavros" value="$(arg respawn_mavros)"/>
+  </include>
+</launch>

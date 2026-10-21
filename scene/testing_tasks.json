@@ -1,0 +1,44 @@
+{
+  "name": "logistics_yard",
+  "model": "qwen3-vl-plus",
+  "require_vio_ready": true,
+  "coordinate_frame": "MAVROS local ENU, metres; these are approved observation points, not visually inferred target positions",
+  "tasks": [
+    {
+      "id": "red_container_inspection",
+      "prompt": "请执行一次物流园巡检：起飞到本地 ENU 高度3.5米，再飞到本地 ENU 观察点(x=5,y=-2,z=3.5)，完成到点后保持位置，用当前机载相机寻找红色货运集装箱，保存结构化观察报告，说明它在画面中的大概位置，以及周围清晰可见的物体和邻接关系。看不清或未发现请如实报告，未搜索区域不要猜测。不要根据视觉位置靠近目标，不启用自主绕障。观察报告保存后返航到本次起飞点，随后降落并等待落地上锁，最后汇报任务结果。每次execute_mission都提供steps和description。",
+      "observations": [
+        {"id": "red_container_view", "waypoint": [5, -2, 3.5], "category_aliases": ["集装箱", "货柜", "container"], "color_aliases": ["红", "red"]}
+      ],
+      "approved_waypoints": [[5, -2, 3.5]],
+      "require_return_home": true,
+      "waypoint_tolerance_m": 0.65
+    },
+    {
+      "id": "white_van_parking_inspection",
+      "prompt": "请执行一次停车区巡检：起飞到本地 ENU 高度3.5米，先到明确的经过点(x=2,y=3,z=3.5)，再到观察点(x=5,y=3,z=3.5)，完成到点后保持位置，采集当前机载相机图像并保存观察报告。寻找白色货车或白色厢式车，报告它在画面中的大概位置，以及停车位、道路、建筑或其他实际可见物体的相对关系；看不到或类别不能确认请如实说明。只执行这条明确路线，不根据图像估算坐标接近目标，不搜索视野外区域。报告保存后返航到本次起飞点，再降落并等待落地上锁，最后汇报结果。每次execute_mission都提供steps和description。",
+      "observations": [
+        {"id": "white_van_view", "waypoint": [5, 3, 3.5], "category_aliases": ["货车", "厢式", "面包车", "van", "truck"], "color_aliases": ["白", "white"]}
+      ],
+      "approved_waypoints": [[2, 3, 3.5], [5, 3, 3.5]],
+      "require_return_home": true,
+      "waypoint_tolerance_m": 0.65
+    },
+    {
+      "id": "conditional_two_view_patrol",
+      "prompt": "请执行两次观察的条件巡检，所有坐标均为本地 ENU 米：起飞到高度3.5米，先飞到观察点(x=4,y=0,z=3.5)，完成到点后保持位置，采图并调用report_scene保存第一份报告，寻找蓝色桶，并报告其周围可见物体。只有明确识别为蓝色桶且结构化confidence不低于0.6才算确认；其他情形都算未确认。如果第一份报告未确认蓝色桶，下一阶段只能飞到(x=7,y=0,z=3.5)，在那里重新采图并保存第二份蓝桶观察报告；如果第一份报告已经确认蓝色桶，下一阶段只能飞到(x=5,y=3,z=3.5)，在那里采图并保存第二份白色货车或白色厢式车观察报告。第一份报告保存后再选择下一阶段，不能提前串成完整路线；两次观察必须使用各自的新快照。最后比较两次视野中实际看到的目标与周围关系，不猜测视野外目标，不将同一物体被重复看到当成两个物体，也不要从视觉估计位置生成其他航点。第二份报告保存后返航到本次起飞点，降落并等待落地上锁，最后汇报。每次execute_mission都提供steps和description。",
+      "observations": [
+        {"id": "first_blue_barrel_view", "waypoint": [4, 0, 3.5], "category_aliases": ["桶", "barrel", "drum"], "color_aliases": ["蓝", "blue"]},
+        {"id": "second_blue_barrel_view", "waypoint": [7, 0, 3.5], "category_aliases": ["桶", "barrel", "drum"], "color_aliases": ["蓝", "blue"]}
+      ],
+      "conditional_second_observation": {
+        "minimum_confidence": 0.6,
+        "if_confirmed": {"id": "conditional_white_van_view", "waypoint": [5, 3, 3.5], "category_aliases": ["货车", "厢式", "面包车", "van", "truck"], "color_aliases": ["白", "white"]},
+        "if_unconfirmed": {"id": "closer_blue_barrel_view", "waypoint": [7, 0, 3.5], "category_aliases": ["桶", "barrel", "drum"], "color_aliases": ["蓝", "blue"]}
+      },
+      "approved_waypoints": [[4, 0, 3.5], [7, 0, 3.5], [5, 3, 3.5]],
+      "require_return_home": true,
+      "waypoint_tolerance_m": 0.65
+    }
+  ]
+}

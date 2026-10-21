@@ -1,0 +1,471 @@
+--- a/vins_estimator/src/estimator/estimator.cpp
++++ b/vins_estimator/src/estimator/estimator.cpp
+@@ -15,7 +15,7 @@
+ #include <std_msgs/Float64MultiArray.h>
+ #include <std_msgs/String.h>
+ #include <sstream>
+-// PX4_AGENT_STATIONARY_HEALTH_V8: sensor health and opt-in source matrix snapshots.
++// PX4_AGENT_STATIONARY_HEALTH_V9: sensor health and opt-in source matrix snapshots.
+ // PX4_AGENT_INITIAL_BIAS_PRIOR: native IMU statistics, added once then marginalized.
+ // PX4_AGENT_VIO_PATCH: health, guarded reset, and clean shutdown only.
+ 
+@@ -53,6 +53,14 @@
+     propagation_refresh_evidence = NativeRefreshEvidence();
+     previous_stereo_ids.clear();
+     native_stereo_tracks_json = "[]";
++    stationary_initialization_seeded = false;
++    stationary_initialization_seed_count = stationary_initialization_wait_count = 0;
++    initial_bias_prior_insertion_count = 0;
++    stationary_initialization_seed_stamp = -1;
++    stationary_initialization_seed_acc.setZero(); stationary_initialization_seed_gyro.setZero();
++    stationary_initialization_seed_first_imu_stamp = stationary_initialization_seed_last_imu_stamp = -1;
++    stationary_initialization_seed_imu_samples = 0;
++    native_initialization_evidence_json = "{\"phase\":\"startup\"}";
+     solver_solution_usable = true;
+     solver_initial_cost = solver_final_cost = solver_residual_rms = 0;
+     solver_health_reason.clear();
+@@ -79,6 +87,7 @@
+ 
+     for (int i = 0; i < WINDOW_SIZE + 1; i++)
+     {
++        Headers[i] = 0;
+         Rs[i].setIdentity();
+         Ps[i].setZero();
+         Vs[i].setZero();
+@@ -109,6 +118,9 @@
+     frame_count = 0;
+     solver_flag = INITIAL;
+     initial_timestamp = 0;
++    // ImageFrame edges own distinct preintegrations, not window/tmp pointers.
++    for (auto &entry : all_image_frame)
++    { delete entry.second.pre_integration; entry.second.pre_integration = nullptr; }
+     all_image_frame.clear();
+ 
+     if (tmp_pre_integration != nullptr)
+@@ -378,6 +390,7 @@
+             processImage(feature.second, feature.first);
+             std_msgs::String native_health;
+             native_health.data = nativeHealthJson(feature.first);
++            appendNativeHealthJson(native_health.data);
+             native_health_pub.publish(native_health);
+             std_msgs::Bool tracking_status;
+             tracking_status.data = solver_flag == NON_LINEAR && !failure_occur;
+@@ -490,6 +503,14 @@
+ 
+ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image, const double header)
+ {
++    // Refuse invalid source time before transferring the temporary IMU edge.
++    if (!std::isfinite(header) || (!all_image_frame.empty() && header <= all_image_frame.rbegin()->first))
++    {
++        solver_solution_usable = false; failure_occur = true; solver_flag = INITIAL;
++        solver_health_reason = "invalid_or_duplicate_image_source_stamp";
++        if (STATIONARY_INITIALIZATION) snapshotInitializationEvidence("rejected", solver_health_reason);
++        return;
++    }
+     updateStationaryEvidence(image, header);
+     ROS_DEBUG("new image coming ------------------------------------------");
+     ROS_DEBUG("Adding feature points %lu", image.size());
+@@ -577,22 +598,38 @@
+         {
+             f_manager.initFramePoseByPnP(frame_count, Ps, Rs, tic, ric);
+             f_manager.triangulate(frame_count, Ps, Rs, tic, ric);
++            if (STATIONARY_INITIALIZATION && frame_count < WINDOW_SIZE)
++                snapshotInitializationEvidence("waiting", "partial_camera_window");
+             if (frame_count == WINDOW_SIZE)
+             {
+-                map<double, ImageFrame>::iterator frame_it;
+-                int i = 0;
+-                for (frame_it = all_image_frame.begin(); frame_it != all_image_frame.end(); frame_it++)
++                if (STATIONARY_INITIALIZATION)
+                 {
+-                    frame_it->second.R = Rs[i];
+-                    frame_it->second.T = Ps[i];
+-                    i++;
++                    if (!prepareStationaryInitialization())
++                    {
++                        if (!failure_occur)
++                        {
++                            marginalization_flag = MARGIN_OLD;
++                            slideWindow(); // preserve every real adjacent IMU edge while waiting
++                        }
++                        return; // INITIAL: no solve, no marginalized prior, no VIO output
++                    }
++                    marginalization_flag = MARGIN_OLD; // first usable solve carries the once-only prior
+                 }
+-                solveGyroscopeBias(all_image_frame, Bgs);
+-                for (int i = 0; i <= WINDOW_SIZE; i++)
++                else
+                 {
+-                    pre_integrations[i]->repropagate(Vector3d::Zero(), Bgs[i]);
++                    // Immediate upstream initialization has exactly the current full window.
++                    std::string mapping_reason;
++                    if (!validateInitialWindowMapping(mapping_reason))
++                    { solver_solution_usable = false; failure_occur = true; solver_health_reason = mapping_reason; return; }
++                    for (int i = 0; i <= WINDOW_SIZE; ++i)
++                    { all_image_frame.at(Headers[i]).R = Rs[i]; all_image_frame.at(Headers[i]).T = Ps[i]; }
++                    solveGyroscopeBias(all_image_frame, Bgs);
++                    for (int i = 0; i <= WINDOW_SIZE; i++)
++                        pre_integrations[i]->repropagate(Vector3d::Zero(), Bgs[i]);
+                 }
+                 optimization();
++                if (STATIONARY_INITIALIZATION)
++                    snapshotInitializationEvidence("first_solve_complete", solver_solution_usable ? "usable_joint_solve" : "unusable_joint_solve");
+                 if (!solver_solution_usable) { failure_occur = true; solver_flag = INITIAL; return; }
+                 if (!updateLatestStates()) { failure_occur = true; solver_flag = INITIAL; return; }
+                 solver_flag = NON_LINEAR;
+@@ -1157,7 +1194,145 @@
+     return true;
+ }
+ 
+-std::string Estimator::nativeHealthJson(double stamp) const
++bool Estimator::validateInitialWindowMapping(std::string &reason) const
++{
++    if (frame_count != WINDOW_SIZE)
++    { reason = "partial_camera_window"; return false; }
++    std::vector<double> headers, keys, window_spans, image_spans;
++    for (const auto &entry : all_image_frame) keys.push_back(entry.first);
++    for (int i = 0; i <= WINDOW_SIZE; ++i)
++    {
++        headers.push_back(Headers[i]);
++        window_spans.push_back(pre_integrations[i] ? pre_integrations[i]->sum_dt : -1);
++        const auto found = all_image_frame.find(Headers[i]);
++        image_spans.push_back(found != all_image_frame.end() && found->second.pre_integration
++            ? found->second.pre_integration->sum_dt : -1);
++    }
++    return validateInitialHeaderEdges(headers, keys, window_spans, image_spans, reason);
++}
++
++void Estimator::snapshotInitializationEvidence(const std::string &phase, const std::string &reason)
++{
++    std::ostringstream o; o.precision(12);
++    o << "{\"phase\":\"" << phase << "\",\"reason\":\"" << reason
++      << "\",\"snapshot_phase\":\"before_slide\",\"source_stamp_sim_s\":" << Headers[frame_count]
++      << ",\"frame_count\":" << frame_count << ",\"seeded\":" << (stationary_initialization_seeded ? "true" : "false")
++      << ",\"seed_count\":" << stationary_initialization_seed_count << ",\"wait_count\":" << stationary_initialization_wait_count
++      << ",\"initial_bias_prior_insertion_count\":" << initial_bias_prior_insertion_count
++      << ",\"existing_valid_marginal_prior\":" << (last_marginalization_info && last_marginalization_info->valid ? "true" : "false")
++      << ",\"current_source_gate\":" << (stationary_detector.instant_gate ? "true" : "false")
++      << ",\"current_stationary_confirmed\":" << (stationary_detector.active ? "true" : "false")
++      << ",\"headers_sim_s\":[";
++    for (int i=0; i<=frame_count; ++i) { if(i) o << ","; o << Headers[i]; }
++    o << "],\"stationary_frames\":[";
++    for (int i=0; i<=frame_count; ++i) { if(i) o << ","; o << (stationary_frames[i] ? "true" : "false"); }
++    o << "],\"stationary_intervals\":[";
++    for (int i=0; i<=frame_count; ++i) { if(i) o << ","; o << (stationary_intervals[i] ? "true" : "false"); }
++    o << "],\"image_map_keys_sim_s\":["; bool comma=false;
++    for (const auto &entry : all_image_frame) { if(comma) o << ","; comma=true; o << entry.first; }
++    o << "],\"map_size\":" << all_image_frame.size()
++      << ",\"seed_prior_was_present\":false"
++      << ",\"seed_source_stamp_sim_s\":" << stationary_initialization_seed_stamp
++      << ",\"seed_imu_first_source_stamp_sim_s\":" << stationary_initialization_seed_first_imu_stamp
++      << ",\"seed_imu_last_source_stamp_sim_s\":" << stationary_initialization_seed_last_imu_stamp
++      << ",\"seed_imu_samples\":" << stationary_initialization_seed_imu_samples
++      << ",\"seed_acc_mean_m_s2\":[" << stationary_initialization_seed_acc.x() << "," << stationary_initialization_seed_acc.y() << "," << stationary_initialization_seed_acc.z()
++      << "],\"seed_gyro_mean_rad_s\":[" << stationary_initialization_seed_gyro.x() << "," << stationary_initialization_seed_gyro.y() << "," << stationary_initialization_seed_gyro.z()
++      << "],\"seed_semantics\":\"once_only_sensor_supported_initial_guess_no_new_factor_or_constant_rp\"}";
++    native_initialization_evidence_json = o.str();
++}
++
++bool Estimator::prepareStationaryInitialization()
++{
++    std::string reason;
++    if (!validateInitialWindowMapping(reason))
++    {
++        solver_solution_usable = false; failure_occur = true; solver_health_reason = reason;
++        snapshotInitializationEvidence("rejected", reason); return false;
++    }
++    if (stationary_initialization_seeded || (last_marginalization_info && last_marginalization_info->valid))
++    {
++        solver_solution_usable = false; failure_occur = true;
++        solver_health_reason = "initial_seed_would_overwrite_existing_prior_or_seed";
++        snapshotInitializationEvidence("rejected", solver_health_reason); return false;
++    }
++    if (!confirmedStationaryInitialWindow(stationary_frames, stationary_intervals, WINDOW_SIZE,
++            stationary_detector.instant_gate, stationary_detector.active, reason))
++    {
++        ++stationary_initialization_wait_count;
++        snapshotInitializationEvidence("waiting", reason); return false;
++    }
++    // Select actual raw samples spanning exactly this source camera window.
++    // The existing detector already confirmed all frames and intervals using
++    // near positive-disparity stereo plus low-variance original IMU.
++    const double first = Headers[0] + td, last = Headers[WINDOW_SIZE] + td;
++    Eigen::Vector3d acc_mean = Eigen::Vector3d::Zero(), gyro_mean = Eigen::Vector3d::Zero();
++    double first_sample=-1, last_sample=-1, previous=-1; int count=0; bool gap=false;
++    for (const auto &sample : stationary_detector.imu)
++    {
++        if (sample.t < first - 1e-6 || sample.t > last + 0.005) continue;
++        if (!std::isfinite(sample.t) || !sample.acc.allFinite() || !sample.gyro.allFinite()) { gap=true; break; }
++        if (previous >= 0 && (sample.t <= previous || sample.t - previous > 0.012)) gap=true;
++        if (!count) first_sample=sample.t;
++        last_sample=sample.t; previous=sample.t; ++count; acc_mean+=sample.acc; gyro_mean+=sample.gyro;
++    }
++    if (gap || count < stationary_detector.config.minimum_imu_samples || first_sample > first+0.012
++        || last_sample < last-0.012 || last_sample-first_sample < last-first-0.012)
++    {
++        ++stationary_initialization_wait_count;
++        snapshotInitializationEvidence("waiting", "raw_imu_does_not_cover_complete_camera_window"); return false;
++    }
++    acc_mean /= count; gyro_mean /= count;
++    if (!acc_mean.allFinite() || !gyro_mean.allFinite() || acc_mean.norm() < 1)
++    {
++        solver_solution_usable=false; failure_occur=true; solver_health_reason="invalid_stationary_seed_source";
++        snapshotInitializationEvidence("rejected", solver_health_reason); return false;
++    }
++    // A common world rotation preserves every relative visual geometry. Yaw
++    // and translation choose coordinates; all RP variables remain Ceres-free.
++    const Eigen::Matrix3d from_acc = Utility::g2R(acc_mean);
++    const double previous_yaw = Utility::R2ypr(Rs[0]).x();
++    const double acc_yaw = Utility::R2ypr(from_acc).x();
++    const Eigen::Matrix3d desired = Utility::ypr2R(Eigen::Vector3d(previous_yaw-acc_yaw,0,0))*from_acc;
++    const Eigen::Matrix3d common_rotation=desired*Rs[0].transpose();
++    const Eigen::Vector3d origin=Ps[0];
++    for (int i=0; i<=WINDOW_SIZE; ++i)
++    {
++        Rs[i]=common_rotation*Rs[i]; Ps[i]=origin+common_rotation*(Ps[i]-origin);
++        Vs[i].setZero(); Bas[i].setZero(); Bgs[i]=gyro_mean;
++        ImageFrame &frame=all_image_frame.at(Headers[i]); frame.R=Rs[i]; frame.T=Ps[i];
++        if (pre_integrations[i]) pre_integrations[i]->repropagate(Bas[i], Bgs[i]);
++        if (frame.pre_integration) frame.pre_integration->repropagate(Bas[i], Bgs[i]);
++    }
++    if (tmp_pre_integration) tmp_pre_integration->repropagate(Vector3d::Zero(), gyro_mean);
++    stationary_initialization_seed_acc=acc_mean; stationary_initialization_seed_gyro=gyro_mean;
++    stationary_initialization_seed_first_imu_stamp=first_sample; stationary_initialization_seed_last_imu_stamp=last_sample;
++    stationary_initialization_seed_imu_samples=count; stationary_initialization_seed_stamp=Headers[WINDOW_SIZE];
++    stationary_initialization_seeded=true; ++stationary_initialization_seed_count;
++    snapshotInitializationEvidence("seeded_before_first_solve", "complete_source_stationary_window");
++    // Preserve the actual source-supported seed while prior is still absent.
++    // File evidence only: INITIAL remains false and no ROS/EV pose is emitted.
++    appendNativeHealthJson(nativeHealthJson(Headers[WINDOW_SIZE], "seed_before_first_solve_and_slide"));
++    ROS_INFO("V9 stationary INITIAL seed once at %.6f: source IMU [%.6f,%.6f] n=%d; no prior yet",
++        Headers[WINDOW_SIZE], first_sample, last_sample, count);
++    return true;
++}
++
++void Estimator::appendNativeHealthJson(const std::string &data)
++{
++    if (!STATIONARY_INITIALIZATION) return;
++    if (!native_health_trace.is_open())
++        native_health_trace.open(OUTPUT_FOLDER + "/native_health.jsonl", std::ios::out | std::ios::app);
++    if (native_health_trace && data.size() <= 512*1024)
++    {
++        native_health_trace << data << '\n'; native_health_trace.flush();
++        if (native_health_trace) { ++native_health_trace_records; return; }
++    }
++    if (!native_health_trace_error) ROS_ERROR("Native startup health trace cannot be written to %s", OUTPUT_FOLDER.c_str());
++    native_health_trace_error=true; // never declare a complete initialization trace on failed IO
++}
++
++std::string Estimator::nativeHealthJson(double stamp, const std::string &state_phase) const
+ {
+     std::ostringstream o;
+     o.precision(12);
+@@ -1175,7 +1350,7 @@
+     quaternion_json << "]";
+     // Sentinel values are finite, keeping diagnostics valid JSON even before
+     // the first IMU window or stereo pair has arrived.
+-    o << "{\"implementation_revision\":\"stationary_health_v8\",\"marginalization_pose_jacobian_mode\":\"" << (EXACT_MARGINALIZATION_POSE_JACOBIAN ? "exact_residual_chain_rule" : "legacy_frozen_local") << "\",\"active_prior_pose_jacobian_mode\":\"" << (last_marginalization_info && last_marginalization_info->valid ? (last_marginalization_info->exact_pose_jacobian ? "exact_residual_chain_rule" : "legacy_frozen_local") : "none") << "\",\"stamp\":" << stamp << ",\"tracking_ok\":" << ((solver_flag == NON_LINEAR && !failure_occur) ? "true" : "false")
++    o << "{\"implementation_revision\":\"stationary_health_v9\",\"marginalization_pose_jacobian_mode\":\"" << (EXACT_MARGINALIZATION_POSE_JACOBIAN ? "exact_residual_chain_rule" : "legacy_frozen_local") << "\",\"active_prior_pose_jacobian_mode\":\"" << (last_marginalization_info && last_marginalization_info->valid ? (last_marginalization_info->exact_pose_jacobian ? "exact_residual_chain_rule" : "legacy_frozen_local") : "none") << "\",\"stamp\":" << stamp << ",\"tracking_ok\":" << ((solver_flag == NON_LINEAR && !failure_occur) ? "true" : "false")
+       << ",\"solution_usable\":" << (solver_solution_usable ? "true" : "false")
+       << ",\"reason\":\"" << solver_health_reason << "\",\"initial_cost\":" << solver_initial_cost
+       << ",\"final_cost\":" << solver_final_cost << ",\"residual_rms\":" << solver_residual_rms
+@@ -1185,13 +1360,17 @@
+       << ",\"solver_last_gradient_max_norm\":" << solver_last_gradient_max_norm
+       << ",\"solver_gradient_norm_semantics\":\"ceres_projected_ambient_step_norm_not_physical_rp_gradient\""
+       << ",\"current_state_stamp_sim_s\":" << Headers[frame_count]
+-      << ",\"current_state_snapshot_phase\":\"after_process_image_and_slide\""
++      << ",\"current_state_snapshot_phase\":\"" << state_phase << "\""
+       << ",\"current_position_world_m\":" << vector_json(Ps[frame_count])
+       << ",\"current_velocity_world_m_s\":" << vector_json(Vs[frame_count])
+       << ",\"current_orientation_xyzw\":" << quaternion_json.str()
+       << ",\"current_acc_bias_m_s2\":" << vector_json(Bas[frame_count])
+       << ",\"current_gyro_bias_rad_s\":" << vector_json(Bgs[frame_count])
+       << ",\"estimator_gravity_world_m_s2\":" << vector_json(g)
++      << ",\"stationary_initialization_enabled\":" << (STATIONARY_INITIALIZATION ? "true" : "false")
++      << ",\"initialization\":" << native_initialization_evidence_json
++      << ",\"native_health_trace_records_before_current\":" << native_health_trace_records
++      << ",\"native_health_trace_error\":" << (native_health_trace_error ? "true" : "false")
+       << ",\"imu_optimizer_window\":" << native_imu_optimizer_window_json
+       << ",\"bias_information_diagnostics\":" << native_bias_diagnostics_json
+       << ",\"native_coordinate_gauge\":" << native_gauge_evidence_json
+@@ -1339,8 +1518,11 @@
+     if(!USE_IMU)
+         problem.SetParameterBlockConstant(para_Pose[0]);
+     if (add_initial_bias_prior)
++    {
++        ++initial_bias_prior_insertion_count;
+         problem.AddResidualBlock(new ImuBiasPrior(ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA),
+                                  NULL, para_SpeedBias[0]);
++    }
+ 
+     for (int i = 0; i < NUM_OF_CAM; i++)
+     {
+@@ -1797,10 +1979,19 @@
+ 
+             if (true || solver_flag == INITIAL)
+             {
+-                map<double, ImageFrame>::iterator it_0;
+-                it_0 = all_image_frame.find(t_0);
+-                delete it_0->second.pre_integration;
+-                all_image_frame.erase(all_image_frame.begin(), it_0);
++                // Delayed stereo INITIAL must own exactly the retained Header keys.
++                // The original code left t_0 and its freed edge in the map.
++                const auto end = STATIONARY_INITIALIZATION && STEREO && USE_IMU
++                    ? all_image_frame.upper_bound(t_0) : all_image_frame.lower_bound(t_0);
++                for (auto it = all_image_frame.begin(); it != end; ++it)
++                { delete it->second.pre_integration; it->second.pre_integration = nullptr; }
++                all_image_frame.erase(all_image_frame.begin(), end);
++                if (!(STATIONARY_INITIALIZATION && STEREO && USE_IMU))
++                {
++                    const auto retained_old = all_image_frame.find(t_0);
++                    if (retained_old != all_image_frame.end())
++                    { delete retained_old->second.pre_integration; retained_old->second.pre_integration = nullptr; }
++                }
+             }
+             slideWindowOld();
+         }
+@@ -1855,7 +2046,7 @@
+ {
+     sum_of_back++;
+ 
+-    bool shift_depth = solver_flag == NON_LINEAR ? true : false;
++    bool shift_depth = solver_flag == NON_LINEAR;
+     if (shift_depth)
+     {
+         Matrix3d R0, R1;
+@@ -1867,7 +2058,18 @@
+         f_manager.removeBackShiftDepth(R0, P0, R1, P1);
+     }
+     else
++    {
+         f_manager.removeBack();
++        if (STATIONARY_INITIALIZATION && STEREO && USE_IMU)
++        {
++            // Waiting INITIAL has no optimized inter-frame transform. The
++            // removed reference changes each inverse depth's camera anchor;
++            // re-triangulate the retained actual stereo observations instead
++            // of carrying old depth through unoptimized pose predictions.
++            f_manager.clearDepth();
++            f_manager.triangulate(WINDOW_SIZE - 1, Ps, Rs, tic, ric);
++        }
++    }
+ }
+ 
+ 
+--- a/vins_estimator/src/estimator/estimator.h
++++ b/vins_estimator/src/estimator/estimator.h
+@@ -34,12 +34,14 @@
+ #include "../factor/projectionTwoFrameOneCamFactor.h"
+ #include "../factor/projectionTwoFrameTwoCamFactor.h"
+ #include "../factor/projectionOneFrameTwoCamFactor.h"
+-// PX4_AGENT_STATIONARY_HEALTH_V8: sensor health and opt-in matrix evidence.
++// PX4_AGENT_STATIONARY_HEALTH_V9: sensor health and opt-in matrix evidence.
+ #include "../factor/stationary_factors.h"
+ #include "../factor/imu_chain_health.h"
+ #include <set>
+ #include <string>
+ #include <atomic>
++#include <fstream>
++#include "../factor/stationary_initialization.h"
+ #include "../featureTracker/feature_tracker.h"
+ 
+ 
+@@ -85,7 +87,11 @@
+     void fastPredictIMU(double t, Eigen::Vector3d linear_acceleration, Eigen::Vector3d angular_velocity);
+     void updateStationaryEvidence(const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image, double stamp);
+     bool validateOptimizedSolution();
+-    std::string nativeHealthJson(double stamp) const;
++    std::string nativeHealthJson(double stamp, const std::string &state_phase = "after_process_image_and_slide") const;
++    bool prepareStationaryInitialization();
++    bool validateInitialWindowMapping(std::string &reason) const;
++    void snapshotInitializationEvidence(const std::string &phase, const std::string &reason);
++    void appendNativeHealthJson(const std::string &data);
+     bool IMUAvailable(double t);
+     void initFirstIMUPose(vector<pair<double, Eigen::Vector3d>> &accVector);
+ 
+@@ -133,7 +139,7 @@
+     Vector3d back_P0, last_P, last_P0;
+     double Headers[(WINDOW_SIZE + 1)];
+ 
+-    IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)];
++    IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)] = {};
+     Vector3d acc_0, gyr_0;
+ 
+     vector<double> dt_buf[(WINDOW_SIZE + 1)];
+@@ -168,11 +174,11 @@
+ 
+     int loop_window_index;
+ 
+-    MarginalizationInfo *last_marginalization_info;
++    MarginalizationInfo *last_marginalization_info = nullptr;
+     vector<double *> last_marginalization_parameter_blocks;
+ 
+     map<double, ImageFrame> all_image_frame;
+-    IntegrationBase *tmp_pre_integration;
++    IntegrationBase *tmp_pre_integration = nullptr;
+ 
+     Eigen::Vector3d initP;
+     Eigen::Matrix3d initR;
+@@ -190,6 +196,17 @@
+     bool stationary_frames[WINDOW_SIZE + 1];
+     bool stationary_intervals[WINDOW_SIZE + 1]; // [i] supports interval i-1 -> i
+     std::set<int> previous_stereo_ids;
++    bool stationary_initialization_seeded;
++    int stationary_initialization_seed_count, stationary_initialization_wait_count;
++    int initial_bias_prior_insertion_count;
++    std::string native_initialization_evidence_json;
++    std::ofstream native_health_trace;
++    bool native_health_trace_error = false;
++    std::size_t native_health_trace_records = 0;
++    double stationary_initialization_seed_stamp;
++    Eigen::Vector3d stationary_initialization_seed_acc, stationary_initialization_seed_gyro;
++    double stationary_initialization_seed_first_imu_stamp, stationary_initialization_seed_last_imu_stamp;
++    int stationary_initialization_seed_imu_samples;
+     std::string native_stereo_tracks_json;
+     std::string native_imu_optimizer_window_json;
+     std::string native_bias_diagnostics_json;
+--- a/vins_estimator/src/estimator/parameters.cpp
++++ b/vins_estimator/src/estimator/parameters.cpp
+@@ -16,6 +16,7 @@
+ double ACC_N, ACC_W;
+ double ACC_BIAS_PRIOR_SIGMA = 0, GYR_BIAS_PRIOR_SIGMA = 0;
+ int ENABLE_ZUPT = 0;
++int STATIONARY_INITIALIZATION = 0; // no delayed initialization unless explicitly enabled
+ double MAX_IMU_PREINTEGRATION_SPAN_S = 0; // opt-in; unchanged upstream keyframe policy by default
+ int FIX_FIRST_POSE_XYZ_YAW = 0; // coordinate gauge experiment, upstream disabled
+ int EXACT_MARGINALIZATION_POSE_JACOBIAN = 0; // upstream legacy unless explicit opt-in
+@@ -188,7 +189,7 @@
+     if (!fsSettings["acc_bias_prior_sigma"].empty()) fsSettings["acc_bias_prior_sigma"] >> ACC_BIAS_PRIOR_SIGMA;
+     if (!fsSettings["gyr_bias_prior_sigma"].empty()) fsSettings["gyr_bias_prior_sigma"] >> GYR_BIAS_PRIOR_SIGMA;
+     ROS_INFO("Initial native-IMU bias prior sigmas: acceleration=%f gyro=%f", ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA);
+-    // PX4_AGENT_STATIONARY_HEALTH_V8: optional sensor-supported ZUPT and matrix evidence.
++    // PX4_AGENT_STATIONARY_HEALTH_V9: optional sensor-supported ZUPT and matrix evidence.
+     if (!fsSettings["fix_first_pose_xyz_yaw"].empty())
+         fsSettings["fix_first_pose_xyz_yaw"] >> FIX_FIRST_POSE_XYZ_YAW;
+     if (FIX_FIRST_POSE_XYZ_YAW != 0 && FIX_FIRST_POSE_XYZ_YAW != 1)
+@@ -221,6 +222,12 @@
+         if (!HEALTH_IMU_TO_BODY_FLU.allFinite()) throw std::runtime_error("nonfinite native health IMU/body lever arm");
+     }
+     if (!fsSettings["enable_zupt"].empty()) fsSettings["enable_zupt"] >> ENABLE_ZUPT;
++    if (!fsSettings["stationary_initialization"].empty()) fsSettings["stationary_initialization"] >> STATIONARY_INITIALIZATION;
++    if ((STATIONARY_INITIALIZATION != 0 && STATIONARY_INITIALIZATION != 1)
++        || (STATIONARY_INITIALIZATION && (!STEREO || !USE_IMU || !ENABLE_ZUPT)))
++        throw std::runtime_error("stationary_initialization requires stereo, IMU, sensor ZUPT and flag 0/1");
++    ROS_INFO("Sensor-supported entire-window initialization: %s; native_health.jsonl %s",
++        STATIONARY_INITIALIZATION ? "enabled" : "disabled", STATIONARY_INITIALIZATION ? "enabled" : "disabled");
+     if (!fsSettings["max_imu_preintegration_span_s"].empty())
+         fsSettings["max_imu_preintegration_span_s"] >> MAX_IMU_PREINTEGRATION_SPAN_S;
+     if (!std::isfinite(MAX_IMU_PREINTEGRATION_SPAN_S) || MAX_IMU_PREINTEGRATION_SPAN_S < 0
+--- a/vins_estimator/src/estimator/parameters.h
++++ b/vins_estimator/src/estimator/parameters.h
+@@ -31,8 +31,9 @@
+ 
+ extern double ACC_N, ACC_W;
+ extern double ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA;
+-// PX4_AGENT_STATIONARY_HEALTH_V8: optional sensor and diagnostic configuration.
++// PX4_AGENT_STATIONARY_HEALTH_V9: optional sensor and diagnostic configuration.
+ extern int ENABLE_ZUPT;
++extern int STATIONARY_INITIALIZATION; // upstream OFF; stereo/IMU startup evidence gate
+ extern double MAX_IMU_PREINTEGRATION_SPAN_S;
+ extern std::string BIAS_DIAGNOSTICS_DIR;
+ extern int EXACT_MARGINALIZATION_POSE_JACOBIAN;

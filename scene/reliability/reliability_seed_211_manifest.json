@@ -1,0 +1,49 @@
+{
+  "id": "reliability_seed_211",
+  "world_sha256": "e3a910f005cc41567a70d1503b563524716ce6ef7142941293a4e5dfe0404d4c",
+  "ground_plane": {
+    "known": true,
+    "z_m": 0.003,
+    "bounds_xy_m": [
+      -20,
+      -20,
+      20,
+      20
+    ]
+  },
+  "flight_region": {
+    "frame": "gazebo_world",
+    "bounds_min_m": [
+      -3,
+      -8,
+      -0.2
+    ],
+    "bounds_max_m": [
+      16,
+      8,
+      6
+    ],
+    "margin_m": 0.6
+  },
+  "takeoff_pad": {
+    "center_world_m": [
+      0,
+      0,
+      0.003
+    ],
+    "radius_m": 1.0,
+    "vertical_clearance_m": 6
+  },
+  "navigation": {
+    "enabled": true,
+    "method": "lidar_grid",
+    "bounds_xy_m": [
+      -3.0,
+      -8.0,
+      16.0,
+      8.0
+    ],
+    "flight_altitude_m": 3.5,
+    "minimum_clearance_m": 1.0
+  }
+}

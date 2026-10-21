@@ -1,0 +1,6 @@
+{
+  "name": "px4-agent-console-validation",
+  "private": true,
+  "scripts": {"test:ui": "node scripts/test_web_ui.mjs"},
+  "devDependencies": {"playwright": "1.63.0"}
+}

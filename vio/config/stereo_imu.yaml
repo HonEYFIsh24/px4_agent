@@ -1,0 +1,76 @@
+%YAML:1.0
+imu: 1
+num_of_cam: 2
+imu_topic: "/uav/imu/data_raw"
+image0_topic: "/uav/camera/left/image_raw"
+image1_topic: "/uav/camera/right/image_raw"
+output_path: "/home/dut/px4_agent/logs/system/20261009-034555-d2I9r1/vio_output"
+cam0_calib: "camera.yaml"
+cam1_calib: "camera.yaml"
+image_width: 640
+image_height: 480
+estimate_extrinsic: 0
+body_T_cam0: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: d
+   data: [0, -0.342897807455, 0.939372712847, 0.12, -1, 0, 0, 0.06, 0, -0.939372712847, -0.342897807455, 0.16, 0, 0, 0, 1]
+body_T_cam1: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: d
+   data: [0, -0.342897807455, 0.939372712847, 0.12, -1, 0, 0, -0.06, 0, -0.939372712847, -0.342897807455, 0.16, 0, 0, 0, 1]
+multiple_thread: 1
+max_cnt: 180
+min_dist: 20
+freq: 20
+F_threshold: 1.0
+show_track: 1
+flow_back: 1
+# SITL budget experiment: at simulation speed .35, 10 sim Hz optimization
+# allows .286 wall seconds per image. OLD uses 80% of this wall-time budget.
+# Measurement stamps and all source-freshness/quality gates stay unchanged.
+max_solver_time: 0.12
+max_num_iterations: 12
+# Empty by default. Only the explicit task environment opts into matrix dumps.
+# Experimental exact derivative of existing frozen prior residual (no new constraint).
+exact_marginalization_pose_jacobian: 1
+# Coordinate gauge only: first XYZ/yaw fixed, roll/pitch remain sensor-estimated.
+# Experimental V8 coordinate gauge: free RP with bounded smooth retraction.
+fix_first_pose_xyz_yaw: 1
+bias_information_diagnostics_dir: ""
+bias_information_period_s: 1.0
+bias_information_startup_dense_s: 3.0
+keyframe_parallax: 10.0
+# VINS native discrete covariance convention at original IMU dt=0.004 s:
+# N = Gazebo density / sqrt(dt) per sample; W = OU sigma_step / dt.
+# Native preintegration omits OU bias leak and shared-midpoint cross-step
+# correlation; these values match nominal one-step variance, not a full model.
+acc_n: 0.029409182239566
+gyr_n: 0.0029511956263521
+acc_w: 0.094867697353033
+gyr_w: 0.00061324346876081
+acc_bias_prior_sigma: 0.196
+gyr_bias_prior_sigma: 0.0087
+# Experimental simulation ZUPT: requires original IMU and near tracked stereo
+# support; never uses Gazebo truth, GNSS, PX4 landed flags or frozen odometry.
+enable_zupt: 1
+# V9 SITL startup: wait for every real window frame/interval stationary.
+# Seeds source IMU means once as an initial guess; adds no new measurement.
+stationary_initialization: 1
+# Default OFF: bounded feature lifecycle snapshots, no change to physical rules.
+visual_lifecycle_diagnostics: 0
+# Retain real IMU/bias transmission during prolonged low-parallax stillness.
+# Upstream default 0 disables this optional policy; SITL uses 1 actual second.
+max_imu_preintegration_span_s: 1.0
+zupt_velocity_sigma: 0.03
+zupt_position_sigma: 0.02
+zupt_camera_fx: 320.0
+# Physical IMU->body center lever arm, used only by refresh health checking.
+health_imu_to_body_flu: [0.0, 0.0, -0.02]
+g_norm: 9.8066
+estimate_td: 0
+td: 0.0
+load_previous_pose_graph: 0
+pose_graph_save_path: "/home/dut/px4_agent/logs/system/20261009-034555-d2I9r1/vio_output/pose_graph"
+save_image: 0

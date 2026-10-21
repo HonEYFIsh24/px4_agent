@@ -1,0 +1,73 @@
+--- a/vins_estimator/src/estimator/estimator.cpp
++++ b/vins_estimator/src/estimator/estimator.cpp
+@@ -15,7 +15,7 @@
+ #include <std_msgs/Float64MultiArray.h>
+ #include <std_msgs/String.h>
+ #include <sstream>
+-// PX4_AGENT_STATIONARY_HEALTH_V7: sensor health and opt-in source matrix snapshots.
++// PX4_AGENT_STATIONARY_HEALTH_V8: sensor health and opt-in source matrix snapshots.
+ // PX4_AGENT_INITIAL_BIAS_PRIOR: native IMU statistics, added once then marginalized.
+ // PX4_AGENT_VIO_PATCH: health, guarded reset, and clean shutdown only.
+ 
+@@ -998,6 +998,11 @@
+             << "{\"sampled\":true,\"source_stamp_sim_s\":" << Headers[frame_count]
+             << ",\"snapshot_phase\":\"after_solve_before_slide_native_gauge_restoration\""
+             << ",\"first_pose_xyz_yaw_fixed\":" << (FIX_FIRST_POSE_XYZ_YAW ? "true" : "false")
++            << ",\"retraction\":\"" << (FIX_FIRST_POSE_XYZ_YAW ? "bounded_h_tanh_pitch_cayley_roll" : "legacy_free_pose") << "\""
++            << ",\"first_pose_pitch_before_solve_rad\":" << origin_R0.y() * M_PI / 180.
++            << ",\"first_pose_pitch_after_solve_rad\":" << origin_R00.y() * M_PI / 180.
++            << ",\"first_pose_roll_before_solve_rad\":" << origin_R0.z() * M_PI / 180.
++            << ",\"first_pose_roll_after_solve_rad\":" << origin_R00.z() * M_PI / 180.
+             << ",\"rp_radians_per_optimizer_local_unit\":" << (FIX_FIRST_POSE_XYZ_YAW ? FIXED_YAW_RP_RADIANS_PER_LOCAL_UNIT : 1.)
+             << ",\"first_pose_optimizer_local_size\":" << (FIX_FIRST_POSE_XYZ_YAW ? 2 : 6)
+             << ",\"first_pose_yaw_before_solve_rad\":" << origin_R0.x() * M_PI / 180.
+@@ -1170,7 +1175,7 @@
+     quaternion_json << "]";
+     // Sentinel values are finite, keeping diagnostics valid JSON even before
+     // the first IMU window or stereo pair has arrived.
+-    o << "{\"implementation_revision\":\"stationary_health_v7\",\"marginalization_pose_jacobian_mode\":\"" << (EXACT_MARGINALIZATION_POSE_JACOBIAN ? "exact_residual_chain_rule" : "legacy_frozen_local") << "\",\"active_prior_pose_jacobian_mode\":\"" << (last_marginalization_info && last_marginalization_info->valid ? (last_marginalization_info->exact_pose_jacobian ? "exact_residual_chain_rule" : "legacy_frozen_local") : "none") << "\",\"stamp\":" << stamp << ",\"tracking_ok\":" << ((solver_flag == NON_LINEAR && !failure_occur) ? "true" : "false")
++    o << "{\"implementation_revision\":\"stationary_health_v8\",\"marginalization_pose_jacobian_mode\":\"" << (EXACT_MARGINALIZATION_POSE_JACOBIAN ? "exact_residual_chain_rule" : "legacy_frozen_local") << "\",\"active_prior_pose_jacobian_mode\":\"" << (last_marginalization_info && last_marginalization_info->valid ? (last_marginalization_info->exact_pose_jacobian ? "exact_residual_chain_rule" : "legacy_frozen_local") : "none") << "\",\"stamp\":" << stamp << ",\"tracking_ok\":" << ((solver_flag == NON_LINEAR && !failure_occur) ? "true" : "false")
+       << ",\"solution_usable\":" << (solver_solution_usable ? "true" : "false")
+       << ",\"reason\":\"" << solver_health_reason << "\",\"initial_cost\":" << solver_initial_cost
+       << ",\"final_cost\":" << solver_final_cost << ",\"residual_rms\":" << solver_residual_rms
+@@ -1178,6 +1183,7 @@
+       << ",\"solver_unsuccessful_steps\":" << solver_unsuccessful_steps << ",\"solver_termination_type\":" << solver_termination_type
+       << ",\"solver_wall_time_s\":" << solver_wall_time_s << ",\"solver_budget_s\":" << solver_budget_s
+       << ",\"solver_last_gradient_max_norm\":" << solver_last_gradient_max_norm
++      << ",\"solver_gradient_norm_semantics\":\"ceres_projected_ambient_step_norm_not_physical_rp_gradient\""
+       << ",\"current_state_stamp_sim_s\":" << Headers[frame_count]
+       << ",\"current_state_snapshot_phase\":\"after_process_image_and_slide\""
+       << ",\"current_position_world_m\":" << vector_json(Ps[frame_count])
+--- a/vins_estimator/src/estimator/estimator.h
++++ b/vins_estimator/src/estimator/estimator.h
+@@ -34,7 +34,7 @@
+ #include "../factor/projectionTwoFrameOneCamFactor.h"
+ #include "../factor/projectionTwoFrameTwoCamFactor.h"
+ #include "../factor/projectionOneFrameTwoCamFactor.h"
+-// PX4_AGENT_STATIONARY_HEALTH_V7: sensor health and opt-in matrix evidence.
++// PX4_AGENT_STATIONARY_HEALTH_V8: sensor health and opt-in matrix evidence.
+ #include "../factor/stationary_factors.h"
+ #include "../factor/imu_chain_health.h"
+ #include <set>
+--- a/vins_estimator/src/estimator/parameters.cpp
++++ b/vins_estimator/src/estimator/parameters.cpp
+@@ -188,7 +188,7 @@
+     if (!fsSettings["acc_bias_prior_sigma"].empty()) fsSettings["acc_bias_prior_sigma"] >> ACC_BIAS_PRIOR_SIGMA;
+     if (!fsSettings["gyr_bias_prior_sigma"].empty()) fsSettings["gyr_bias_prior_sigma"] >> GYR_BIAS_PRIOR_SIGMA;
+     ROS_INFO("Initial native-IMU bias prior sigmas: acceleration=%f gyro=%f", ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA);
+-    // PX4_AGENT_STATIONARY_HEALTH_V7: optional sensor-supported ZUPT and matrix evidence.
++    // PX4_AGENT_STATIONARY_HEALTH_V8: optional sensor-supported ZUPT and matrix evidence.
+     if (!fsSettings["fix_first_pose_xyz_yaw"].empty())
+         fsSettings["fix_first_pose_xyz_yaw"] >> FIX_FIRST_POSE_XYZ_YAW;
+     if (FIX_FIRST_POSE_XYZ_YAW != 0 && FIX_FIRST_POSE_XYZ_YAW != 1)
+--- a/vins_estimator/src/estimator/parameters.h
++++ b/vins_estimator/src/estimator/parameters.h
+@@ -31,7 +31,7 @@
+ 
+ extern double ACC_N, ACC_W;
+ extern double ACC_BIAS_PRIOR_SIGMA, GYR_BIAS_PRIOR_SIGMA;
+-// PX4_AGENT_STATIONARY_HEALTH_V7: optional sensor and diagnostic configuration.
++// PX4_AGENT_STATIONARY_HEALTH_V8: optional sensor and diagnostic configuration.
+ extern int ENABLE_ZUPT;
+ extern double MAX_IMU_PREINTEGRATION_SPAN_S;
+ extern std::string BIAS_DIAGNOSTICS_DIR;

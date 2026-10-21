@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>无人机 Agent · 仿真控制台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232c5cf2'/%3E%3Cpath d='M8 8l16 16M24 8L8 24' stroke='white' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="page-header">
+      <a class="brand" href="/" aria-label="无人机 Agent 控制台首页">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M8 8l16 16M24 8L8 24"/><circle cx="8" cy="8" r="4"/><circle cx="24" cy="8" r="4"/><circle cx="8" cy="24" r="4"/><circle cx="24" cy="24" r="4"/><rect x="12" y="12" width="8" height="8" rx="3"/></svg></span>
+        <span><strong>无人机 Agent</strong><span class="brand-subtitle">飞行任务控制台</span></span>
+      </a>
+      <div class="header-status">
+        <span class="environment-tag">PX4 · GAZEBO 仿真</span>
+        <span id="connection-pill" class="status-pill muted"><span class="status-dot"></span><span id="connection-label">正在连接</span></span>
+      </div>
+    </header>
+
+    <main>
+      <div class="intro-row"><div><p class="eyebrow">MISSION CONTROL</p><h1>用一句话，让任务起飞。</h1><p class="intro-copy">发布飞行指令，实时观察仿真中的无人机。</p></div><div class="intro-meta"><span class="small-label">当前模型</span><strong id="model-name">等待配置</strong><span id="model-provider">模型状态加载中</span></div></div>
+
+      <div id="connection-banner" class="notice" role="status">正在连接本机控制服务，等待仿真状态。</div>
+
+      <div class="workspace-grid">
+        <section class="panel simulation-panel" aria-labelledby="simulation-title">
+          <div class="panel-heading"><div><span class="eyebrow">FLIGHT TRACKING</span><h2 id="simulation-title">航迹监测</h2></div><div class="heading-actions"><span id="gazebo-pill" class="status-pill muted"><span class="status-dot"></span><span id="gazebo-status">等待数据</span></span><button id="clear-trail" class="icon-button" type="button" title="清空当前轨迹" aria-label="清空当前轨迹"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 7a6 6 0 1 1-.2 5M4 3v4h4"/></svg></button></div></div>
+          <div class="map-frame"><canvas id="flight-map" aria-label="无人机在 Gazebo 世界坐标中的俯视航迹、位置与航向"></canvas><div class="map-label"><span class="map-dot"></span>航迹俯视图 · GAZEBO 世界坐标</div><div id="map-overlay" class="map-overlay"><span class="waiting-icon" aria-hidden="true">⌖</span><strong id="map-overlay-title">等待航迹数据</strong><span id="map-overlay-copy">启动仿真后，实时位置和飞行轨迹会显示在这里。</span></div><div class="map-legend"><span><i class="legend-line"></i>实际飞行轨迹</span><span id="map-scale">每格 1 m</span></div></div>
+          <div class="telemetry-grid">
+            <div class="telemetry-item"><span>高度 <small>Gazebo Z</small></span><strong id="altitude">—<small>m</small></strong></div>
+            <div class="telemetry-item"><span>实际速度</span><strong id="speed">—<small>m/s</small></strong></div>
+            <div class="telemetry-item"><span>航向 <small>世界坐标</small></span><strong id="yaw">—<small>°</small></strong></div>
+            <div class="telemetry-item"><span>仿真时间</span><strong id="simulation-time">—<small>s</small></strong></div>
+          </div>
+          <div class="position-row"><span>世界坐标 <b id="gazebo-position">X — &nbsp; Y — &nbsp; Z —</b></span><span id="update-age">尚未收到数据</span></div>
+        </section>
+
+        <section class="panel command-panel" aria-labelledby="command-title">
+          <div class="panel-heading"><div><span class="eyebrow">NATURAL LANGUAGE</span><h2 id="command-title">发布指令</h2></div><span id="agent-architecture" class="agent-badge">Agent</span></div>
+          <div id="conversation" class="conversation" aria-live="polite" aria-relevant="additions text"><div class="conversation-empty" id="conversation-empty"><span class="assistant-symbol" aria-hidden="true">✦</span><strong>告诉我，你想怎么飞？</strong><p>可以起飞、前往指定位置、巡航、返航和降落。我会读取状态并执行任务。</p></div></div>
+          <div class="example-row" aria-label="指令示例"><button type="button" class="example-button" data-prompt="请报告无人机当前状态。">查看状态</button><button type="button" class="example-button" data-flight-example="takeoff" data-prompt="起飞到本地高度 2 米，悬停 3 秒，然后降落。">起飞并降落</button><button type="button" class="example-button" data-flight-example="goto" data-prompt="起飞到本地高度 2 米，飞到本地 ENU 坐标（2，0，2）米，然后返航降落。">航点巡航</button></div>
+          <form id="command-form"><label class="sr-only" for="prompt-input">自然语言飞行指令</label><div class="composer"><textarea id="prompt-input" rows="3" maxlength="2000" placeholder="例如：起飞到 2 米，悬停 3 秒，然后降落。"></textarea><div class="composer-bottom"><span>Ctrl / ⌘ + Enter 发送</span><button id="submit-command" class="primary-button" type="submit" disabled><span id="submit-label">发送指令</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12M11 5l5 5-5 5"/></svg></button></div></div><p id="command-error" class="inline-error" role="alert" hidden></p></form>
+          <div class="direct-controls"><button id="stop-button" class="control-button" type="button" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="2"/></svg>停止并悬停</button><button id="land-button" class="control-button land-button" type="button" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></svg>立即降落</button></div><p id="control-message" class="control-message" role="status">快捷控制直接发送到飞行执行器。</p>
+        </section>
+
+        <section class="panel flight-panel" aria-labelledby="flight-title"><div class="panel-heading compact"><div><span class="eyebrow">VEHICLE</span><h2 id="flight-title">飞行状态</h2></div><span id="vehicle-badge" class="status-pill muted">等待连接</span></div><dl class="detail-grid"><div><dt>飞行模式</dt><dd id="flight-mode">—</dd></div><div><dt>电机状态</dt><dd id="armed-state">—</dd></div><div><dt>着陆状态</dt><dd id="landed-state">—</dd></div><div><dt>定位就绪</dt><dd id="position-ready">—</dd></div></dl><div class="coordinate-detail"><span>PX4 本地 ENU <small>东 / 北 / 上 · m</small></span><b id="px4-position">— / — / —</b></div><div class="coordinate-detail"><span>当前目标 <small>PX4 本地 ENU · m</small></span><b id="px4-target">— / — / —</b></div><div class="vio-note"><span id="vio-indicator" class="vio-indicator"></span><div><strong id="vio-title">VINS-Fusion · 等待数据</strong><p id="vio-detail">VIO 作为独立定位观测；当前飞行控制使用 PX4 本地定位。</p></div></div>
+          <div class="navigation-note" aria-labelledby="navigation-title"><div class="navigation-heading"><strong id="navigation-title">自主绕障</strong><span id="navigation-status" class="status-pill muted">等待状态</span></div><dl class="navigation-grid"><div><dt>激光扫描 / 建图</dt><dd id="navigation-scans">—</dd></div><div><dt>地图数据新鲜度</dt><dd id="navigation-source">—</dd></div><div><dt>最近已测障碍</dt><dd id="navigation-distance">—</dd></div><div><dt>规划路径</dt><dd id="navigation-path">—</dd></div></dl><p id="navigation-map" class="navigation-map">等待机载激光建图。</p><p id="navigation-scope" class="navigation-scope">固定高度下的静态二维绕障；起飞后开始建图。</p><p id="navigation-detail" class="navigation-detail" role="status"></p></div>
+        </section>
+
+        <section class="panel mission-panel" aria-labelledby="mission-title"><div class="panel-heading compact"><div><span class="eyebrow">MISSION</span><h2 id="mission-title">任务进度</h2></div><span id="mission-status" class="status-pill muted">暂无任务</span></div><div class="mission-summary"><strong id="mission-action">等待发布第一条飞行指令</strong><span id="mission-counter">—</span></div><div class="progress-track"><div id="mission-progress"></div></div><p id="mission-description" class="mission-description">任务执行后，各步骤的实际结果会显示在这里。</p><ol id="mission-steps" class="mission-steps"></ol><p id="mission-error" class="inline-error" role="status" hidden></p></section>
+
+        <section id="camera-panel" class="panel camera-panel" aria-labelledby="camera-title">
+          <div class="panel-heading"><div><span class="eyebrow">ONBOARD CAMERAS</span><h2 id="camera-title">机载相机</h2></div><span class="camera-heading-note">双目实时预览</span></div>
+          <div class="camera-grid">
+            <figure class="camera-card"><figcaption><strong>左相机</strong><span id="camera-left-status" class="status-pill muted">等待图像</span></figcaption><div class="camera-frame"><img id="camera-left-image" alt="无人机机载左相机的实时画面" hidden><div id="camera-left-overlay" class="camera-overlay"><span aria-hidden="true">▧</span><strong id="camera-left-message">等待相机数据</strong></div></div><p id="camera-left-meta" class="camera-meta">等待图像尺寸与采集状态。</p></figure>
+            <figure class="camera-card"><figcaption><strong>右相机</strong><span id="camera-right-status" class="status-pill muted">等待图像</span></figcaption><div class="camera-frame"><img id="camera-right-image" alt="无人机机载右相机的实时画面" hidden><div id="camera-right-overlay" class="camera-overlay"><span aria-hidden="true">▧</span><strong id="camera-right-message">等待相机数据</strong></div></div><p id="camera-right-meta" class="camera-meta">等待图像尺寸与采集状态。</p></figure>
+          </div>
+          <div class="vision-workspace">
+            <div class="vision-heading"><div><h3>视觉分析</h3><p id="vision-model">视觉模型配置加载中</p></div><span id="vision-status" class="status-pill muted">尚未分析</span></div>
+            <form id="vision-form"><label for="vision-query">想观察或寻找什么？</label><div class="vision-composer"><textarea id="vision-query" rows="2" maxlength="1600" placeholder="例如：寻找红色物体，并报告它在画面中的位置及周围有什么。"></textarea><button id="submit-vision" class="primary-button" type="submit" disabled><span id="vision-submit-label">分析相机画面</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12M11 5l5 5-5 5"/></svg></button></div><div class="vision-presets"><button class="example-button vision-preset" type="button" data-vision-prompt="描述当前场景，并说明画面中主要物体及它们之间的相对位置。">描述当前场景</button><button class="example-button vision-preset" type="button" data-vision-prompt="寻找红色物体，并报告它在画面中的大概位置以及周围有什么。">寻找红色物体</button></div><p id="vision-command-error" class="inline-error" role="alert" hidden></p></form>
+            <p class="vision-note">分析使用拍摄时的图像；实时预览会继续更新。单张图像的位置判断不等于已测量的三维坐标。</p>
+            <div id="vision-report" class="vision-report" aria-live="polite"><p id="vision-empty" class="vision-empty">提交目标后，这里会显示模型对实际相机图像的分析结果。</p><div id="vision-result" hidden><p id="vision-report-meta" class="vision-report-meta"></p><p id="vision-report-query" class="vision-report-query"></p><p id="vision-summary" class="vision-summary"></p><p id="vision-report-error" class="inline-error" role="alert" hidden></p><ul id="vision-targets" class="vision-targets"></ul><div id="vision-limitations-block" class="vision-limitations" hidden><strong>判断限制</strong><ul id="vision-limitations"></ul></div></div></div>
+          </div>
+        </section>
+      </div>
+      <footer><span>本机仿真控制台 · Ubuntu / ROS / PX4</span><span>航迹监测使用 Gazebo 世界坐标；飞行航点使用 PX4 本地 ENU。</span></footer>
+    </main>
+  </div>
+</body>
+</html>
