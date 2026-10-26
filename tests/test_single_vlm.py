@@ -403,12 +403,13 @@ class GraphTests(unittest.TestCase):
         self.assert_private(graph.get_state(config).values)
 
     def test_forged_previous_turn_capture_cannot_produce_new_report(self):
+        old = {}
         def forged_report(messages):
-            old = tool_payload(messages, "capture_scene")
             return tool_call("report_scene", {"capture_id": old["capture_id"], **observation()}, "forged-call")
         graph, model, _, _ = self.build([capture_request, report_request, AIMessage("first done"),
                                          forged_report, AIMessage("claim success")])
-        self.invoke(graph)
+        first, _ = self.invoke(graph)
+        old.update(tool_payload(first['messages'], 'capture_scene'))
         result, _ = self.invoke(graph, "重新观察", turn="turn-b")
         reports = [json.loads(message.content) for message in result["messages"]
                    if isinstance(message, ToolMessage) and message.name == "report_scene"]

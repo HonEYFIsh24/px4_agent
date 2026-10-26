@@ -369,6 +369,8 @@ def main(argv=None):
         parser.error("--execute requires a new --output directory")
     from agent_config import runtime_configuration
     from client import BridgeClient
+    from model_network import configure_agent_network
+    configure_agent_network(args.env_file)
     architecture, config, _ = runtime_configuration(args.env_file)
     if architecture != "single_vlm":
         parser.error("These diagnostics target the configured single_vlm; do not change configuration")

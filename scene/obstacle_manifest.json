@@ -1,6 +1,6 @@
 {
   "id": "obstacle_yard",
-  "world_sha256": "1f5ee08c08a3ac0e25e4ca55d5c14e29bdf4b1058c3fa5de81eb8b9567a2d72c",
+  "world_sha256": "9c80e4b3b120f144a019b2807b6e592b6aa75d851b3a590b180ef18c48a62cc3",
   "ground_plane": {
     "known": true,
     "z_m": 0.003,

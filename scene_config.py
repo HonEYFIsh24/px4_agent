@@ -57,7 +57,7 @@ def reliability_manifest(world, digest):
     return matches[0] if matches else None
 
 
-def load_scene(world_path=None, manifest_path=None):
+def load_scene(world_path=None, manifest_path=None, navigation_mode="lidar_grid"):
     if not world_path:
         return {"id": "unconfigured", "verified": False, "ground_plane": {"known": False}}
     world = Path(world_path).resolve()
@@ -109,6 +109,17 @@ def load_scene(world_path=None, manifest_path=None):
         result["takeoff_pad"] = {"center_world_m": center,
                                  "radius_m": number(pad["radius_m"], "takeoff pad radius", .5, 2),
                                  "vertical_clearance_m": number(pad["vertical_clearance_m"], "pad clearance", 5, 10)}
+    if navigation_mode == "static_3d":
+        if world != Path(OBSTACLE_WORLD).resolve():
+            raise MissionError("static 3-D navigation is supported only in the verified obstacle yard")
+        result["navigation"].update(method="static_3d", altitude_mode="variable",
+            flight_altitude_m=5., min_altitude_m=1., max_altitude_m=10.,
+            source="verified_static_collision_map_3d",
+            scope="known static 3-D map; no dynamic-obstacle guarantee")
+        result["flight_region"]["bounds_max_m"][2] = 10.6
+        result["takeoff_pad"]["vertical_clearance_m"] = 10.6
+    elif navigation_mode != "lidar_grid":
+        raise MissionError("unknown navigation mode")
     return result
 
 

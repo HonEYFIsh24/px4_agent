@@ -33,36 +33,36 @@
   <model name="vio_feature_floor"><static>true</static>
       <pose>0 0 0.003 0 0 0</pose><link name="surface">
       <visual name="features"><geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry>
-      <material><script><uri>file:///home/dut/px4_agent/vio/materials/scripts</uri><uri>file:///home/dut/px4_agent/vio/materials/textures</uri>
+      <material><script><uri>file:///home/fxxk/px4_agent/vio/materials/scripts</uri><uri>file:///home/fxxk/px4_agent/vio/materials/textures</uri>
         <name>VIO/Features</name></script></material></visual></link></model><model name="vio_landmark_0"><static>true</static>
           <pose>8 -3 1.5 0 0 0</pose><link name="box">
           <collision name="collision"><geometry><box><size>0.8 0.8 3</size></box></geometry></collision>
-          <visual name="texture"><geometry><box><size>0.8 0.8 3</size></box></geometry><material><script><uri>file:///home/dut/px4_agent/vio/materials/scripts</uri><uri>file:///home/dut/px4_agent/vio/materials/textures</uri>
+          <visual name="texture"><geometry><box><size>0.8 0.8 3</size></box></geometry><material><script><uri>file:///home/fxxk/px4_agent/vio/materials/scripts</uri><uri>file:///home/fxxk/px4_agent/vio/materials/textures</uri>
         <name>VIO/Features</name></script></material></visual>
           </link></model><model name="vio_landmark_1"><static>true</static>
           <pose>8 0 2.0 0 0 0</pose><link name="box">
           <collision name="collision"><geometry><box><size>0.8 0.8 4</size></box></geometry></collision>
-          <visual name="texture"><geometry><box><size>0.8 0.8 4</size></box></geometry><material><script><uri>file:///home/dut/px4_agent/vio/materials/scripts</uri><uri>file:///home/dut/px4_agent/vio/materials/textures</uri>
+          <visual name="texture"><geometry><box><size>0.8 0.8 4</size></box></geometry><material><script><uri>file:///home/fxxk/px4_agent/vio/materials/scripts</uri><uri>file:///home/fxxk/px4_agent/vio/materials/textures</uri>
         <name>VIO/Features</name></script></material></visual>
           </link></model><model name="vio_landmark_2"><static>true</static>
           <pose>8 3 1.0 0 0 0</pose><link name="box">
           <collision name="collision"><geometry><box><size>0.8 0.8 2</size></box></geometry></collision>
-          <visual name="texture"><geometry><box><size>0.8 0.8 2</size></box></geometry><material><script><uri>file:///home/dut/px4_agent/vio/materials/scripts</uri><uri>file:///home/dut/px4_agent/vio/materials/textures</uri>
+          <visual name="texture"><geometry><box><size>0.8 0.8 2</size></box></geometry><material><script><uri>file:///home/fxxk/px4_agent/vio/materials/scripts</uri><uri>file:///home/fxxk/px4_agent/vio/materials/textures</uri>
         <name>VIO/Features</name></script></material></visual>
           </link></model><model name="vio_landmark_3"><static>true</static>
           <pose>5 -5 1.0 0 0 0</pose><link name="box">
           <collision name="collision"><geometry><box><size>0.8 0.8 2</size></box></geometry></collision>
-          <visual name="texture"><geometry><box><size>0.8 0.8 2</size></box></geometry><material><script><uri>file:///home/dut/px4_agent/vio/materials/scripts</uri><uri>file:///home/dut/px4_agent/vio/materials/textures</uri>
+          <visual name="texture"><geometry><box><size>0.8 0.8 2</size></box></geometry><material><script><uri>file:///home/fxxk/px4_agent/vio/materials/scripts</uri><uri>file:///home/fxxk/px4_agent/vio/materials/textures</uri>
         <name>VIO/Features</name></script></material></visual>
           </link></model><model name="vio_landmark_4"><static>true</static>
           <pose>5 5 1.5 0 0 0</pose><link name="box">
           <collision name="collision"><geometry><box><size>0.8 0.8 3</size></box></geometry></collision>
-          <visual name="texture"><geometry><box><size>0.8 0.8 3</size></box></geometry><material><script><uri>file:///home/dut/px4_agent/vio/materials/scripts</uri><uri>file:///home/dut/px4_agent/vio/materials/textures</uri>
+          <visual name="texture"><geometry><box><size>0.8 0.8 3</size></box></geometry><material><script><uri>file:///home/fxxk/px4_agent/vio/materials/scripts</uri><uri>file:///home/fxxk/px4_agent/vio/materials/textures</uri>
         <name>VIO/Features</name></script></material></visual>
           </link></model><model name="vio_feature_wall"><static>true</static>
       <pose>5 0 2.5 0 0 0</pose><link name="wall">
       <collision name="collision"><geometry><box><size>0.1 12 5</size></box></geometry></collision>
       <visual name="features"><geometry><box><size>0.1 12 5</size></box></geometry>
-      <material><script><uri>file:///home/dut/px4_agent/vio/materials/scripts</uri><uri>file:///home/dut/px4_agent/vio/materials/textures</uri>
+      <material><script><uri>file:///home/fxxk/px4_agent/vio/materials/scripts</uri><uri>file:///home/fxxk/px4_agent/vio/materials/textures</uri>
         <name>VIO/Wall</name></script></material></visual></link></model></world>
 </sdf>

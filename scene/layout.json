@@ -1,7 +1,7 @@
 {
   "scene_id": "logistics_yard_v1",
   "name": "小型物流园区",
-  "world_file": "/home/dut/px4_agent/scene/worlds/logistics_yard.world",
+  "world_file": "/home/fxxk/px4_agent/scene/worlds/logistics_yard.world",
   "offline_assets": true,
   "ground_truth_only": true,
   "ground": {

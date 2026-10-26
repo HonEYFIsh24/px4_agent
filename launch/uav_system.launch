@@ -3,10 +3,11 @@
   <!-- Source scripts/setup_ros.bash, then launch this file with the
        roslaunch sigint-timeout option set to 180 seconds. One manager owns
        startup, landing and ordered child shutdown before the master exits. -->
-  <arg name="px4_dir" default="$(optenv PX4_DIR /home/dut/PX4-Autopilot)"/>
+  <arg name="px4_dir" default="$(eval optenv('PX4_DIR', env('HOME') + '/PX4-Autopilot'))"/>
   <arg name="gui" default="true"/>
   <arg name="sim_speed_factor" default="$(eval 0.35 if arg('gui') else 1)"/>
   <arg name="web_port" default="8080"/>
+  <arg name="control_ui" default="web"/>
   <arg name="env_file" default=""/>
   <arg name="world" default="$(find px4_agent)/scene/worlds/obstacle_yard.world"/>
   <arg name="ready_timeout" default="150"/>
@@ -21,6 +22,7 @@
     <env name="GUI" value="$(arg gui)"/>
     <env name="PX4_SIM_SPEED_FACTOR" value="$(arg sim_speed_factor)"/>
     <env name="PX4_AGENT_WEB_PORT" value="$(arg web_port)"/>
+    <env name="PX4_AGENT_CONTROL_UI" value="$(arg control_ui)"/>
     <env name="PX4_AGENT_ENV_FILE" value="$(arg env_file)"/>
     <env name="PX4_AGENT_WORLD" value="$(arg world)"/>
     <env name="PX4_AGENT_READY_TIMEOUT" value="$(arg ready_timeout)"/>

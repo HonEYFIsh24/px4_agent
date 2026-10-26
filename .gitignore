@@ -11,6 +11,7 @@ id_ed25519*
 
 # Dependencies and interpreter caches.
 .venv/
+.tools/
 venv/
 node_modules/
 __pycache__/

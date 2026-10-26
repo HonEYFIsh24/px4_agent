@@ -163,7 +163,8 @@ class AuditedClient:
                         command.setdefault('flight_missions',[]).append({
                             'path':tool_name,'wall_s':time.time(),
                             'mission':self.application.clean_perception(accepted_mission)})
-                if tool_name in ('plan_region_search', 'search_observation_status', 'search_progress'):
+                if tool_name in ('plan_region_search', 'search_observation_status', 'search_progress',
+                                 'begin_target_search', 'next_target_search_view', 'target_search_progress'):
                     event = {'tool': tool_name, 'result': self.application.clean_perception(result), 'wall_s': time.time()}
                     command.setdefault('search_events', []).append(event)
                     if tool_name == 'plan_region_search' and result.get('status') == 'ok':
@@ -188,6 +189,25 @@ class AuditedClient:
 
     def state(self):
         return self.application.client.state()
+
+    def memory_records(self):
+        """Only finalized command facts; never expose a running task as completed memory."""
+        with self.application.lock:
+            completed = [c for c in self.application.commands.values()
+                         if c.get('status') != 'running' and c.get('finished_at') is not None][-8:]
+            records = []
+            for command in completed:
+                record = {key: copy.deepcopy(command.get(key)) for key in ('id', 'status', 'error')}
+                observations = [p for p in command.get('perceptions', []) if p.get('status') == 'ok'][-2:]
+                record['observation_count'] = sum(p.get('status') == 'ok' for p in command.get('perceptions', []))
+                record['perceptions'] = [{key: copy.deepcopy(p.get(key)) for key in ('status', 'capture_id', 'summary')}
+                                         for p in observations]
+                for p, raw in zip(record['perceptions'], observations):
+                    p['targets'] = [{'label': t.get('label')} for t in raw.get('targets', [])]
+                record['mission'] = {key: copy.deepcopy((command.get('mission') or {}).get(key))
+                                     for key in ('status', 'action')}
+                records.append(record)
+            return records
 
     def request(self, path, payload=None):
         if payload is None:
@@ -341,7 +361,7 @@ class WebApplication:
     def run_command(self, command):
         status, error, reply, mission = "succeeded", None, "", None
         try:
-            result = self.agent.invoke({"messages": [{"role": "user", "content": command["prompt"]}]},
+            result = self.agent.invoke({"messages": [{"role": "user", "content": command["prompt"], "id": command['id']}]},
                                        {"configurable": {"thread_id": self.agent_thread_id},
                                         "recursion_limit": 120, "max_concurrency": 1})
             messages = command_messages(result, command["prompt"])
@@ -636,6 +656,25 @@ def make_server(application, port=8080):
     return server
 
 
+def build_application(env_file=DEFAULT_ENV_FILE, bridge_url=None):
+    """Shared operator session for browser and native desktop frontends."""
+    from model_network import configure_agent_network
+    configure_agent_network(env_file)
+    from dotenv import dotenv_values
+    from agent import build_agent
+    from agent_config import runtime_configuration
+    connection_config = {**dotenv_values(env_file), **os.environ}
+    try:
+        architecture, model_config, vision_config = runtime_configuration(env_file)
+    except RuntimeError as exc:
+        model_config, vision_config = None, None
+        architecture = connection_config.get("AGENT_ARCHITECTURE", "single_vlm")
+        print("模型配置不可用：{}。仍可查看状态和直接控制，任务需要配置模型。".format(exc), flush=True)
+    return WebApplication(BridgeClient(bridge_url or connection_config.get("UAV_BRIDGE_URL")
+                                       or "http://127.0.0.1:8765"), model_config, build_agent,
+                          vision_config=vision_config, agent_architecture=architecture)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Local UAV agent operator page")
     parser.add_argument("--env-file", default=os.getenv("UAV_ENV_FILE", str(DEFAULT_ENV_FILE)))
@@ -644,19 +683,7 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
-    from dotenv import dotenv_values
-    from agent import build_agent
-    from agent_config import runtime_configuration
-    connection_config = {**dotenv_values(args.env_file), **os.environ}
-    try:
-        architecture, model_config, vision_config = runtime_configuration(args.env_file)
-    except RuntimeError as exc:
-        model_config, vision_config = None, None
-        architecture = connection_config.get("AGENT_ARCHITECTURE", "single_vlm")
-        print("模型配置不可用：{}。状态页面仍可使用，任务需要配置 --env-file。".format(exc), flush=True)
-    application = WebApplication(BridgeClient(args.bridge_url or connection_config.get("UAV_BRIDGE_URL")
-                                              or "http://127.0.0.1:8765"), model_config, build_agent,
-                                 vision_config=vision_config, agent_architecture=architecture)
+    application = build_application(args.env_file, args.bridge_url)
     server = make_server(application, args.port)
     print("无人机控制页面：http://127.0.0.1:{}（模型：{}）".format(
         args.port, application.model["name"] or "未配置"), flush=True)

@@ -2,7 +2,7 @@
   "scene_id": "reliability_blocked_17",
   "name": "完全封路安全停止试验",
   "ground_truth_only": true,
-  "world_sha256": "56181236908b76cc6cdc824f3d705cc35cab895263292e4d9e1f6c73e8005c2c",
+  "world_sha256": "5919d61d67356c0d351711671342977f622b49b6d25192f6bad3d0fe939705c0",
   "ground": {
     "known": true,
     "z_m": 0.003,

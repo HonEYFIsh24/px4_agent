@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 ROOT = Path(__file__).resolve().parent
-PX4 = Path('/home/dut/PX4-Autopilot')
+PX4 = Path(os.environ.get('PX4_DIR') or Path.home() / 'PX4-Autopilot').expanduser().resolve()
 PITCH = 0.35
 WIDTH, HEIGHT = 640, 480
 LIDAR_HEIGHT = 0.35

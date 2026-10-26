@@ -6,5 +6,5 @@ if [[ ! -f /opt/ros/noetic/setup.bash ]]; then
 fi
 source /opt/ros/noetic/setup.bash
 PX4_AGENT_PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-export PX4_DIR="${PX4_DIR:-/home/dut/PX4-Autopilot}"
+export PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 export ROS_PACKAGE_PATH="$PX4_AGENT_PROJECT_DIR:$PX4_DIR:$PX4_DIR/Tools/simulation/gazebo-classic/sitl_gazebo-classic:${ROS_PACKAGE_PATH:-}"

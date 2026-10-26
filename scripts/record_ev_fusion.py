@@ -109,6 +109,24 @@ def parse_parameters(stdout):
     return values
 
 
+def parse_listener_snapshot(stdout, instance=0):
+    """Select one instance from PX4's immediate, non-waiting snapshot output.
+
+    Omitting -i with -n 1 makes PX4 copy existing samples immediately. Explicit
+    -i instead waits for a new publication and can block on the daemon's stdin.
+    Never merge fields from different estimator instances.
+    """
+    parts = re.split(r'(?m)^\s*Instance (\d+):\s*$', stdout)
+    if len(parts) > 1:
+        for index in range(1, len(parts), 2):
+            if int(parts[index]) == instance:
+                return parse_listener(parts[index+1])
+        return {'published': False, 'fields': {}}
+    if instance != 0 or re.search(r'TOPIC:.*\b\d+ instances\b', stdout):
+        return {'published': False, 'fields': {}}
+    return parse_listener(stdout)
+
+
 def bounded_command(command, timeout, runner=subprocess.run):
     if not 0 < timeout <= 2:
         raise ValueError('Read-only subprocess timeout must be within (0, 2] seconds')

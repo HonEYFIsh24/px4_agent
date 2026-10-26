@@ -207,6 +207,15 @@ function renderNavigation(navigation, scene) {
     ? `固定${altitude === null ? "巡航高度" : `本地高度 ${number(altitude, 1)} m`} · 静态二维绕障，暂不支持立体绕障或动态目标。`
     : "此场景没有启用自主绕障。";
   $("navigation-detail").textContent = detail;
+  if (enabled && navigation.method === "static_3d") {
+    badge("navigation-status", active ? "三维路径规划" : "已知三维地图", "good");
+    $("navigation-scans").textContent = `${samples} · 雷达仅作遥测`;
+    $("navigation-source").textContent = "已校验的静态场景碰撞地图";
+    $("navigation-distance").textContent = "使用三维碰撞检查";
+    $("navigation-map").textContent = "执行器读取已知静态地图；不是机载雷达实时建图。";
+    $("navigation-scope").textContent = "本地高度 1～10 m，可变高 · 已知静态三维避障 · 不保证动态障碍保护";
+    $("navigation-detail").textContent = "定位来源以实际 EKF 融合状态为准，路径规划来源为已知地图。";
+  }
 
   // Keep the existing example actions valid for a fixed-altitude scene.
   const exampleAltitude = String(altitude === null ? 2 : altitude);

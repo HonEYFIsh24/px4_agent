@@ -4,7 +4,7 @@ num_of_cam: 2
 imu_topic: "/uav/imu/data_raw"
 image0_topic: "/uav/camera/left/image_raw"
 image1_topic: "/uav/camera/right/image_raw"
-output_path: "/home/dut/px4_agent/logs/system/20261009-034555-d2I9r1/vio_output"
+output_path: "/home/fxxk/px4_agent/logs/system/20261026-101038-zpkQEy/vio_output"
 cam0_calib: "camera.yaml"
 cam1_calib: "camera.yaml"
 image_width: 640
@@ -72,5 +72,5 @@ g_norm: 9.8066
 estimate_td: 0
 td: 0.0
 load_previous_pose_graph: 0
-pose_graph_save_path: "/home/dut/px4_agent/logs/system/20261009-034555-d2I9r1/vio_output/pose_graph"
+pose_graph_save_path: "/home/fxxk/px4_agent/logs/system/20261026-101038-zpkQEy/vio_output/pose_graph"
 save_image: 0

@@ -36,6 +36,27 @@ def explicit_observations(instance=2):
     return records
 
 
+class ListenerSnapshotTests(unittest.TestCase):
+    def test_single_instance_snapshot_is_instance_zero_only(self):
+        text = 'TOPIC: vehicle_local_position\n vehicle_local_position\n    timestamp: 123\n    xy_valid: true\n'
+        self.assertEqual(recording.parse_listener_snapshot(text, 0)['fields']['timestamp'], 123)
+        self.assertFalse(recording.parse_listener_snapshot(text, 1)['published'])
+
+    def test_multiple_instances_are_selected_without_field_leakage(self):
+        text = ('TOPIC: estimator_status_flags 2 instances\n\nInstance 0:\n'
+                ' estimator_status_flags\n    timestamp: 100\n    cs_ev_pos: false\n'
+                '\nInstance 1:\n estimator_status_flags\n    timestamp: 200\n'
+                '    cs_ev_pos: true\n    cs_ev_vel: true\n')
+        result = recording.parse_listener_snapshot(text, 0)
+        self.assertEqual(result['fields'], {'timestamp': 100, 'cs_ev_pos': False})
+        self.assertEqual(recording.parse_listener_snapshot(text, 1)['fields']['timestamp'], 200)
+        self.assertFalse(recording.parse_listener_snapshot(text, 2)['published'])
+
+    def test_missing_or_ambiguous_snapshot_never_becomes_telemetry(self):
+        for text in ('never published\n', '', 'TOPIC: estimator_status_flags 2 instances\n timestamp: 100\n'):
+            self.assertFalse(recording.parse_listener_snapshot(text)['published'])
+
+
 class FusionRecordingTests(unittest.TestCase):
     def test_topic_instances_follow_px4_selector_and_vehicle_publication(self):
         multi = {'estimator_status_flags', 'estimator_event_flags',

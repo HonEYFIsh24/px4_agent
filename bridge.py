@@ -6,6 +6,7 @@ import copy
 import json
 import hashlib
 import math
+import os
 import signal
 import threading
 import time
@@ -45,6 +46,7 @@ class Cancelled(Exception):
 CAMERA_MAX_JPEG_BYTES = 2 * 1024 * 1024
 CAMERA_POSE_MAX_OFFSET_S = 0.05
 NAVIGATION_MAX_SPEED = .25
+STATIC_NAVIGATION_MAX_SPEED = .65
 
 
 def camera_request_side(path):
@@ -95,7 +97,16 @@ def camera_world_pose(body_pose, side):
 
 class Controller:
     def __init__(self, idle_land_seconds=120, world_path=None, simulation_only=False):
-        self.scene = load_scene(world_path)
+        self.static_navigation_max_speed = float(os.getenv('UAV_STATIC_NAVIGATION_SPEED', str(STATIC_NAVIGATION_MAX_SPEED)))
+        if not math.isfinite(self.static_navigation_max_speed) or not .25 <= self.static_navigation_max_speed <= MAX_SPEED:
+            raise MissionError('UAV_STATIC_NAVIGATION_SPEED must be between 0.25 and 1.0 m/s')
+        navigation_mode = os.getenv("UAV_NAVIGATION_MODE", "lidar_grid")
+        if navigation_mode == "static_3d" and not simulation_only:
+            raise MissionError("known static 3-D map navigation is simulation-only")
+        self.scene = load_scene(world_path, navigation_mode=navigation_mode)
+        if navigation_mode == "static_3d" and self.scene.get("navigation", {}).get("method") != "static_3d":
+            raise MissionError("static 3-D navigation requires a recognized hash-verified scene")
+        self.world_path = world_path
         guarded_world = (world_path and (
             Path(world_path).resolve().name in ("logistics_yard.world", "obstacle_yard.world")
             or Path(world_path).resolve().parent == (Path(__file__).parent / "scene/reliability").resolve()))
@@ -272,7 +283,7 @@ class Controller:
             # test adapter. Do not keep a pose snapshot from before processing.
             history = list(self.local_pose_history)
             world_history = list(self.gazebo_history)
-        if mapper is None:
+        if mapper is None or self.static_navigation_enabled():
             return
         diagnostic = self.lidar_alignment_diagnostic(
             message.header.stamp.to_sec(), stamp, received, history, world_history)
@@ -366,6 +377,13 @@ class Controller:
                       lidar_sample_count=source.get("sample_count") if source else None,
                       setpoint_speed_m_s=NAVIGATION_MAX_SPEED,
                       scope="fixed-altitude static 2-D obstacle avoidance; no 3-D/dynamic protection")
+        if self.static_navigation_enabled():
+            result.update(method="static_3d", source="verified_static_collision_map_3d",
+                scope="known static 3-D map; no dynamic-obstacle guarantee",
+                altitude_mode="variable", min_altitude_m=1., max_altitude_m=10.,
+                setpoint_speed_m_s=getattr(self, 'static_navigation_max_speed', STATIC_NAVIGATION_MAX_SPEED),
+                approach_speed_m_s=NAVIGATION_MAX_SPEED,
+                lidar_role="telemetry_only; not the source of this map")
         return result
 
     def on_extended(self, message):
@@ -748,14 +766,17 @@ class Controller:
                         continue
                 delta = [0., 0., 0.] if landing_pending else [a - b for a, b in zip(self.target, self.commanded)]
                 distance = math.sqrt(sum(v * v for v in delta))
-                speed_limit = min(MAX_SPEED, NAVIGATION_MAX_SPEED) if self.navigation_moving else MAX_SPEED
+                speed_limit = self.navigation_speed_limit() if self.navigation_moving else MAX_SPEED
                 ratio = min(1.0, speed_limit * dt / distance) if distance else 1.0
-                if not landing_pending and self.navigation_moving and not self.navigation_map.segment_safe(self.position()[:2], self.target[:2], now):
+                if not landing_pending and self.navigation_moving and not self.motion_segment_safe(now):
                     # A model call is never on this feedback path. Freeze the
                     # setpoint immediately when the sensor/motion gate closes.
                     self.navigation_hold()
-                    self.navigation_gate_error = "LiDAR motion clearance/freshness gate closed; setpoint frozen"
-                    if self.lidar_error or not self.navigation_map.snapshot(now)["fresh"]:
+                    self.navigation_gate_error = ("known static 3-D map clearance gate closed; setpoint frozen"
+                        if self.static_navigation_enabled() else "LiDAR motion clearance/freshness gate closed; setpoint frozen")
+                    if self.static_navigation_enabled():
+                        self.navigation_gate_fault = "map"
+                    elif self.lidar_error or not self.navigation_map.snapshot(now)["fresh"]:
                         self.navigation_gate_fault = "sensor"
                     elif self.navigation_gate_fault != "sensor":
                         self.navigation_gate_fault = "map"
@@ -851,7 +872,8 @@ class Controller:
         """Freeze XY while retaining the commanded scan plane during a pause."""
         with self.lock:
             self.commanded = self.position()
-            self.target = [*self.commanded[:2], self.scene["navigation"]["flight_altitude_m"]]
+            self.target = (list(self.commanded) if self.static_navigation_enabled() else
+                           [*self.commanded[:2], self.scene["navigation"]["flight_altitude_m"]])
 
     def move_direct(self, target):
         self.checkpoint(require_offboard=True)
@@ -879,7 +901,63 @@ class Controller:
         q = self.pose.pose.orientation
         return body, [q.x, q.y, q.z, q.w]
 
+    def static_navigation_enabled(self):
+        return self.scene.get("navigation", {}).get("method") == "static_3d"
+
+    def motion_segment_safe(self, now):
+        if self.static_navigation_enabled():
+            return self.navigation_map.segment_safe(self.position(), self.target, now)
+        return self.navigation_map.segment_safe(self.position()[:2], self.target[:2], now)
+
+    def navigation_speed_limit(self):
+        if not self.static_navigation_enabled():
+            return NAVIGATION_MAX_SPEED
+        cruise = min(MAX_SPEED, getattr(self, 'static_navigation_max_speed', STATIC_NAVIGATION_MAX_SPEED))
+        # Slow down for accurate observations and whenever tracking falls behind.
+        if (self.target is None or self.commanded is None
+                or math.dist(self.position(), self.target) < .75
+                or math.dist(self.position(), self.commanded) > .5):
+            return min(cruise, NAVIGATION_MAX_SPEED)
+        return cruise
+
+    def move_static(self, target):
+        if self.navigation_map is None or not self.navigation_active:
+            self.start_navigation()
+        self.checkpoint(require_offboard=True)
+        plan = self.navigation_map.plan(self.position(), list(target))
+        event = {"goal_enu_m": list(target), "plan": plan, "created_at": time.time(), "index": 1}
+        with self.lock:
+            self.mission.setdefault("navigation_plans", []).append(copy.deepcopy(event))
+        self.log("navigation_planned", mission_id=self.mission["id"], **event)
+        try:
+            for waypoint in plan["waypoints"]:
+                self.navigation_gate_error = self.navigation_gate_fault = None
+                self.set_target(waypoint)
+                self.navigation_moving = True
+                stable = [None]
+                def reached():
+                    if self.navigation_gate_error or not self.motion_segment_safe(time.monotonic()):
+                        self.navigation_hold()
+                        raise MissionError("known static 3-D map clearance gate closed; holding")
+                    if math.dist(self.position(), waypoint) > .2:
+                        stable[0] = None
+                        return False
+                    stable[0] = time.monotonic() if stable[0] is None else stable[0]
+                    return time.monotonic()-stable[0] >= 1
+                self.wait_until(reached, 150, require_offboard=True)
+        finally:
+            self.navigation_moving = self.navigation_pausing = False
+
     def start_navigation(self):
+        if self.static_navigation_enabled():
+            from static_navigation import StaticNavigator
+            with self.lock:
+                body, q = self.scene_body()
+                self.navigation_map = StaticNavigator.from_scene(self.world_path, self.scene)
+                self.navigation_map.bind(self.position(), q, body)
+                self.navigation_gate_error = self.navigation_gate_fault = self.lidar_error = None
+                self.navigation_active = True
+            return
         # Map starts at cruise height: ground-height scans cannot justify an
         # airborne path. Boundaries contain no object poses or occupied cells.
         from scene_config import quaternion_yaw
@@ -961,6 +1039,8 @@ class Controller:
                  map=self.navigation_map.diagnostics(time.monotonic(), self.position(), include_map=True))
 
     def move(self, target):
+        if self.static_navigation_enabled():
+            return self.move_static(target)
         if not self.scene.get("navigation", {}).get("enabled"):
             return self.move_direct(target)
         if self.navigation_map is None or not self.navigation_active:
@@ -1057,6 +1137,13 @@ class Controller:
             self.navigation_map=None
             self.navigation_active=self.navigation_moving=False
             self.heading_alignment_pose_barrier_sim_s=None
+            if self.static_navigation_enabled():
+                from static_navigation import StaticNavigator
+                body, q = self.scene_body()
+                navigator = StaticNavigator.from_scene(self.world_path, self.scene)
+                navigator.bind(self.position(), q, body)
+                if not navigator.vertical_safe(self.home, [*self.home[:2], altitude]):
+                    raise MissionError("takeoff column lacks known static 3-D obstacle clearance")
         # Pre-stream a stationary setpoint before enabling OFFBOARD.
         self.set_target(self.position())
         self.pre_stream()
@@ -1132,6 +1219,63 @@ class Controller:
             with self.lock:
                 self.landing_mode_pending = False
 
+    def validate_scene_steps(self, normalized):
+        """Shared preview/submission geometry checks, retaining sortie registration."""
+        if self.scene.get("flight_region"):
+            stamp = self.pose.header.stamp.to_sec()
+            if not self.gazebo_history or time.monotonic()-self.gazebo_time > 1:
+                raise MissionError("cannot verify scene flight path without fresh Gazebo body pose")
+            body = min(self.gazebo_history, key=lambda value: abs(value["stamp_sim_s"]-stamp))
+            if abs(body["stamp_sim_s"]-stamp) > .05:
+                raise MissionError("scene ENU/world poses are not sufficiently time aligned")
+            q = self.pose.pose.orientation
+            validate_scene_trajectory(self.scene, normalized, self.position(), self.home,
+                                      body, [q.x, q.y, q.z, q.w])
+            if self.static_navigation_enabled():
+                from static_navigation import StaticNavigator
+                navigator = self.navigation_map if isinstance(self.navigation_map, StaticNavigator) else None
+                if navigator is None:
+                    navigator = StaticNavigator.from_scene(self.world_path, self.scene)
+                    navigator.bind(self.position(), [q.x,q.y,q.z,q.w], body)
+                point, home = self.position(), self.home
+                for step in normalized:
+                    action = step["action"]
+                    if action == "takeoff":
+                        home = list(point)
+                        target = [*point[:2],step["altitude"]]
+                        if not navigator.vertical_safe(point,target):
+                            raise MissionError("takeoff column intersects a known static obstacle")
+                        point = target
+                    elif action == "goto":
+                        point = [step["x"],step["y"],step["altitude"]]
+                    elif action == "return_home":
+                        point = [*home[:2],point[2]]
+                    elif action == "land":
+                        floor = self.scene["ground_plane"]["z_m"]+.05-navigator.origin[2]
+                        if not navigator.vertical_safe(point,[*point[:2],floor]):
+                            raise MissionError("planned landing column intersects a known static obstacle")
+                    if action != "land" and not navigator.segment_safe(point,point):
+                        raise MissionError("mission endpoint lacks known static 3-D clearance")
+
+    def preview_navigation(self, goal):
+        """Read-only route feasibility; candidate rejection is not a flight failure."""
+        with self.lock:
+            self.ready()
+            if not self.static_navigation_enabled() or not self.navigation_active or self.navigation_map is None:
+                raise MissionError("route preview requires active registered static 3-D navigation")
+            if (not isinstance(goal, list) or len(goal) != 3
+                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in goal)):
+                raise MissionError("goal must be three finite ENU coordinates")
+            validate_mission([dict(action="goto", x=goal[0], y=goal[1], altitude=goal[2])],
+                             airborne=True, home_known=self.home is not None)
+            try:
+                self.validate_scene_steps([dict(action="goto", x=goal[0], y=goal[1], altitude=goal[2])])
+                plan = self.navigation_map.plan(self.position(), goal)
+            except MissionError as exc:
+                return {"reachable": False, "reason": str(exc)}
+            return {"reachable": True, "path_length_m": plan["path_length_m"],
+                    "source": "verified_static_collision_map_3d"}
+
     def submit(self, steps, description="", parent_mission_id=None):
         with self.submit_lock, self.lock:
             if self.mission and self.mission["status"] == "running":
@@ -1147,22 +1291,14 @@ class Controller:
             if any(step["action"] != "land" for step in normalized) and guard and guard.reason(time.monotonic()):
                 raise MissionError(guard.reason(time.monotonic()))
             navigation = self.scene.get("navigation", {})
-            if navigation.get("enabled"):
+            if navigation.get("enabled") and navigation.get("method") != "static_3d":
                 for step in normalized:
                     if step["action"] in ("takeoff", "goto") and abs(step["altitude"]-navigation["flight_altitude_m"]) > .01:
                         raise MissionError("this 2-D autonomous scene requires fixed cruise altitude {} m".format(navigation["flight_altitude_m"]))
             if any(s["action"] == "takeoff" for s in normalized) and self.state_msg.armed:
                 raise MissionError("takeoff requires a disarmed vehicle")
-            if not pure_land and self.scene.get("flight_region"):
-                stamp = self.pose.header.stamp.to_sec()
-                if not self.gazebo_history or time.monotonic()-self.gazebo_time > 1:
-                    raise MissionError("cannot verify scene flight path without fresh Gazebo body pose")
-                body = min(self.gazebo_history, key=lambda value: abs(value["stamp_sim_s"]-stamp))
-                if abs(body["stamp_sim_s"]-stamp) > .05:
-                    raise MissionError("scene ENU/world poses are not sufficiently time aligned")
-                q = self.pose.pose.orientation
-                validate_scene_trajectory(self.scene, normalized, self.position(), self.home,
-                                          body, [q.x, q.y, q.z, q.w])
+            if not pure_land:
+                self.validate_scene_steps(normalized)
             self.cancel = threading.Event()
             self.deadline = time.monotonic() + 900
             self.idle_since = None
@@ -1197,7 +1333,8 @@ class Controller:
                 elif action == "goto":
                     self.move([step["x"], step["y"], step["altitude"]])
                 elif action == "return_home":
-                    altitude = self.scene.get("navigation", {}).get("flight_altitude_m", self.position()[2])
+                    altitude = (self.position()[2] if self.static_navigation_enabled() else
+                                self.scene.get("navigation", {}).get("flight_altitude_m", self.position()[2]))
                     self.move([self.home[0], self.home[1], altitude])
                 elif action == "hold":
                     self.hold_position()
@@ -1423,6 +1560,10 @@ def main():
                     raise MissionError("request body must be an object")
                 if self.path == "/mission":
                     result = controller.submit(payload.get("steps"), payload.get("description", ""))
+                elif self.path == "/navigation/preview":
+                    if set(payload) != {"goal_enu_m"}:
+                        raise MissionError("preview requires only goal_enu_m")
+                    result = controller.preview_navigation(payload["goal_enu_m"])
                 elif self.path == "/stop":
                     result = controller.stop()
                 elif self.path == "/land":

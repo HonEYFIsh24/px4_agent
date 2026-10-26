@@ -14,8 +14,9 @@ from stereo_localization import calibration_from_camera_info, finite, quaternion
 
 
 SEARCH_PROMPT = """
-只有使用者明确要求在给定ENU区域搜索时，才调用plan_region_search；query填目标名称，与后续report_scene的目标label保持一致。
-先get_drone_state。区域搜索需要已验证的ENU激光地图；地面地图未建立时，按使用者授权先起飞到固定3.5米，等执行器完成后再规划。
+以下规则仅针对给定区域的网格搜索；自然语言寻找目标使用begin_target_search，不要求用户提供区域。
+使用者给定ENU区域搜索时调用plan_region_search；query填目标名称，与后续report_scene的目标label保持一致。
+先get_drone_state。区域搜索需要已验证ENU导航地图；lidar_grid先起飞到固定3.5米，static_3d可在1～10米选高，等执行器完成后再规划。
 plan_region_search只生成观察点，不执行飞行。不能把scene世界坐标bounds直接作为ENU边界。
 bounds表示要寻找目标的区域，不是飞机必须停留的区域。前俯摄像头需要在区域后方观察；工具返回的车辆观察点可能在目标区域外，但必须在已验证的ENU飞行许可内，不能自行改回cell中心。
 依次search_observation_status(view='next')取得当前点，用execute_mission的goto到返回的point，再capture_scene并report_scene。
@@ -49,6 +50,21 @@ def _navigation_permission(state):
     scene = state.get("scene") or {}
     nav = state.get("navigation") or {}
     sensed_map = nav.get("map", nav)
+    if nav.get("method") == "static_3d":
+        if (state.get("simulation_only") is not True or state.get("ready") is not True
+                or state.get("armed") is not True or scene.get("verified") is not True
+                or nav.get("enabled") is not True or nav.get("active") is not True
+                or sensed_map.get("source") != "verified_static_collision_map_3d"
+                or sensed_map.get("map_registered") is not True):
+            raise CoverageSearchError("搜索需要已起飞、定位有效且完成本地坐标配准的已知静态三维地图")
+        bounds = vector(sensed_map.get("bounds_xy_enu_m"),4,"registered static-map ENU permission bounds")
+        permission = navigation_goal_permission(bounds,sensed_map.get("obstacle_inflation_m"),
+                                                sensed_map.get("visible_clearance_m"))
+        altitude = vector(state.get("position_enu_m"),3,"current ENU position")[2]
+        if not 1 <= altitude <= 10:
+            raise CoverageSearchError("搜索观察高度必须位于本地 1～10 米范围内")
+        _require_coordinate_evidence(state)
+        return permission["usable_goal_bounds_enu_m"],altitude,permission
     if (state.get("simulation_only") is not True or state.get("ready") is not True or state.get("armed") is not True
             or scene.get("verified") is not True
             or nav.get("enabled") is not True or nav.get("active") is not True
@@ -115,6 +131,8 @@ class SearchManager:
         self.client, self.clock, self.max_turns = client, clock, max_turns
         self.lock = threading.RLock()
         self.sessions = {}
+        from autonomous_search import AdaptiveSearch
+        self.adaptive = AdaptiveSearch(client, clock)
 
     def _audit(self, name, result):
         # Never hold the search lock while calling the application audit lock.
@@ -127,7 +145,7 @@ class SearchManager:
         if isinstance(max_observations, bool) or not isinstance(max_observations, int) or not 1 <= max_observations <= 8:
             raise CoverageSearchError("Agent search supports 1..8 observation points")
         with self.lock:
-            if owner in self.sessions:
+            if owner in self.sessions or owner in self.adaptive.sessions:
                 raise CoverageSearchError("本指令已有搜索计划，不能自动重新规划或覆盖失败记录")
         state = self.client.state()
         allowed, altitude, permission = _navigation_permission(state)
@@ -206,6 +224,7 @@ class SearchManager:
                 search.states[current["id"]] = "blocked" if navigation_failure else "observation_failed"
 
     def fail(self, owner, reason):
+        self.adaptive.fail(owner, reason)
         with self.lock:
             session = self.sessions.get(_owner(owner))
             if session is None:
@@ -222,6 +241,8 @@ class SearchManager:
         search permits only its current sample's goto (and a short hold) until
         the report is saved. A failed search permits direct landing only.
         """
+        if owner in self.adaptive.sessions:
+            return self.adaptive.check_mission(owner, steps)
         with self.lock:
             session = self.sessions.get(_owner(owner))
             if session is None:
@@ -266,6 +287,8 @@ class SearchManager:
     def consume_report(self, owner, frame, report):
         """Invoke only after a genuinely delivered frame's report has been saved."""
         owner = _owner(owner)
+        if owner in self.adaptive.sessions:
+            return self._audit("target_search_progress", self.adaptive.consume(owner, frame, report))
         with self.lock:
             if owner not in self.sessions:
                 return None
@@ -335,6 +358,20 @@ def build_search_tools(client, manager=None):
         model_config = ConfigDict(extra="forbid", strict=True)
         view: Literal["next", "summary"] = Field(description="next: unfinished observation point; summary: actual progress and targets")
 
+    class TargetSearchArguments(BaseModel):
+        model_config = ConfigDict(extra="forbid", strict=True)
+        query: str = Field(min_length=1, max_length=80, description="Target label; use exactly this label in report_scene")
+        end_behavior: Literal["land", "hold"] = "land"
+        initial_altitude: float = Field(default=3., ge=1, le=10, description="Initial observation ENU altitude; default 3m; respect user-specified height")
+
+    class TargetViewArguments(BaseModel):
+        model_config = ConfigDict(extra="forbid", strict=True)
+        strategy: Literal["auto", "rise", "left", "right", "forward"]
+        reason: str = Field(min_length=1, max_length=300)
+
+    class ExecuteTargetViewArguments(BaseModel):
+        model_config = ConfigDict(extra="forbid", strict=True)
+
     class TurnSearchTool(StructuredTool):
         @property
         def tool_call_schema(self):
@@ -375,5 +412,55 @@ def build_search_tools(client, manager=None):
         except Exception as exc:
             return audited_error("search_observation_status", exc)
 
+    def begin_target_search(query: str, runtime: ToolRuntime, end_behavior: Literal["land", "hold"] = "land", initial_altitude: float = 3.) -> dict:
+        """Start autonomous simulation target search without user-specified coordinates.
+
+        Forward means initial body heading. Authorizes takeoff and adaptive safe
+        views within 12m, 1..10m altitude, eight observations and 900 seconds.
+        Then take off if grounded, capture_scene, report_scene, and keep searching.
+        """
+        try:
+            owner = runtime_owner(runtime)
+            if owner in manager.sessions:
+                raise CoverageSearchError("当前指令已有区域搜索")
+            return manager._audit("begin_target_search", manager.adaptive.begin(owner, query, end_behavior, initial_altitude))
+        except Exception as exc:
+            return audited_error("begin_target_search", exc)
+
+    def next_target_search_view(strategy: Literal["auto", "rise", "left", "right", "forward"],
+                                reason: str, runtime: ToolRuntime) -> dict:
+        """Select a new safe view after a saved report did not find the target.
+
+        Chooses among rising/sideways/forward candidates using executor path
+        preview. Returns goto to execute, then capture and report again. Never flies.
+        """
+        try:
+            return manager._audit("next_target_search_view", manager.adaptive.next_view(runtime_owner(runtime), strategy, reason))
+        except Exception as exc:
+            return audited_error("next_target_search_view", exc)
+
+    def execute_target_search_view(runtime: ToolRuntime) -> dict:
+        """Fly to the current checked target-search observation point, without copying coordinates.
+
+        Wait for actual flight completion, then capture_scene and report_scene.
+        Operator interruption, VIO, collision and flight-failure gates still apply.
+        """
+        try:
+            owner = runtime_owner(runtime)
+            step = copy.deepcopy(manager.adaptive.sessions[owner]["pending"])
+            if step is None or manager.adaptive.sessions[owner]['arrived']:
+                return manager.adaptive.summary(owner)
+            manager.check_mission(owner, [step])
+            result = client.execute([step], "自主搜索：执行已验证的下一观察点")
+            if (result.get('mission') or {}).get('status') == 'succeeded':
+                manager.adaptive.sessions[owner]['arrived'] = True
+            return manager._audit("execute_mission", result)
+        except Exception as exc:
+            manager.adaptive.fail(runtime_owner(runtime), str(exc))
+            return manager._audit("execute_mission", {"status": "error", "error": str(exc)[:500]})
+
     return ([TurnSearchTool.from_function(plan_region_search, args_schema=SearchPlanArguments),
-             TurnSearchTool.from_function(search_observation_status, args_schema=SearchStatusArguments)], manager)
+             TurnSearchTool.from_function(search_observation_status, args_schema=SearchStatusArguments),
+             TurnSearchTool.from_function(begin_target_search, args_schema=TargetSearchArguments),
+             TurnSearchTool.from_function(next_target_search_view, args_schema=TargetViewArguments),
+             TurnSearchTool.from_function(execute_target_search_view, args_schema=ExecuteTargetViewArguments)], manager)

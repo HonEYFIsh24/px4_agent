@@ -2,8 +2,9 @@
 # Own only the processes started by this invocation; existing services are never reused.
 set -Eeuo pipefail
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-export PX4_DIR="${PX4_DIR:-/home/dut/PX4-Autopilot}"
+export PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 WEB_PORT=8080
+CONTROL_UI="${PX4_AGENT_CONTROL_UI:-web}"
 READY_TIMEOUT=150
 LAND_TIMEOUT=90
 ENV_FILE=''
@@ -21,6 +22,7 @@ usage() {
   --env-file FILE       将模型配置文件交给页面；默认复用项目/已有 ROS Agent 配置
   --world-file FILE     Gazebo 世界；默认使用包含障碍墙的复杂物流园区
   --port PORT           页面端口（默认 8080）；执行器固定为 127.0.0.1:8765
+  --control-ui MODE     web（默认）或 desktop（原生桌面窗口）
   --ready-timeout SEC   等待飞控就绪的总时间（默认 150 秒）
   --land-timeout SEC    退出前等待落地上锁的时间（默认 90 秒）
   --ev-profile NAME     shadow（默认）、gps_fused 或 no_gps
@@ -37,12 +39,13 @@ EOF
 fail() { echo "启动失败：$*" >&2; exit 1; }
 while (($#)); do
     case "$1" in
-        --env-file|--world-file|--port|--ready-timeout|--land-timeout|--ev-profile|--recover-profile-from)
+        --env-file|--world-file|--port|--control-ui|--ready-timeout|--land-timeout|--ev-profile|--recover-profile-from)
             (($# >= 2)) || fail "$1 缺少参数"
             case "$1" in
                 --env-file) ENV_FILE="$2" ;;
                 --world-file) WORLD_FILE="$2" ;;
                 --port) WEB_PORT="$2" ;;
+                --control-ui) CONTROL_UI="$2" ;;
                 --ready-timeout) READY_TIMEOUT="$2" ;;
                 --land-timeout) LAND_TIMEOUT="$2" ;;
                 --ev-profile) EV_PROFILE="$2" ;;
@@ -55,6 +58,7 @@ while (($#)); do
         *) fail "未知参数：$1；使用 --help 查看用法" ;;
     esac
 done
+case "$CONTROL_UI" in web|desktop) ;; *) fail 'control-ui 必须为 web 或 desktop' ;; esac
 case "$EV_PROFILE" in shadow|gps_fused|no_gps) ;; *) fail 'ev-profile 必须为 shadow、gps_fused 或 no_gps' ;; esac
 [[ -z "$RECOVER_PROFILE_FROM" || "$EV_PROFILE" != no_gps ]] \
     || fail '参数恢复不能与 no_gps 冷启动同用；先以 shadow/gps_fused 地面恢复并退出，再独立 no_gps 冷启动'
@@ -77,7 +81,13 @@ for script in configure_ev_profile.py recover_ev_profile.py prepare_ev_boot.py s
 done
 [[ -f /opt/ros/noetic/setup.bash ]] || fail '未找到 ROS Noetic'
 [[ -f "$PROJECT_DIR/vio_ws/devel/lib/libuav_body_imu_plugin.so" ]] || fail '缺少机载 IMU 插件；先运行 bash scripts/build_vio.sh'
-[[ -x "${PX4_DIR:-/home/dut/PX4-Autopilot}/build/px4_sitl_default/bin/px4" ]] || fail '未找到 PX4 SITL 可执行文件'
+[[ -x "$PX4_DIR/build/px4_sitl_default/bin/px4" ]] || fail '未找到 PX4 SITL 可执行文件'
+bash "$PROJECT_DIR/scripts/run_agent.sh" --help >/dev/null \
+    || fail 'Agent 环境检查失败；请运行 bash scripts/setup_agent.sh 并检查上方依赖错误'
+if [[ "$CONTROL_UI" == desktop ]]; then
+    bash "$PROJECT_DIR/scripts/start_desktop.sh" --help >/dev/null \
+        || fail '桌面环境检查失败；请安装 requirements-desktop.txt 中的依赖'
+fi
 export ROS_MASTER_URI="${ROS_MASTER_URI:-http://127.0.0.1:11311}"
 case "$ROS_MASTER_URI" in
     http://127.0.0.1:11311|http://127.0.0.1:11311/|http://localhost:11311|http://localhost:11311/) ;;
@@ -94,7 +104,7 @@ if [[ -n "$RECOVER_PROFILE_FROM" ]]; then
 fi
 
 # Inspect without stopping or replacing anything. Binding also catches wildcard listeners.
-/usr/bin/python3 - "$WEB_PORT" "$USE_EXISTING_MASTER" <<'PY' || exit 1
+/usr/bin/python3 - "$WEB_PORT" "$USE_EXISTING_MASTER" "$CONTROL_UI" <<'PY' || exit 1
 import os, pathlib, socket, sys, xmlrpc.client
 conflicts = []
 for path in pathlib.Path('/proc').iterdir():
@@ -106,7 +116,9 @@ for path in pathlib.Path('/proc').iterdir():
             conflicts.append('{} (PID {})'.format(name, path.name))
     except OSError:
         pass
-ports = {8765, int(sys.argv[1])}
+ports = {8765}
+if sys.argv[3] == 'web':
+    ports.add(int(sys.argv[1]))
 if sys.argv[2] == '1':
     # An outer roslaunch owns this master. Never attach to an existing flight
     # graph or stop its master; all simulator children remain owned below.
@@ -205,7 +217,8 @@ try:
             valid = (valid and adapter.get('mode') == 'fuse' and external.get('healthy') is True
                      and external.get('used_for_flight_control') is True and ekf.get('fusion_active') is True)
             if sys.argv[3] == 'no_gps':
-                valid = valid and ekf.get('gps_fusion') is False and ekf.get('gps_height_fusion') is False
+                valid = (valid and ekf.get('gps_fusion') is False and ekf.get('gps_height_fusion') is False
+                         and ekf.get('height_fusion') is True)
             else:
                 valid = valid and ekf.get('gps_fusion') is True
     sys.exit(0 if valid else 1)
@@ -274,12 +287,20 @@ cleanup() {
     local result=$? deadline
     ((CLEANING == 0)) || return 0
     CLEANING=1
-    trap '' INT TERM HUP
+    trap '' INT TERM HUP PIPE
     set +e
+    # The terminal/tee reader may already have closed. Never let a diagnostic
+    # write kill the manager halfway through landing and child cleanup.
+    exec >> "$RUN_DIR/cleanup.log" 2>&1
     echo '准备退出：先请求降落并等待落地上锁。'
+    # Stop the native Agent before requesting landing so no model worker can
+    # submit another mission during shutdown. The bridge and estimators stay alive.
+    if [[ "$CONTROL_UI" == desktop ]]; then
+        shutdown_component web TERM
+    fi
     if alive bridge; then
         # The page also interrupts any in-flight model call so it cannot resume later.
-        if ! alive web || ! curl -fsS --connect-timeout 1 --max-time 6 \
+        if [[ "$CONTROL_UI" == desktop ]] || ! alive web || ! curl -fsS --connect-timeout 1 --max-time 6 \
             -H 'Content-Type: application/json' -d '{}' "$WEB_URL/api/land" > "$RUN_DIR/shutdown-land.json" 2>/dev/null; then
             curl -fsS --connect-timeout 1 --max-time 6 -H 'Content-Type: application/json' \
                 -d '{}' "$BRIDGE_URL/land" > "$RUN_DIR/shutdown-land.json" 2>/dev/null
@@ -343,6 +364,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
+trap 'exit 141' PIPE
 /usr/bin/python3 - "$$" "$PROJECT_DIR/scripts/start_system.sh" "$RUN_DIR" <<'PY'
 import json, pathlib, sys
 pid = int(sys.argv[1])
@@ -472,20 +494,38 @@ while ! get_state || ! state_is ready; do
     ((SECONDS < deadline)) || fail "等待 EV profile 和实际定位就绪超时；查看 $RUN_DIR/state.json、ev.log 与 ekf_observer.log"
     sleep 1
 done
-echo "本次 EV profile 已就绪：$EV_PROFILE；启动控制页面。"
-web_args=(--port "$WEB_PORT" --bridge-url "$BRIDGE_URL")
+echo "本次 EV profile 已就绪：$EV_PROFILE；启动控制界面。"
+web_args=(--bridge-url "$BRIDGE_URL")
 [[ -z "$ENV_FILE" ]] || web_args+=(--env-file "$ENV_FILE")
-launch web start_web.sh "${web_args[@]}"
+if [[ "$CONTROL_UI" == desktop ]]; then
+    launch web start_desktop.sh --ready-file "$RUN_DIR/desktop.ready" "${web_args[@]}"
+else
+    launch web start_web.sh --port "$WEB_PORT" "${web_args[@]}"
+fi
 deadline=$((SECONDS + 30))
-while ! curl -fsS --connect-timeout 1 --max-time 2 "$WEB_URL/api/state" >/dev/null 2>&1; do
+control_ready() {
+    if [[ "$CONTROL_UI" == desktop ]]; then
+        [[ -s "$RUN_DIR/desktop.ready" ]]
+    else
+        curl -fsS --connect-timeout 1 --max-time 2 "$WEB_URL/api/state" >/dev/null 2>&1
+    fi
+}
+while ! control_ready; do
     alive sitl && alive bridge || fail '仿真或执行器在页面启动期间退出'
     alive web || fail "页面已退出；查看 $RUN_DIR/web.log"
     ((SECONDS < deadline)) || fail "页面启动超时；查看 $RUN_DIR/web.log"
     sleep 1
 done
-echo "打开中文页面：$WEB_URL"
+if [[ "$CONTROL_UI" == desktop ]]; then
+    echo '桌面控制窗口已打开。'
+else
+    echo "打开中文页面：$WEB_URL"
+fi
 echo "停止：Ctrl+C，或 bash $PROJECT_DIR/scripts/stop_system.sh $RUN_DIR"
 while :; do
+    if [[ "$CONTROL_UI" == desktop && -f "$RUN_DIR/desktop.closed" ]] && ! alive web; then
+        exit 0
+    fi
     for service in sitl bridge web ev ekf_observer gui_display; do
         alive "$service" || fail "$service 已退出；查看 $RUN_DIR/$service.log"
     done

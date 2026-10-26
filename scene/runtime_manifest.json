@@ -1,6 +1,6 @@
 {
   "id": "logistics_yard",
-  "world_sha256": "b1791d061bac5c47554555d48279ab3ff3f12d7c12b62dc3a330e60f6931ddde",
+  "world_sha256": "46fd126755e2f921c1b74cf0b7443ae063c4e6624b141e12e1ea6bf262c2bb42",
   "ground_plane": {
     "known": true,
     "z_m": 0.003,
