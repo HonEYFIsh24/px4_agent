@@ -66,6 +66,35 @@ class TrailView(QWidget):
         super().__init__()
         self.controller = controller
         self.setMinimumSize(160, 160)
+        self.zoom = 1.
+        self.offset = QPointF()
+        self.drag = None
+
+    def set_zoom(self, factor):
+        self.zoom = max(.5, min(10., self.zoom * factor))
+        self.update()
+
+    def reset_view(self):
+        self.zoom = 1.
+        self.offset = QPointF()
+        self.update()
+
+    def wheelEvent(self, event):
+        self.set_zoom(1.15 if event.angleDelta().y() > 0 else 1 / 1.15)
+        event.accept()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag = event.position()
+
+    def mouseMoveEvent(self, event):
+        if self.drag is not None:
+            self.offset += event.position() - self.drag
+            self.drag = event.position()
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        self.drag = None
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -74,15 +103,15 @@ class TrailView(QWidget):
         painter.fillRect(self.rect(), QColor("#172332"))
         trail = self.controller.trail
         extent = max(20., max((max(abs(x), abs(y)) for x, y in trail), default=0.)+2)
-        scale = min(self.width(), self.height())/(extent*2+4)
+        scale = min(self.width(), self.height())/(extent*2+4) * self.zoom
         def point(x, y):
-            return QPointF(self.width()/2+x*scale, self.height()/2-y*scale)
+            return QPointF(self.width()/2+x*scale+self.offset.x(), self.height()/2-y*scale+self.offset.y())
         painter.setPen(QColor("#2a3b50"))
         for n in range(-int(extent), int(extent)+1, 5):
             painter.drawLine(point(n, -extent), point(n, extent))
             painter.drawLine(point(-extent, n), point(extent, n))
         painter.setPen(QColor("#a7b6c8"))
-        painter.drawText(16, 30, "北 / +Y ↑     东 / +X →")
+        painter.drawText(16, 30, "北 / +Y ↑     东 / +X → · 滚轮缩放，拖拽平移")
         painter.setPen(QPen(QColor("#4fd5bf"), 2))
         for previous, current in zip(trail, trail[1:]):
             painter.drawLine(point(*previous), point(*current))
@@ -108,6 +137,7 @@ class DesktopWindow:
         self.control_busy = False
         self.submitting = False
         self.pending_submission = threading.Event()
+        self.pending_prompt_text = None
         self.closing = False
         self.flight_may_be_active = False
         self.trail = []
@@ -162,6 +192,7 @@ class DesktopWindow:
         self.panes = QSplitter(Qt.Orientation.Horizontal)
         layout.addWidget(self.panes, 1)
         notebook = QTabWidget()
+        self.notebook = notebook
         self.panes.addWidget(notebook)
         cameras = QWidget()
         camera_layout = QVBoxLayout(cameras)
@@ -181,7 +212,20 @@ class DesktopWindow:
         map_layout.addWidget(QLabel("Gazebo 世界坐标 · 米 · 仅显示实时测量"))
         self.map = TrailView(self)
         map_layout.addWidget(self.map, 1)
+        trail_controls = QHBoxLayout()
+        for title, action in (("缩小", lambda: self.map.set_zoom(1/1.25)),
+                              ("放大", lambda: self.map.set_zoom(1.25)),
+                              ("恢复全图", self.map.reset_view)):
+            button = QPushButton(title)
+            button.clicked.connect(action)
+            trail_controls.addWidget(button)
+        trail_controls.addStretch()
+        map_layout.addLayout(trail_controls)
         notebook.addTab(map_frame, "航迹监测")
+        from desktop_workbench import SearchWorkbench
+        self.workbench = SearchWorkbench()
+        workbench_tab = self.workbench_tab = notebook.addTab(self.workbench, "自主搜索工作台")
+        notebook.currentChanged.connect(lambda index: self.panes.setSizes([850, 350]) if index == workbench_tab else None)
         right = QWidget()
         right_layout = QVBoxLayout(right)
         self.panes.addWidget(right)
@@ -304,9 +348,11 @@ class DesktopWindow:
     def submit(self):
         if self.submitting or self.closing or self.state.get("active_command_id"):
             return
-        prompt = self.prompt.toPlainText().strip()
+        original_text = self.prompt.toPlainText()
+        prompt = original_text.strip()
         mode = "observe" if self.observe.isChecked() else "task"
         self.submitting = True
+        self.pending_prompt_text = original_text
         cancellation = self.pending_submission = threading.Event()
         self.buttons()
         def dispatch():
@@ -328,6 +374,7 @@ class DesktopWindow:
 
     def render_state(self, state, command):
         self.state, self.last_state_at = state, time.monotonic()
+        self.workbench.update_data(state, command)
         connected = state.get("connected") is True
         ready = state.get("ready") is True
         if state.get("armed") or state.get("active_command_id"):
@@ -356,11 +403,18 @@ class DesktopWindow:
         self.metrics["mission"].setText("{} · {} · 步骤 {}".format(STATUS.get(mission.get("status"), "空闲"),
             ACTIONS.get(mission.get("action"), "—"), mission.get("step", "—")))
         if command:
-            text = "指令：{}\n状态：{}\n\n{}".format(command["prompt"], STATUS.get(command["status"], command["status"]),
-                                                         command.get("reply") or "Agent 正在处理，请稍候…")
+            search_events = command.get("search_events") or []
+            progress = search_events[-1].get('result', {}) if search_events else {}
+            confirmation = ''
+            if progress.get('search_status') == 'target_found':
+                from desktop_search_data import status_text
+                confirmation = '\n确认等级：' + status_text(command, {})
+            flight_result = ('已落地、上锁' if connected and state.get('armed') is False and state.get('landed_state') == 1
+                             else '已解锁或尚未确认落地' if connected and state.get('armed') is True else '等待可靠遥测')
+            text = "指令：{}\n状态：{}{}\n飞行状态：{}\n\n{}".format(command["prompt"], STATUS.get(command["status"], command["status"]),
+                    confirmation, flight_result, command.get("reply") or "Agent 正在处理，请稍候…")
             if command.get("error"):
                 text += "\n\n错误：" + command["error"]
-            search_events = command.get("search_events") or []
             if search_events:
                 progress = search_events[-1]["result"]
                 if "search_status" in progress:
@@ -437,6 +491,9 @@ class DesktopWindow:
                         return
                 elif kind == "submitted":
                     self.submitting = False
+                    if self.prompt.toPlainText() == self.pending_prompt_text:
+                        self.prompt.clear()
+                    self.pending_prompt_text = None
                     self.command_id = value["id"]
                     self.state["active_command_id"] = self.command_id
                     self.show_output("已提交：" + value["prompt"])
@@ -447,6 +504,7 @@ class DesktopWindow:
                     operation, error = value
                     if operation == "submitted":
                         self.submitting = False
+                        self.pending_prompt_text = None
                     if operation == "control":
                         self.control_busy = False
                         self.closing = False
@@ -459,6 +517,10 @@ class DesktopWindow:
             self.metrics["position"].setText("— / — / —")
             self.trail.clear()
             self.draw_map()
+            self.workbench.map.position = None
+            self.workbench.map.trail = []
+            self.workbench.flight_status.setText('飞行结果：遥测已过期，无法确认')
+            self.workbench.map.update()
         if time.monotonic()-self.last_camera_at >= .35:
             self.render_cameras(fresh)
             self.last_camera_at = time.monotonic()
@@ -510,6 +572,10 @@ def main():
     root = DesktopRoot()
     window = DesktopWindow(root, application)
     root.show()
+    acceptance_dir = os.getenv('UAV_WORKBENCH_ACCEPTANCE_DIR')
+    if acceptance_dir:
+        from scripts.validate_workbench_ui import WorkbenchAcceptance
+        window.acceptance = WorkbenchAcceptance(window, Path(acceptance_dir))
     # TERM interrupts model work; the lifecycle manager then owns safe landing.
     signal.signal(signal.SIGTERM, lambda *_: window.destroy())
     signal.signal(signal.SIGINT, lambda *_: window.request_close())

@@ -85,6 +85,39 @@ class NativeWindowTests(unittest.TestCase):
         self.assertEqual(prompt.toPlainText(), '中文输入：查看无人机状态')
         self.assertIsNone(self.app.active_id)
 
+    def test_prompt_clears_after_acceptance_but_is_preserved_on_error_or_new_edit(self):
+        self.window.prompt.setPlainText('查看状态')
+        self.window.submit()
+        self.pump_until(lambda: self.window.command_id is not None)
+        self.assertEqual(self.window.prompt.toPlainText(), '')
+        self.app.active_id = None
+        self.window.state['active_command_id'] = None
+        self.window.prompt.setPlainText('失败时保留')
+        with mock.patch.object(self.app, 'submit', side_effect=ValueError('拒绝')):
+            self.window.submit()
+            self.pump_until(lambda: not self.window.submitting)
+        self.assertEqual(self.window.prompt.toPlainText(), '失败时保留')
+        entered, release = threading.Event(), threading.Event()
+        def accept_later(prompt, mode):
+            entered.set(); release.wait(3)
+            return {'id': 'new-command', 'prompt': prompt}
+        with mock.patch.object(self.app, 'submit', side_effect=accept_later):
+            self.window.submit()
+            self.pump_until(entered.is_set)
+            self.window.prompt.setPlainText('正在编辑的新指令')
+            release.set()
+            self.pump_until(lambda: self.window.command_id == 'new-command')
+        self.assertEqual(self.window.prompt.toPlainText(), '正在编辑的新指令')
+
+    def test_trail_zoom_and_reset_do_not_change_recorded_positions(self):
+        self.window.trail = [(0., 0.), (3., 4.)]
+        before = list(self.window.trail)
+        self.window.map.set_zoom(2.)
+        self.assertEqual(self.window.map.zoom, 2.)
+        self.window.map.reset_view()
+        self.assertEqual(self.window.map.zoom, 1.)
+        self.assertEqual(self.window.trail, before)
+
     def test_scalable_chinese_font_and_persistent_size(self):
         self.assertIn(QFontInfo(self.window.prompt.font()).family(),
                       ('Noto Sans CJK SC', 'WenQuanYi Micro Hei'))
@@ -97,6 +130,16 @@ class NativeWindowTests(unittest.TestCase):
         self.window.render_state({**self.state, 'vio': {'ready': True},
             'external_vision': {'used_for_flight_control': False}}, None)
         self.assertIn('未用于飞控', self.window.metrics['vio'].text())
+
+    def test_final_single_frame_result_shows_confirmation_and_flight_separately(self):
+        command={'id':'test-command','prompt':'寻找货车','status':'succeeded','reply':'已发现目标',
+                 'search_events':[{'result':{'search_status':'target_found','search_phase':'exploring',
+                                             'target_confirmation_mode':'single_frame','query':'货车',
+                                             'observations':[],'elapsed_seconds':10}}]}
+        self.window.render_state(self.state,command)
+        text=self.window.output.toPlainText()
+        self.assertIn('确认等级：发现目标（没有多视角确认记录）',text)
+        self.assertIn('飞行状态：已落地、上锁',text)
 
     def test_actual_vio_fusion_and_variable_height_are_shown(self):
         self.window.render_state({**self.state,

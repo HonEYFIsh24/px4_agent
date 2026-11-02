@@ -18,6 +18,16 @@ class SemanticMapError(CoverageSearchError):
     pass
 
 
+def explicit_semantic_relation(instruction, landmark_label, query):
+    """Return the existing positive task relation, or None; not a visual finding."""
+    start = instruction.find(landmark_label)
+    finish = instruction.find(query, start+len(landmark_label)) if query else -1
+    link = instruction[start+len(landmark_label):finish] if start >= 0 and finish >= 0 else ''
+    prefix = instruction[max(0, start-5):start] if start >= 0 else ''
+    match = re.search(r'(附近|旁边|边上|周围|旁)', link)
+    return match.group(0) if match and not any(x in prefix+link for x in ('不', '远离', '并非')) else None
+
+
 @dataclass
 class SemanticLandmark:
     id: str
@@ -237,11 +247,7 @@ class SemanticMap:
         for landmark in self.landmarks.values():
             if landmark.position_enu_m is None: continue
             # Only explicit user language linking this observed landmark to the query activates a field.
-            start = self.instruction.find(landmark.label)
-            finish = self.instruction.find(self.query, start+len(landmark.label)) if self.query else -1
-            link = self.instruction[start+len(landmark.label):finish] if start >= 0 and finish >= 0 else ''
-            prefix = self.instruction[max(0, start-5):start] if start >= 0 else ''
-            explicit = bool(re.search(r'(附近|旁边|边上|周围|旁)', link)) and not any(x in prefix+link for x in ('不', '远离', '并非'))
+            explicit = explicit_semantic_relation(self.instruction, landmark.label, self.query) is not None
             for i in self.eligible:
                 point = self.centre(i)
                 distance = math.dist(point[:2], landmark.position_enu_m[:2])
