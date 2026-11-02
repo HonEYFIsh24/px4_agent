@@ -10,6 +10,27 @@ import math
 
 from semantic_map import bbox, point_in_box
 
+CONFIRMATION_GEOMETRY_POLICY = 'explicit_association_v5'
+ASSOCIATION_BASES = {
+    'shared_stereo_target_memory': 'stereo_unique',
+    'one_metric_surface_projects_to_other_image': 'single_depth_projection',
+    'bearing_intersection_not_localization': 'bearing_intersection',
+    'clipped_box_epipolar_region_not_localization': 'clipped_region_hypothesis',
+}
+CONFIRMATION_ASSOCIATION_BASES = frozenset(('stereo_unique', 'single_depth_projection'))
+
+
+def association_allows_confirmation(geometry):
+    """Fail closed unless an explicit, recognized and internally consistent basis is compatible.
+
+    Caller must separately enforce uniqueness in both images and visual support.
+    These heuristic geometric checks do not establish category or object identity.
+    """
+    basis = geometry.get('association_basis')
+    return (geometry.get('compatible') is True
+            and basis in CONFIRMATION_ASSOCIATION_BASES
+            and ASSOCIATION_BASES.get(geometry.get('basis')) == basis)
+
 PAIRED_REVIEW_PROMPT = ('复核同一任务两个实际视角。图像依次为源完整图、源框裁图、当前完整图、'
     '各当前候选框裁图。裁图不是新视角。先客观描述每个框内像素，再判断对象及属性。'
     '不能把原标签、置信度、双目成功、几何假设或用户希望目标存在当成证明。'
@@ -158,7 +179,11 @@ def confirmation_goal(semantic_map, target_id, capture_id):
 
 def pair_geometry(source_landmark, source, current_landmark, current, policy='clipped_regions_v2'):
     """Association check only; it does not establish object existence or class."""
-    if policy not in ('center_v1', 'clipped_regions_v2', 'clipped_regions_v3'):
+    if policy == CONFIRMATION_GEOMETRY_POLICY:
+        result = pair_geometry(source_landmark, source, current_landmark, current, 'bearing_hypothesis_v4')
+        result['association_basis'] = ASSOCIATION_BASES.get(result.get('basis'), 'none')
+        return result
+    if policy not in ('center_v1', 'clipped_regions_v2', 'clipped_regions_v3', 'bearing_hypothesis_v4'):
         raise ValueError('Unknown confirmation geometry policy')
     if (source['capture_id'] == current['capture_id']
             or current['stamp_sim_s'] <= source['stamp_sim_s']
@@ -178,7 +203,7 @@ def pair_geometry(source_landmark, source, current_landmark, current, policy='cl
                           'measured surface does not project into the other target box'}
     u, v = source['bearing_direction_enu'], current['bearing_direction_enu']
     boxes = [source['bbox'], current['bbox']]
-    if policy in ('clipped_regions_v2', 'clipped_regions_v3') and any(any(b[i] <= .005 for i in (0, 1)) or any(b[i] >= .995 for i in (2, 3)) for b in boxes):
+    if policy in ('clipped_regions_v2', 'clipped_regions_v3', 'bearing_hypothesis_v4') and any(any(b[i] <= .005 for i in (0, 1)) or any(b[i] >= .995 for i in (2, 3)) for b in boxes):
         return box_region_geometry(source, current)
     w = [a-b for a, b in zip(source['bearing_origin_enu_m'], current['bearing_origin_enu_m'])]
     dot = lambda a, b: sum(x*y for x, y in zip(a, b))
@@ -195,10 +220,13 @@ def pair_geometry(source_landmark, source, current_landmark, current, policy='cl
     midpoint = [(x+y)/2 for x, y in zip(a, b)]
     # Ephemeral intersection is only a compatibility test, never a localization.
     compatible = math.dist(a, b) <= .5 and point_in_box(midpoint, source) and point_in_box(midpoint, current)
-    return {'compatible': compatible, 'basis': 'bearing_intersection_not_localization',
+    result = {'compatible': compatible, 'basis': 'bearing_intersection_not_localization',
             'reason': 'distinct-view rays have a geometrically compatible intersection' if compatible else
                       'bearing rays or projected boxes do not correspond',
             'target_xyz_estimated': False}
+    if policy == 'bearing_hypothesis_v4':
+        result['association_hypothesis_only'] = True
+    return result
 
 
 def review_crop(frame, box, padding=.025):

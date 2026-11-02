@@ -11,7 +11,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from semantic_map import point_in_box
-from target_confirmation import observation_for, observations_for, pair_geometry, review_crop
+from target_confirmation import (CONFIRMATION_GEOMETRY_POLICY, association_allows_confirmation,
+                                 observation_for, observations_for, pair_geometry, review_crop)
 
 
 def audit(result_file, output, require_confirmed=False, require_rejected=False):
@@ -46,7 +47,7 @@ def audit(result_file, output, require_confirmed=False, require_rejected=False):
             policy = event.get('geometry_policy', 'center_v1')
             matches = [(l, pair_geometry(source_landmark, original, l, o, policy)) for l, o in candidates]
             matches = [(l, g) for l, g in matches if g['compatible']]
-            if policy in ('clipped_regions_v2', 'clipped_regions_v3') and len(matches) == 1:
+            if policy in ('clipped_regions_v2', 'clipped_regions_v3', 'bearing_hypothesis_v4', CONFIRMATION_GEOMETRY_POLICY) and len(matches) == 1:
                 landmark, _ = matches[0]
                 current_observation = next(o for l, o in candidates if l.id == landmark.id)
                 competitors = [l.id for l, o in observations_for(semantic_map, event['query'], source)
@@ -62,7 +63,16 @@ def audit(result_file, output, require_confirmed=False, require_rejected=False):
             if (any(type(v) is not bool for v in flags+uncertain)
                     or (flags[0] and uncertain[0]) or (flags[1] and uncertain[1])):
                 raise ValueError('Review flags are not booleans')
-            strong = compatible and not (policy == 'clipped_regions_v3' and matches[0][1].get('association_hypothesis_only', False))
+            if policy == CONFIRMATION_GEOMETRY_POLICY:
+                computed = matches[0][1] if compatible else {'compatible': False, 'association_basis': 'none'}
+                recorded = event.get('geometry') or {}
+                if (recorded.get('compatible') is not computed['compatible']
+                        or recorded.get('association_basis') != computed['association_basis']
+                        or (compatible and recorded.get('basis') != computed.get('basis'))):
+                    raise ValueError('Recorded association basis differs from recomputed geometry')
+                strong = compatible and association_allows_confirmation(computed)
+            else:
+                strong = compatible and not (policy in ('clipped_regions_v3', 'bearing_hypothesis_v4') and matches[0][1].get('association_hypothesis_only', False))
             outcome = 'rejected' if not flags[0] and not uncertain[0] else 'confirmed' if all(flags) and strong else 'unconfirmed'
             if outcome != event['outcome']:
                 raise ValueError('Review outcome differs from visual flags and recomputed geometry')
@@ -91,7 +101,7 @@ def audit(result_file, output, require_confirmed=False, require_rejected=False):
                 if metadata.get('archive_filename') != expected_filename or hashlib.sha256(
                         (directory/expected_filename).read_bytes()).hexdigest() != crop['crop_sha256']:
                     raise ValueError('Archived ROI differs from actual delivered crop')
-                if policy in ('clipped_regions_v2', 'clipped_regions_v3'):
+                if policy in ('clipped_regions_v2', 'clipped_regions_v3', 'bearing_hypothesis_v4', CONFIRMATION_GEOMETRY_POLICY):
                     current_archive = json.loads((directory/(current+'.json')).read_text())
                     current_raw = (directory/(current+'.jpg')).read_bytes()
                     current_hash = hashlib.sha256(current_raw).hexdigest()
@@ -125,7 +135,7 @@ def audit(result_file, output, require_confirmed=False, require_rejected=False):
     found = any((e.get('result') or {}).get('search_status') == 'target_found'
                 for e in command.get('search_events', []))
     checks['found_requires_confirmed_review'] = not found or any(r['outcome'] == 'confirmed' for r in reviews)
-    if any(e.get('geometry_policy') in ('clipped_regions_v2', 'clipped_regions_v3') for e in command.get('target_confirmation_events', [])):
+    if any(e.get('geometry_policy') in ('clipped_regions_v2', 'clipped_regions_v3', 'bearing_hypothesis_v4', CONFIRMATION_GEOMETRY_POLICY) for e in command.get('target_confirmation_events', [])):
         outcome = command.get('search_outcome') or {}
         checks['structured_final_outcome_consistent'] = (
             type(outcome.get('target_confirmed')) is bool

@@ -60,6 +60,34 @@ class RegionGeometryTests(unittest.TestCase):
         current = copy.deepcopy(source); current['capture_id'] = 'another-id'; current['stamp_sim_s'] = 2.
         self.assertFalse(pair_geometry(SimpleNamespace(id='s'), source, SimpleNamespace(id='c'), current)['compatible'])
 
+    def test_bearing_nearby_same_class_objects_and_wrong_box_are_not_confirmation_evidence(self):
+        from types import SimpleNamespace
+        from target_confirmation import pair_geometry, association_allows_confirmation, CONFIRMATION_GEOMETRY_POLICY
+        def aimed(position, point, stamp):
+            template = self.observation(position, [.4, .4, .6, .6], stamp)
+            projection = project_ground_point(template['camera_info'], template['body_pose_enu'], point, 20.)
+            self.assertTrue(projection['inside_fov_and_range'])
+            u, v = projection['pixel_uv']
+            return self.observation(position, [u/640-.04, v/480-.04, u/640+.04, v/480+.04], stamp)
+        source = aimed([0., 0., 3.], [5., 0., 1.], 1.)
+        current = aimed([0., 1., 3.], [5., .2, 1.], 2.)
+        first, second = SimpleNamespace(id='object_a'), SimpleNamespace(id='object_b')
+        result = pair_geometry(first, source, second, current, CONFIRMATION_GEOMETRY_POLICY)
+        self.assertTrue(result['compatible'], result)  # Different nearby objects can still intersect approximately.
+        self.assertEqual(result['association_basis'], 'bearing_intersection')
+        self.assertFalse(association_allows_confirmation(result))
+        wrong = copy.deepcopy(current)
+        wrong['bbox'] = [.02, .02, .12, .12]  # A wrong reported box, without changing the measured ray.
+        result = pair_geometry(first, source, second, wrong, CONFIRMATION_GEOMETRY_POLICY)
+        self.assertFalse(association_allows_confirmation(result))
+
+    def test_association_policy_rejects_missing_unknown_and_inconsistent_basis(self):
+        from target_confirmation import association_allows_confirmation
+        for geometry in ({'compatible': True}, {'compatible': True, 'association_basis': 'future'},
+                         {'compatible': True, 'association_basis': 'stereo_unique',
+                          'basis': 'bearing_intersection_not_localization'}):
+            self.assertFalse(association_allows_confirmation(geometry))
+
 
 class ConfirmationTests(unittest.TestCase):
     def test_final_report_cannot_claim_confirmation_from_model_prose(self):
@@ -134,6 +162,16 @@ class ConfirmationTests(unittest.TestCase):
         result = self.review()
         self.assertEqual(result['search_status'], 'target_found')
         self.assertEqual(result['confirmation_outcome'], 'confirmed')
+        self.assertEqual(result['geometry']['association_basis'], 'stereo_unique')
+
+    def test_single_depth_projection_can_confirm_with_both_visual_views_supported(self):
+        self.observe(metric=True)
+        self.next_confirmation()
+        self.observe(metric=False)
+        result = self.review()
+        self.assertEqual(result['geometry']['association_basis'], 'single_depth_projection')
+        self.assertEqual(result['confirmation_outcome'], 'confirmed')
+        self.assertEqual(result['search_status'], 'target_found')
 
     def test_roi_refutation_retains_original_measurement_and_resumes_search(self):
         first = self.observe()
@@ -189,6 +227,32 @@ class ConfirmationTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.review(source=True, source_uncertain=True)
         with self.assertRaises(ValueError): self.review(current=True, current_uncertain=True)
 
+    def test_uncertain_source_cannot_confirm_even_with_supported_current_and_strong_geometry(self):
+        self.observe()
+        self.next_confirmation()
+        current = self.observe()
+        result = self.review(source=False, source_uncertain=True, current=True, same=True)
+        self.assertTrue(result['geometry']['compatible'])
+        self.assertIn(result['geometry']['association_basis'], ('stereo_unique', 'single_depth_projection'))
+        self.assertEqual(result['confirmation_outcome'], 'unconfirmed')
+        self.assertEqual(result['search_status'], 'searching')
+        self.assertEqual(result['search_phase'], 'confirming')
+        self.assertEqual(result['confirmation']['source_capture_id'], current['capture_id'])
+        self.next_confirmation()
+
+    def test_uncertain_current_or_different_object_cannot_confirm(self):
+        self.observe()
+        self.next_confirmation()
+        self.observe()
+        active = copy.deepcopy(self.search.sessions[OWNER]['confirmation'])
+        result = self.review(source=True, current=False, current_uncertain=True, same=True)
+        self.assertEqual(result['confirmation_outcome'], 'unconfirmed')
+        self.assertEqual(result['search_status'], 'searching')
+        self.search.sessions[OWNER].update(confirmation=active, search_phase='awaiting_review')
+        result = self.review(source=True, current=True, same=False)
+        self.assertEqual(result['confirmation_outcome'], 'unconfirmed')
+        self.assertEqual(result['search_status'], 'searching')
+
     def test_supported_current_view_is_retained_as_new_candidate_after_source_rejected(self):
         self.observe(metric=False)
         self.next_confirmation()
@@ -210,12 +274,24 @@ class ConfirmationTests(unittest.TestCase):
         self.assertEqual(result['search_status'], 'budget_exhausted')
         self.assertIsNone(result['confirmation'])
 
-    def test_bearing_only_multiview_confirmation_never_invents_target_coordinates(self):
-        self.observe(metric=False)
+    def test_bearing_only_multiview_is_hypothesis_not_confirmation(self):
+        from target_confirmation import observation_for, pair_geometry
+        source = self.observe(metric=False)
         self.next_confirmation()
-        self.observe(metric=False)
+        current = self.observe(metric=False)
+        active = self.search.sessions[OWNER]['confirmation']
+        semantic_map = self.runtime.maps[OWNER]
+        sl, so = observation_for(semantic_map, active['target_id'], source['capture_id'])
+        cl, co = observation_for(semantic_map, active['current_target_ids'][0], current['capture_id'])
+        old = pair_geometry(sl, so, cl, co, 'clipped_regions_v3')
+        self.assertTrue(old['compatible'])
+        self.assertFalse(old.get('association_hypothesis_only', False))
         result = self.review()
-        self.assertEqual(result['confirmation_outcome'], 'confirmed', result)
+        self.assertEqual(result['confirmation_outcome'], 'unconfirmed', result)
+        self.assertEqual(result['search_status'], 'searching')
+        self.assertTrue(result['geometry']['compatible'])
+        self.assertTrue(result['geometry']['association_hypothesis_only'])
+        self.assertEqual(result['geometry']['association_basis'], 'bearing_intersection')
         self.assertFalse(result['geometry']['target_xyz_estimated'])
         self.assertTrue(all(l.position_enu_m is None for l in self.runtime.maps[OWNER].landmarks.values()))
         self.assertEqual(self.runtime.maps[OWNER].memory.targets, [])
@@ -225,6 +301,7 @@ class ConfirmationTests(unittest.TestCase):
         self.next_confirmation()
         self.observe(metric=False)
         weak = {'compatible': True, 'basis': 'clipped_box_epipolar_region_not_localization',
+                'association_basis': 'clipped_region_hypothesis',
                 'association_hypothesis_only': True, 'target_xyz_estimated': False}
         with mock.patch('target_confirmation.pair_geometry', return_value=weak):
             result = self.review(source=True, current=True, same=True)

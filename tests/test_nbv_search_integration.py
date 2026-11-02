@@ -101,6 +101,13 @@ def saved_report(messages, found=False):
         'targets': targets, 'limitations': ['not independent visual recognition evidence']}, 'report-'+capture['capture_id'])
 
 
+def synthetic_metric_target(bridge, pair_id, bboxes):
+    result = LocalStereoBridge.localize_stereo(bridge, pair_id, bboxes)
+    for item in result['targets']:
+        item['position_enu_m'] = [5., 0., 1.]
+    return result
+
+
 class NBVGraphTests(unittest.TestCase):
     def run_task(self, bridge, script, mode='nbv_geometry', selector='deterministic', pool='ranked', auto_prepare=False,
                  confirmation='single_frame', architecture='dual_model'):
@@ -145,8 +152,7 @@ class NBVGraphTests(unittest.TestCase):
     def test_missing_confirmation_reuses_original_source_for_one_new_view(self):
         from coverage_search import project_ground_point
         bridge = ScopedFixtureBridge()
-        bridge.localize_stereo = lambda pair_id, bboxes: {'status': 'ok', 'pair_id': pair_id,
-            'targets': [{'status': 'unavailable', 'reason': 'bearing-only fixture'} for _ in bboxes]}
+        bridge.localize_stereo = lambda pair_id, bboxes: synthetic_metric_target(bridge, pair_id, bboxes)
         def candidate(messages):
             capture = json.loads(next(m for m in reversed(messages)
                 if getattr(m, 'name', None) == 'observe_target_search_view').content)
@@ -195,9 +201,8 @@ class NBVGraphTests(unittest.TestCase):
     def test_multiview_graph_requires_paired_delivery_and_distinct_confirmation_move(self):
         from coverage_search import project_ground_point
         bridge = ScopedFixtureBridge()
-        # No metric estimates: identity is checked through actual two-view rays.
-        bridge.localize_stereo = lambda pair_id, bboxes: {'status': 'ok', 'pair_id': pair_id,
-            'targets': [{'status': 'unavailable', 'reason': 'synthetic bearing-only fixture'} for _ in bboxes]}
+        # A fake metric surface exercises the positive confirmation path; it is not visual evidence.
+        bridge.localize_stereo = lambda pair_id, bboxes: synthetic_metric_target(bridge, pair_id, bboxes)
         def candidate(messages):
             capture = json.loads(next(m for m in reversed(messages)
                 if getattr(m, 'name', None) == 'observe_target_search_view').content)
@@ -237,6 +242,24 @@ class NBVGraphTests(unittest.TestCase):
             reviewed = audit(path, root/'audit')
             self.assertTrue(reviewed['passed'], reviewed)
             self.assertTrue(audit(path, root/'positive-audit', require_confirmed=True)['passed'])
+            tampered_review = copy.deepcopy(record)
+            event = next(e for e in tampered_review['command']['target_confirmation_events']
+                         if e['outcome'] == 'confirmed')
+            event.update(source_supported=False, source_uncertain=True)
+            uncertain_path = root/'uncertain-source-result.json'
+            uncertain_path.write_text(json.dumps(tampered_review))
+            uncertain_audit = audit(uncertain_path, root/'uncertain-source-audit')
+            self.assertFalse(uncertain_audit['passed'])
+            self.assertIn('Review outcome differs', str(uncertain_audit['problems']))
+            tampered_basis = copy.deepcopy(record)
+            event = next(e for e in tampered_basis['command']['target_confirmation_events']
+                         if e['outcome'] == 'confirmed')
+            event['geometry']['association_basis'] = 'bearing_intersection'
+            basis_path = root/'incorrect-basis-result.json'
+            basis_path.write_text(json.dumps(tampered_basis))
+            basis_audit = audit(basis_path, root/'incorrect-basis-audit')
+            self.assertFalse(basis_audit['passed'])
+            self.assertIn('association basis differs', str(basis_audit['problems']))
             self.assertFalse(audit(path, root/'missing-rejection-audit', require_rejected=True)['passed'])
             tampered_record = copy.deepcopy(record)
             tampered_record['command']['search_outcome']['target_confirmed'] = False

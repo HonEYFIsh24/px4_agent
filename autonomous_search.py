@@ -451,7 +451,8 @@ class AdaptiveSearch:
     def review_confirmation(self, owner, source_capture_id, current_capture_id, current_target_id,
                             source_supported, current_supported, same_object, reason,
                             source_uncertain=False, current_uncertain=False):
-        from target_confirmation import observation_for, observations_for, pair_geometry
+        from target_confirmation import (CONFIRMATION_GEOMETRY_POLICY, association_allows_confirmation,
+                                         observation_for, observations_for, pair_geometry)
         from semantic_map import point_in_box
         s = self.sessions[owner]
         active = s.get('confirmation') or {}
@@ -470,7 +471,7 @@ class AdaptiveSearch:
         source_landmark, source = observation_for(semantic_map, active['target_id'], source_capture_id)
         matched = []
         for landmark, observation in observations_for(semantic_map, s['query'], current_capture_id):
-            geometry = pair_geometry(source_landmark, source, landmark, observation)
+            geometry = pair_geometry(source_landmark, source, landmark, observation, CONFIRMATION_GEOMETRY_POLICY)
             if geometry['compatible']:
                 matched.append((landmark, geometry))
         current_observations = observations_for(semantic_map, s['query'], current_capture_id)
@@ -480,7 +481,7 @@ class AdaptiveSearch:
             landmark, _ = matched[0]
             current = next(o for l, o in current_observations if l.id == landmark.id)
             competitors = [l.id for l, o in observations_for(semantic_map, s['query'], source_capture_id)
-                           if pair_geometry(l, o, landmark, current)['compatible']]
+                           if pair_geometry(l, o, landmark, current, CONFIRMATION_GEOMETRY_POLICY)['compatible']]
             if competitors != [source_landmark.id]:
                 matched = []
         if source['position_enu_m'] is not None and sum(
@@ -489,12 +490,12 @@ class AdaptiveSearch:
         if current_target_id and current_target_id not in active['current_target_ids']:
             raise ValueError('Review selected a target not reported in the current image')
         geometry = matched[0][1] if len(matched) == 1 and matched[0][0].id == current_target_id else {
-            'compatible': False, 'reason': 'no unique same-object geometric correspondence'}
+            'compatible': False, 'association_basis': 'none', 'reason': 'no unique same-object geometric correspondence'}
         outcome = ('rejected' if not source_supported and not source_uncertain else
-                   'confirmed' if current_supported and same_object and geometry['compatible']
-                   and not geometry.get('association_hypothesis_only', False) else 'unconfirmed')
+                   'confirmed' if source_supported and current_supported and same_object
+                   and association_allows_confirmation(geometry) else 'unconfirmed')
         self.confirmation_event(owner, outcome, current_target_id=current_target_id,
-            geometry_policy='clipped_regions_v3',
+            geometry_policy=CONFIRMATION_GEOMETRY_POLICY,
             source_supported=source_supported, current_supported=current_supported, same_object=same_object,
             source_uncertain=source_uncertain, current_uncertain=current_uncertain,
             geometry=geometry, reason=reason)
