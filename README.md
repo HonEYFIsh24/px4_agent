@@ -1,6 +1,8 @@
 # PX4 仿真无人机 Agent
 
-新机器部署见 [GitHub 安装说明](docs/GITHUB_SETUP.md)，上游源码及许可证范围见 [第三方声明](THIRD_PARTY_NOTICES.md)。本仓库保留项目源码、场景素材及已修改的 VINS-Fusion 源码；本机密钥、实验原始日志、虚拟环境、Catkin 构建输出和预编译动态库不随源码上传。下文引用的 `logs/` 历史证据保留在开发机，克隆仓库后需重新构建并独立验收。最新阶段结果见 [实施报告](docs/ordered_implementation_status.md)。
+**接续开发请先读 [项目交接与下一步执行指南](PROJECT_HANDOFF.md)**：包含当前目标、已完成事项、真实验证边界、已知问题和按顺序执行的下一步。新终端无需依赖聊天上下文。
+
+新机器部署见 [GitHub 安装说明](docs/GITHUB_SETUP.md)，上游源码及许可证范围见 [第三方声明](THIRD_PARTY_NOTICES.md)。本仓库保留项目源码、场景素材及已修改的 VINS-Fusion 源码；本机密钥、实验原始日志、虚拟环境、Catkin 构建输出和预编译动态库不随源码上传。下文引用的 `logs/` 历史证据保留在开发机，克隆仓库后需重新构建并独立验收。2026-10-09 的历史阶段结果见 [实施报告](docs/ordered_implementation_status.md)，当前进度以根目录交接文档为入口。
 
 在本机打开中文控制页面，输入自然语言任务，通过 LangChain Agent 控制 Gazebo 中的 Iris。页面提供航迹监测、左右机载相机实时预览、视觉分析、任务步骤和执行结果，以及 PX4 的连接、模式、解锁和落地状态。现在默认使用 **单 VLM Agent**：`qwen3-vl-plus` 同时理解任务、查看真实机载图像和调用受限工具，ROS / PX4 独立执行飞行控制。
 
@@ -51,6 +53,8 @@ bash scripts/launch_desktop.sh
 静态三维模式巡航现默认 0.65 米/秒，接近观察点或跟随落后时减速至 0.25 米/秒；自主搜索使用合并的换位采图工具，减少模型往返。二维雷达模式保留原速度。当前记忆仍以内存对话、任务工作记忆和短期图像缓存为主，没有自动长期检索；具体边界与耗时记录见 [性能与记忆说明](docs/performance_and_memory.md)。
 
 模型上下文默认将旧任务转换为最多 8 轮、6000 字符的结构化摘要，当前指令及工具链完整保留；摘要从已保存结果直接生成，不额外调用模型，也不改写完整检查点与审计。历史追问依据旧报告回答，不自动重飞或重拍。实现与对照验证见 [任务上下文记忆](docs/task_context_memory.md)。
+
+独立的新装卸庭院及白色货车/交通锥任务，见 [跨环境测试说明](docs/alternate_environment_tests.md)。可用 `bash scripts/launch_desktop.sh world:="$PWD/scene/test_environments/courtyard_delivery.world"` 启动；场景单独注册并校验，目标坐标不提供给 Agent。
 
 需要复用旧的固定高度雷达模式时，可执行 `UAV_NAVIGATION_MODE=lidar_grid PX4_DESKTOP_EV_PROFILE=shadow bash scripts/launch_desktop.sh`。这些桌面默认值不改变普通 ROS launch 的 `shadow` / 二维雷达默认行为。
 
@@ -296,3 +300,7 @@ UAV_BROWSER_PATH=/usr/bin/microsoft-edge node scripts/test_vision_ui.mjs
 ```
 
 飞行检查要求已有落地、上锁的仿真，结果写入 `logs/smoke_result.json`。当前提供基础飞行、当前相机视野的目标观察与固定高度二维 LiDAR 自主绕障；尚未提供自主全环境搜索或三维导航。任务边界检查不是 PX4 原生围栏。所有 HTTP 服务默认仅监听 `127.0.0.1`，启动时核对仿真时钟、Gazebo Iris 和本地 SITL 的 MAVROS 连接。
+
+空间语义地图第一版已接入真实采图报告，保持现有搜索策略。表示、证据约束、离线回放及俯视图用法见 [Semantic Map MVP](docs/semantic_map_mvp.md)。
+
+固定航向 NBV 已提供几何/语义确定性离线基线与只读候选查询，生产搜索尚待接入。候选评分、路径体积约束与真实档案回放见 [NBV 基线说明](docs/viewpoint_planner.md)。

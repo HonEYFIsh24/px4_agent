@@ -59,3 +59,13 @@ class StereoReports:
             results.append(result)
         return {'status': 'ok', 'pair_id': identifier, 'targets': results,
                 'historical_observation': True, 'report_delay_wall_s': elapsed}
+
+    def observation_metadata(self, identifier):
+        """Immutable capture provenance for geometric visibility; never recapture or relabel."""
+        with self.lock:
+            frame = self.frames.get(identifier)
+            if not frame or self.clock()-frame['created'] > self.ttl:
+                raise ValueError('stereo observation is absent or expired')
+            pair = frame['pair']
+            return {key: copy.deepcopy(pair[key]) for key in ('stamp_sim_s', 'body_pose_enu',
+                'coordinate_epoch', 'image_sha256', 'navigation_registration_id', 'camera_info_for_visibility')}

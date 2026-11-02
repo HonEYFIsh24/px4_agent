@@ -8,6 +8,7 @@ import hashlib
 import heapq
 import itertools
 import math
+import uuid
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -90,6 +91,9 @@ def intersects(start, end, low, high):
 
 class StaticNavigator:
     def __init__(self, boxes, bounds, clearance=1., resolution=.5):
+        self.raw_boxes = [([*low], [*high]) for low, high in boxes]
+        self.registration_id = None
+        self.world_sha256, self.ground_world_z = None, 0.
         self.bounds = [list(bounds[0]),list(bounds[1])]
         self.boxes = [([v-clearance for v in low],[v+clearance for v in high])
                       for low,high in boxes if all(high[i]+clearance >= bounds[0][i]
@@ -107,8 +111,11 @@ class StaticNavigator:
             low[i] += margin; high[i] -= margin
         low[2] = max(low[2], scene['ground_plane']['z_m']+.8)
         high[2] -= .2
-        return cls(collision_boxes(world, scene['world_sha256']), [low,high],
-                   scene['navigation']['minimum_clearance_m'])
+        result = cls(collision_boxes(world, scene['world_sha256']), [low,high],
+                     scene['navigation']['minimum_clearance_m'])
+        result.world_sha256 = scene['world_sha256']
+        result.ground_world_z = scene['ground_plane']['z_m']
+        return result
 
     def bind(self, local, local_q, world):
         from scene_config import quaternion_yaw
@@ -116,12 +123,63 @@ class StaticNavigator:
         c,s = math.cos(self.yaw),math.sin(self.yaw)
         self.origin = [world['position_m'][0]-c*local[0]+s*local[1],
                        world['position_m'][1]-s*local[0]-c*local[1],world['position_m'][2]-local[2]]
+        self.registration_id = uuid.uuid4().hex
+
+    def observation_visibility(self, pose, camera_info, grid_origin_xy, radius=12., resolution=.5):
+        """Ground-centre LOS using raw collision AABBs, never flight inflation or semantics."""
+        from coverage_search import project_ground_point
+        from stereo_localization import quaternion_rotation, matvec, iris_left_optical_to_body, vector
+        if self.origin is None or self.registration_id is None:
+            raise MissionError('visibility requires an actual sortie registration')
+        if radius != 12. or resolution != .5:
+            raise MissionError('MVP visibility grid requires radius 12m and resolution 0.5m')
+        centre = vector(grid_origin_xy, 2, 'grid origin ENU')
+        rotation = quaternion_rotation(pose['orientation_xyzw'])
+        offset = matvec(rotation, iris_left_optical_to_body()['translation_m'])
+        camera = [p+d for p,d in zip(pose['position_m'], offset)]
+        camera_world = self.to_world(camera)
+        ground = self.ground_world_z-self.origin[2]
+        eligible, visible, in_fov = [], [], 0
+        for row in range(48):
+            for col in range(48):
+                point = [centre[0]-12+(col+.5)*.5, centre[1]-12+(row+.5)*.5, ground]
+                world = self.to_world([*point[:2], ground+.01])
+                if (math.dist(point[:2], centre) > 12 or
+                    any(not self.bounds[0][i] <= world[i] <= self.bounds[1][i] for i in (0,1)) or
+                    any(intersects(world, world, low, high) for low,high in self.raw_boxes)):
+                    continue
+                index = row*48+col
+                eligible.append(index)
+                if not project_ground_point(camera_info, pose, point, 10.)['inside_fov_and_range']:
+                    continue
+                in_fov += 1
+                if not any(intersects(camera_world, world, low, high) for low,high in self.raw_boxes):
+                    visible.append(index)
+        return {'schema_version': 1, 'source': 'verified_raw_static_collision_aabb_visibility',
+            'world_sha256': self.world_sha256, 'sortie_id': self.registration_id,
+            'registration': {'world_from_enu_origin_m': list(self.origin), 'world_from_enu_yaw_rad': self.yaw,
+                             'ground_world_z_m': self.ground_world_z},
+            'grid': {'origin_xy_enu_m': centre, 'radius_m': radius, 'resolution_m': resolution,
+                     'rows': 48, 'cols': 48, 'ground_enu_z_m': ground},
+            'eligible_cell_ids': eligible, 'visible_cell_ids': visible,
+            'in_fov_cell_count': in_fov, 'occluded_cell_count': in_fov-len(visible),
+            'camera_origin_enu_m': camera,
+            'limitations': ['centre-sampled geometric visibility; not recognition or absence proof',
+                            'raw enclosing collision AABBs; no flight inflation, conservative for rotated/curved shapes']}
 
     def to_world(self, point):
         if self.origin is None:
             raise MissionError('static map local-frame registration is unavailable')
         c,s = math.cos(self.yaw),math.sin(self.yaw)
         return [c*point[0]-s*point[1]+self.origin[0],s*point[0]+c*point[1]+self.origin[1],point[2]+self.origin[2]]
+
+    def raw_line_of_sight(self, camera_enu, target_enu):
+        """Optical prediction using raw geometry; only exact endpoint contact is trimmed."""
+        camera, target = self.to_world(camera_enu), self.to_world(target_enu)
+        distance = math.dist(camera, target)
+        if distance > 1e-4:
+            target = [b+(a-b)*1e-4/distance for a, b in zip(camera, target)]
+        return not any(intersects(camera, target, low, high) for low, high in self.raw_boxes)
 
     def to_local(self, point):
         x,y,z = [v-o for v,o in zip(point,self.origin)]
@@ -144,12 +202,26 @@ class StaticNavigator:
                 and min(a[2],b[2]) >= -.2 and max(a[2],b[2]) <= self.bounds[1][2]
                 and not any(intersects(a,b,low,high) for low,high in self.boxes))
 
-    def plan(self, start, goal, now=None):
+    def plan(self, start, goal, now=None, *, search_origin_xy=None, search_radius_m=12., record=True):
+        """Plan continuously safe segments; optional search disk constrains the full route."""
+        from stereo_localization import vector, finite
+        origin = None if search_origin_xy is None else vector(search_origin_xy, 2, 'search origin')
+        radius = finite(search_radius_m, 'search radius')
+        if not 0 < radius <= 12:
+            raise MissionError('search radius must be in (0,12] metres')
+        def permitted(p):
+            if origin is None:
+                return True
+            local = self.to_local(p)
+            return 1.-1e-9 <= local[2] <= 10.+1e-9 and math.dist(local[:2], origin) <= radius+1e-9
+        def segment(a, b):
+            # A disk and height slab are convex: endpoint inclusion bounds every segment.
+            return permitted(a) and permitted(b) and self.world_segment_safe(a, b)
         a,b = self.to_world(start),self.to_world(goal)
-        if not self.world_segment_safe(a,a) or not self.world_segment_safe(b,b):
-            raise MissionError('3-D start/goal lacks static obstacle or boundary clearance')
+        if not segment(a,a) or not segment(b,b):
+            raise MissionError('3-D start/goal lacks obstacle, boundary or search-volume clearance')
         route = [a,b]
-        if not self.world_segment_safe(a,b):
+        if not segment(a,b):
             low,high = self.bounds
             def cell(p): return tuple(int(round((p[i]-low[i])/self.resolution)) for i in range(3))
             def center(k): return [low[i]+k[i]*self.resolution for i in range(3)]
@@ -160,7 +232,7 @@ class StaticNavigator:
             costs,previous,queue = {},{},[]
             for k in seeds:
                 p = center(k)
-                if cruise_height(p) and self.world_segment_safe(a,p):
+                if cruise_height(p) and segment(a,p):
                     costs[k] = math.dist(a,p); previous[k] = None
                     heapq.heappush(queue,(costs[k]+math.dist(p,b),costs[k],k))
             deltas = [d for d in itertools.product((-1,0,1),repeat=3) if any(d)]
@@ -169,12 +241,12 @@ class StaticNavigator:
                 _,cost,k = heapq.heappop(queue)
                 if k in visited or cost != costs.get(k): continue
                 visited.add(k); p = center(k)
-                if self.world_segment_safe(p,b): endpoint=k; break
+                if segment(p,b): endpoint=k; break
                 for delta in deltas:
                     nxt = tuple(k[i]+delta[i] for i in range(3)); q = center(nxt)
                     distance = cost+math.dist(p,q)
                     if (cruise_height(q) and distance < costs.get(nxt,float('inf'))
-                            and self.world_segment_safe(p,q)):
+                            and segment(p,q)):
                         costs[nxt],previous[nxt] = distance,k
                         heapq.heappush(queue,(distance+math.dist(q,b),distance,nxt))
             if endpoint is None: raise MissionError('no collision-free route in known static 3-D map')
@@ -186,15 +258,25 @@ class StaticNavigator:
         simplified = [route[0]]; index = 0
         while index < len(route)-1:
             nxt = len(route)-1
-            while not self.world_segment_safe(route[index],route[nxt]): nxt -= 1
+            while not segment(route[index],route[nxt]): nxt -= 1
             simplified.append(route[nxt]); index = nxt
-        self.last_plan = {'source':'verified_static_collision_map_3d',
+        result = {'source':'verified_static_collision_map_3d',
                           'waypoints':[self.to_local(p) for p in simplified[1:]],
                           'route_complete':True,'goal_known':True,'frontier':False,
                           'obstacle_inflation_m':self.clearance,
                           'path_length_m':sum(math.dist(a,b) for a,b in zip(simplified,simplified[1:])),
                           'goal_enu_m':list(goal),'start_enu_m':list(start)}
-        return self.last_plan.copy()
+        if origin is not None:
+            result.update(search_origin_xy_enu_m=origin, search_radius_m=radius,
+                          full_route_within_search_volume=True)
+        if record:
+            self.last_plan = result
+        return result.copy()
+
+    def preview_path(self, start, goal, search_origin_xy, search_radius_m=12.):
+        """Candidate planning must not replace the executing flight's last_plan."""
+        return self.plan(start, goal, search_origin_xy=search_origin_xy,
+                         search_radius_m=search_radius_m, record=False)
 
     def diagnostics(self, now=None, position=None, include_map=False):
         result = {'source':'verified_static_collision_map_3d','method':'static_3d',
@@ -210,6 +292,7 @@ class StaticNavigator:
             ratio = min(hx/(c*hx+s*hy),hy/(s*hx+c*hy))
             ex,ey = hx*ratio,hy*ratio
             result.update(bounds_xy_enu_m=[centre[0]-ex,centre[1]-ey,centre[0]+ex,centre[1]+ey],
+                          registration_id=self.registration_id,
                           visible_clearance_m=max(1.2,self.clearance))
         return result
 

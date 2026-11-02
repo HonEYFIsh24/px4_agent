@@ -244,6 +244,35 @@ def _validated_coordinate_epoch(value):
     return copy.deepcopy(value)
 
 
+def validate_observation_capture(capture):
+    """Shared acquisition quality/provenance checks for coverage and semantic maps."""
+    identifier = capture['capture_id']
+    if not isinstance(identifier, str) or not 0 < len(identifier) <= 80:
+        raise CoverageSearchError('Real capture ID is required')
+    hashes = {side: _hash(capture['image_sha256'][side]) for side in ('left', 'right')}
+    epoch = _validated_coordinate_epoch(capture.get('coordinate_epoch'))
+    stamp = finite(capture['stamp_sim_s'], 'capture stamp')
+    if (not 0 <= finite(capture['age_seconds'], 'capture age') <= 2
+            or not 0 <= finite(capture['measurement_age_seconds'], 'capture source age') <= .5):
+        raise CoverageSearchError('Image capture is stale or future-dated')
+    pose = capture['body_pose_enu']
+    if abs(finite(pose['stamp_sim_s'], 'capture pose stamp')-stamp) > .05:
+        raise CoverageSearchError('Capture pose does not belong to the image')
+    if not 0 <= finite(pose['age_seconds'], 'capture pose receipt age') <= 1:
+        raise CoverageSearchError('Capture pose receipt is stale')
+    if pose.get('frame_id') not in ('map', 'local_enu') or pose.get('body_reference') != 'base_link':
+        raise CoverageSearchError('Capture requires an ENU base_link pose')
+    position = vector(pose['position_m'], 3, 'capture ENU position')
+    quaternion_rotation(pose['orientation_xyzw'])
+    quality = capture['image_quality']
+    if (finite(quality['laplacian_variance'], 'image sharpness') < 20
+            or not 10 <= finite(quality['mean_luma'], 'mean luma') <= 245
+            or not 0 <= finite(quality['saturated_fraction'], 'saturated fraction') <= .8):
+        raise CoverageSearchError('Image quality does not support a clear observation')
+    return {'capture_id': identifier, 'hashes': hashes, 'coordinate_epoch': epoch,
+            'stamp_sim_s': stamp, 'pose': pose, 'position': position}
+
+
 class TargetMemory:
     """Bounded multi-view mixture estimate without pretending shared errors average away."""
     def __init__(self, max_targets=24, max_observations_per_target=24, distinct_view_distance_m=.5):
@@ -255,7 +284,8 @@ class TargetMemory:
         self.targets = []
         self.coordinate_epoch, self._epoch_set = None, False
 
-    def observe(self, label, measurement, capture_id, observer_pose_enu):
+    def observe(self, label, measurement, capture_id, observer_pose_enu, *,
+                association_target_id=None, allow_auto_association=True):
         label = _label(label)
         if (measurement.get("status") != "ok" or measurement.get("method") != "stereo_sgbm_robust_surface"
                 or measurement.get("frame") != "local_enu"):
@@ -279,8 +309,12 @@ class TargetMemory:
         if math.dist(point, observer) > 20:
             raise CoverageSearchError("Target lies outside the stereo observation distance bound")
         candidates = []
+        if association_target_id is not None and not any(t['id'] == association_target_id for t in self.targets):
+            raise CoverageSearchError('Unknown explicit target association')
         for target in self.targets:
             if target["label"].casefold() != label.casefold():
+                continue
+            if association_target_id is not None and target['id'] != association_target_id:
                 continue
             same_frame = [item for item in target["observations"]
                           if item["capture_id"] == capture_id or item["image_sha256"] == hashes]
@@ -289,11 +323,17 @@ class TargetMemory:
                     return {"accepted": False, "reason": "duplicate_capture", "target_id": target["id"]}
                 # Two different objects with one label can appear in the same image.
                 # A new same-frame surface point must not be merged as another view.
+                if association_target_id is not None:
+                    raise CoverageSearchError('Different same-frame objects cannot share a forced association')
                 continue
             variance = sum(target["covariance_enu_m2"][i][i] + covariance[i][i] for i in range(3))
             distance = math.dist(target["position_enu_m"], point)
-            if distance <= min(2.5, max(.6, 3*math.sqrt(variance))):
+            if ((association_target_id == target['id'] and distance <= 6.)
+                    or (association_target_id is None and allow_auto_association
+                        and distance <= min(2.5, max(.6, 3*math.sqrt(variance))))):
                 candidates.append((distance, target))
+        if association_target_id is not None and not candidates:
+            raise CoverageSearchError('Explicit target association violates label or surface-distance bounds')
         if candidates:
             target = min(candidates, key=lambda item: (item[0], item[1]["id"]))[1]
         else:
@@ -396,25 +436,13 @@ class CoverageSearch:
         try:
             if self.attempts > self.plan["max_observations"]:
                 raise CoverageSearchError("observation budget exhausted")
-            identifier = capture["capture_id"]
-            if not isinstance(identifier, str) or not 0 < len(identifier) <= 80:
-                raise CoverageSearchError("Real capture ID is required")
-            hashes = {side: _hash(capture["image_sha256"][side]) for side in ("left", "right")}
-            epoch = _validated_coordinate_epoch(capture.get("coordinate_epoch"))
+            checked = validate_observation_capture(capture)
+            identifier, hashes, epoch = checked['capture_id'], checked['hashes'], checked['coordinate_epoch']
             if self._epoch_set and epoch != self.coordinate_epoch:
                 raise CoverageSearchError("Search observations cannot cross a coordinate epoch change")
             if any(item["capture_id"] == identifier or item["image_sha256"] == hashes for item in self.observations):
                 raise CoverageSearchError("The current view requires a new actual stereo capture")
-            stamp = finite(capture["stamp_sim_s"], "capture stamp")
-            if (not 0 <= finite(capture["age_seconds"], "capture age") <= 2
-                    or not 0 <= finite(capture["measurement_age_seconds"], "capture source age") <= .5):
-                raise CoverageSearchError("Image capture is stale or future-dated")
-            pose = capture["body_pose_enu"]
-            if abs(finite(pose["stamp_sim_s"], "capture pose stamp")-stamp) > .05:
-                raise CoverageSearchError("Capture pose does not belong to the image")
-            if not 0 <= finite(pose["age_seconds"], "capture pose receipt age") <= 1:
-                raise CoverageSearchError("Capture pose receipt is stale")
-            position = vector(pose["position_m"], 3, "capture ENU position")
+            stamp, pose, position = checked['stamp_sim_s'], checked['pose'], checked['position']
             if (math.dist(position[:2], current["position_enu_m"][:2]) > .65
                     or abs(position[2]-self.plan["altitude_m"]) > .3):
                 raise CoverageSearchError("Clear image was not captured at the observation point")
@@ -422,11 +450,6 @@ class CoverageSearch:
             if (not allowed[0] <= position[0] <= allowed[2] or not allowed[1] <= position[1] <= allowed[3]
                     or math.hypot(position[0], position[1]) > self.plan["flight_radius_m"]):
                 raise CoverageSearchError("Actual camera observer lies outside its vehicle flight permission")
-            quality = capture["image_quality"]
-            if (finite(quality["laplacian_variance"], "image sharpness") < 20
-                    or not 10 <= finite(quality["mean_luma"], "mean luma") <= 245
-                    or not 0 <= finite(quality["saturated_fraction"], "saturated fraction") <= .8):
-                raise CoverageSearchError("Image quality does not support a clear observation")
             visible = potential_visible_samples(self.plan, pose)
             if view_id not in visible:
                 raise CoverageSearchError("Actual image attitude/range does not show the current requested target cell")

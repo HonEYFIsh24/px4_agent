@@ -16,6 +16,17 @@ def history(turn, padding=10000):
 
 
 class ProjectionTests(unittest.TestCase):
+    def test_rejected_visual_hypothesis_is_retained_as_rejected_in_history(self):
+        raw = history('old')+[HumanMessage('历史里到底找到了吗？', id='new')]
+        completed = [dict(id='old', status='succeeded', observation_count=2,
+            perceptions=[dict(status='ok', capture_id='old-photo', summary='原报告声称有油桶', targets=[{'label': '油桶'}])],
+            target_confirmation_reviews=[dict(query='油桶', outcome='rejected', source_capture_id='old-photo',
+                current_capture_id='second-photo', reason='源框复核只见地面')])]
+        result, _ = TaskContextMemory().project(raw, ('thread', 'new'), completed)
+        self.assertIn('rejected_label_hypotheses', result[0].content)
+        self.assertIn('"outcome": "rejected"', result[0].content)
+        self.assertIn('源框复核只见地面', result[0].content)
+
     def test_current_turn_and_owner_are_unchanged_and_old_tool_chain_is_summarized(self):
         old = history('old')
         current = history('active', 20000)[:-1]

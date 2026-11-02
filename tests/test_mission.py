@@ -37,6 +37,14 @@ class MissionValidationTests(unittest.TestCase):
             with self.subTest(step=step), self.assertRaises(MissionError):
                 validate_mission([step])
 
+    def test_rotation_requires_airborne_and_bounded_finite_heading(self):
+        with self.assertRaises(MissionError):
+            validate_mission([{'action': 'rotate', 'yaw_rad': 0.}])
+        for value in (True, float('nan'), math.pi+.001, -math.pi-.001):
+            with self.subTest(value=value), self.assertRaises(MissionError):
+                validate_mission([{'action': 'rotate', 'yaw_rad': value}], airborne=True)
+        self.assertEqual(validate_mission([{'action': 'rotate', 'yaw_rad': math.pi}], airborne=True)[0]['yaw_rad'], math.pi)
+
     def test_unknown_home_is_rejected(self):
         with self.assertRaises(MissionError):
             validate_mission([{"action": "return_home"}], airborne=True)

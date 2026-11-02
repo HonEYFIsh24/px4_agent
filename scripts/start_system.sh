@@ -13,6 +13,7 @@ USE_EXISTING_MASTER=0
 EV_PROFILE="${PX4_AGENT_EV_PROFILE:-shadow}"
 EV_TEST_FAULTS=0
 RECOVER_PROFILE_FROM=''
+GAZEBO_SEED="${PX4_AGENT_GAZEBO_SEED:-}"
 
 usage() {
     cat <<'EOF'
@@ -60,6 +61,10 @@ while (($#)); do
 done
 case "$CONTROL_UI" in web|desktop) ;; *) fail 'control-ui 必须为 web 或 desktop' ;; esac
 case "$EV_PROFILE" in shadow|gps_fused|no_gps) ;; *) fail 'ev-profile 必须为 shadow、gps_fused 或 no_gps' ;; esac
+if [[ -n "$GAZEBO_SEED" ]]; then
+    [[ "$GAZEBO_SEED" =~ ^(0|[1-9][0-9]{0,9})$ ]] || fail 'Gazebo seed 必须是 0–2147483647 的十进制整数'
+    ((GAZEBO_SEED <= 2147483647)) || fail 'Gazebo seed 超出范围'
+fi
 [[ -z "$RECOVER_PROFILE_FROM" || "$EV_PROFILE" != no_gps ]] \
     || fail '参数恢复不能与 no_gps 冷启动同用；先以 shadow/gps_fused 地面恢复并退出，再独立 no_gps 冷启动'
 export PX4_AGENT_EV_PROFILE="$EV_PROFILE"
@@ -408,7 +413,11 @@ if [[ "$EV_PROFILE" == no_gps ]]; then
         || fail "无法准备本次 pre-EKF 无 GPS hook；查看 $RUN_DIR/ev-boot-prepare.log"
     export PATH="$RUN_DIR/runtime-bin:$PATH"
 fi
-launch sitl start_sitl_vio.sh world:="$WORLD_FILE"
+SITL_SEED_ARGS=()
+if [[ -n "$GAZEBO_SEED" ]]; then
+    SITL_SEED_ARGS+=("extra_gazebo_args:=--lockstep --seed $GAZEBO_SEED")
+fi
+launch sitl start_sitl_vio.sh world:="$WORLD_FILE" "${SITL_SEED_ARGS[@]}"
 deadline=$((SECONDS + READY_TIMEOUT))
 echo '等待本机 ROS 仿真服务，然后启动执行器……'
 while :; do

@@ -29,7 +29,7 @@ def task_summary(messages, completed=None):
     """Summaries are deterministic projections of saved reports, never invented by an LLM."""
     user = messages[0]
     result = {'turn_id': value(user, 'id'), 'request': text(value(user, 'content'), 240)}
-    reports, failure, mission = [], None, None
+    reports, failure, mission, reviews = [], None, None, []
     for message in messages[1:]:
         if role(message) != 'tool':
             continue
@@ -40,11 +40,16 @@ def task_summary(messages, completed=None):
             mission = item['mission']
         if value(message, 'name') in ('report_scene', 'inspect_scene') and item.get('status') == 'ok':
             reports.append(item)
+        if value(message, 'name') == 'review_target_candidate' and item.get('status') == 'ok':
+            reviews.append({'query': item.get('query'), 'outcome': item.get('confirmation_outcome'),
+                'source_capture_id': item.get('reviewed_source_capture_id'),
+                'current_capture_id': item.get('reviewed_current_capture_id'), 'reason': item.get('review_reason')})
     if completed is not None:
         result['task_status'] = completed.get('status')
         failure = completed.get('error') or failure
         reports = completed.get('perceptions') or reports
         mission = completed.get('mission') or mission
+        reviews = completed.get('target_confirmation_reviews') or reviews
     result['observation_count_total'] = (completed.get('observation_count') if completed is not None
                                          and completed.get('observation_count') is not None else len(reports))
     # Tool evidence is not the same thing as a verified final command status.
@@ -62,6 +67,14 @@ def task_summary(messages, completed=None):
             for p in reports[-2:] if p.get('status') == 'ok']
         result['observation_summaries_retained'] = len(result['observations'])
         result['visual_evidence_basis'] = 'historical_model_reports_not_independently_verified'
+    if reviews:
+        result['target_confirmation_reviews'] = [{k: text(r.get(k), 240) for k in
+            ('query', 'outcome', 'source_capture_id', 'current_capture_id', 'reason')} for r in reviews[-8:]]
+        result['visual_evidence_basis'] = 'historical_reports_with_review_outcomes_not_independent_ground_truth'
+        for observation in result.get('observations', []):
+            rejected = [r['query'] for r in result['target_confirmation_reviews']
+                        if r['outcome'] == 'rejected' and r['source_capture_id'] == observation['capture_id']]
+            if rejected: observation['rejected_label_hypotheses'] = rejected
     if not reports and not mission and not failure:
         answers = [value(m, 'content') for m in messages[1:] if role(m) in ('ai', 'assistant') and not value(m, 'tool_calls')]
         if answers:

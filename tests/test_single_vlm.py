@@ -201,6 +201,28 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises((ValueError, RuntimeError, KeyError)):
             self.store.get(self.owner, fresh)
 
+    def test_confirmation_pin_keeps_only_owned_delivered_source_for_one_extra_view(self):
+        first = self.store.capture(self.owner, 'candidate')['capture_id']
+        with self.assertRaises(RuntimeError): self.store.pin_confirmation_source(self.owner, first)
+        self.store.mark_delivered(self.owner, first, {'model': CONFIG['model']})
+        with self.assertRaises(RuntimeError): self.store.pin_confirmation_source(('other', 'task'), first)
+        self.store.capture(self.owner, 'second')
+        self.store.pin_confirmation_source(self.owner, first)
+        self.now[0] += 21.
+        third = self.store.capture(self.owner, 'third')['capture_id']
+        self.assertEqual(self.store.get(self.owner, first, require_delivered=True)['capture_id'], first)
+        self.assertEqual(self.store.get(self.owner, third)['capture_id'], third)
+        self.store.unpin_confirmation_source(self.owner)
+        with self.assertRaises(RuntimeError): self.store.get(self.owner, first)
+
+    def test_confirmation_pin_has_absolute_lifetime_limit(self):
+        first = self.store.capture(self.owner, 'candidate')['capture_id']
+        self.store.mark_delivered(self.owner, first, {'model': CONFIG['model']})
+        self.store.pin_confirmation_source(self.owner, first)
+        self.now[0] += 900.01
+        with self.assertRaises(RuntimeError): self.store.get(self.owner, first)
+        self.assertNotIn(self.owner, self.store.pinned_confirmation_sources)
+
     def test_saved_current_turn_report_no_longer_requests_its_expired_image(self):
         capture = self.store.capture(self.owner, "look")
         messages = [HumanMessage("look", id=self.owner[1]),

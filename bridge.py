@@ -109,7 +109,9 @@ class Controller:
         self.world_path = world_path
         guarded_world = (world_path and (
             Path(world_path).resolve().name in ("logistics_yard.world", "obstacle_yard.world")
-            or Path(world_path).resolve().parent == (Path(__file__).parent / "scene/reliability").resolve()))
+            or Path(world_path).resolve().parent in (
+                (Path(__file__).parent / "scene/reliability").resolve(),
+                (Path(__file__).parent / "scene/test_environments").resolve())))
         if guarded_world and not self.scene["verified"]:
             raise MissionError("built-in world does not match its scene manifest; refusing unverified flight geometry")
         self.lock = threading.RLock()
@@ -202,6 +204,9 @@ class Controller:
             self.state_msg, self.state_time = message, time.monotonic()
 
     def on_pose(self, message):
+        faults = getattr(self, 'reliability_faults', None)
+        if faults and faults.drop_pose(message.header.stamp.to_sec(), self.navigation_active):
+            return
         with self.lock:
             self.pose, self.pose_time = message, time.monotonic()
             p = message.pose.position
@@ -383,6 +388,11 @@ class Controller:
                 altitude_mode="variable", min_altitude_m=1., max_altitude_m=10.,
                 setpoint_speed_m_s=getattr(self, 'static_navigation_max_speed', STATIC_NAVIGATION_MAX_SPEED),
                 approach_speed_m_s=NAVIGATION_MAX_SPEED,
+                observation_geometry_supported=True,
+                viewpoint_prediction_supported=True,
+                viewpoint_execution_supported=True,
+                viewpoint_yaw_supported=(os.getenv('UAV_ENABLE_YAW', '0') == '1'
+                                         and os.getenv('UAV_ENABLE_NBV_YAW', '0') == '1'),
                 lidar_role="telemetry_only; not the source of this map")
         return result
 
@@ -518,6 +528,9 @@ class Controller:
             frame = self.camera_state.get(side)
             if not frame:
                 raise MissionError("{} camera has not published a frame".format(side))
+            barrier = getattr(self, 'yaw_capture_barrier', None)
+            if barrier is not None and frame['stamp'] <= barrier:
+                raise MissionError('camera image predates completed yaw rotation or rotation failed')
             age, measurement_age = now - frame["received"], simulation_now - frame["stamp"]
             if not 0 <= age <= 2 or not 0 <= measurement_age <= 0.5:
                 raise MissionError("{} camera frame is stale or future-dated".format(side))
@@ -590,6 +603,9 @@ class Controller:
         with self.lock:
             now, simulation_now = time.monotonic(), rospy.Time.now().to_sec()
             stamp = frame["stamp_sim_s"]
+            barrier = getattr(self, 'yaw_capture_barrier', None)
+            if barrier is not None and stamp <= barrier:
+                raise MissionError('stereo image predates completed yaw rotation or rotation failed')
             if not self.local_pose_history:
                 raise MissionError("stereo has no aligned local EKF pose")
             body = min(self.local_pose_history, key=lambda item: abs(item["stamp_sim_s"]-stamp))
@@ -608,6 +624,7 @@ class Controller:
                           "orientation_covariance_rad2": [[.008, 0, 0], [0, .008, 0], [0, 0, .069]]},
                       "external_vision": external,
                       "coordinate_epoch": body.get('coordinate_epoch')}
+            result['navigation_registration_id'] = getattr(self.navigation_map, 'registration_id', None)
             result["image_sha256"] = {side: hashlib.sha256(frame[side]["jpeg"]).hexdigest() for side in ("left", "right")}
             for side in ("left", "right"):
                 image = frame[side]
@@ -620,6 +637,7 @@ class Controller:
                     "age_seconds": now-frame["received"], "measurement_age_seconds": simulation_now-stamp,
                     "camera_intrinsics": copy.deepcopy(info), "image_base64": base64.b64encode(image["jpeg"]).decode("ascii")}
                 result[side]["image_quality"] = copy.deepcopy(image["image_quality"])
+            result['camera_info_for_visibility'] = copy.deepcopy(result['left']['camera_intrinsics'])
         result["pair_id"] = self.stereo_reports.put(result)
         return result
 
@@ -719,6 +737,7 @@ class Controller:
                 "connected": self.state_msg.connected, "armed": self.state_msg.armed,
                 "mode": self.state_msg.mode, "landed_state": self.landed,
                 "position_enu_m": position,
+                "experimental_yaw_enabled": os.getenv('UAV_ENABLE_YAW', '0') == '1',
                 "home_enu_m": copy.copy(self.home), "target_enu_m": copy.copy(self.target),
                 "limits": {"min_altitude_m": 1, "max_altitude_m": MAX_ALTITUDE,
                            "radius_m": MAX_RADIUS, "setpoint_speed_m_s": MAX_SPEED},
@@ -802,6 +821,9 @@ class Controller:
             guard = getattr(self, "ev_guard", None)
             if require_offboard and guard and guard.reason(time.monotonic()):
                 raise MissionError(guard.reason(time.monotonic()))
+            scope = (getattr(self, 'mission', None) or {}).get('search_constraint')
+            if scope:
+                self.check_search_constraint(scope)
         if time.monotonic() > self.deadline:
             raise MissionError("mission exceeded 900 seconds")
 
@@ -875,6 +897,60 @@ class Controller:
             self.target = (list(self.commanded) if self.static_navigation_enabled() else
                            [*self.commanded[:2], self.scene["navigation"]["flight_altitude_m"]])
 
+    def rotate_heading(self, target_rad):
+        """Internal rotation primitive; not yet exposed as a mission action."""
+        from viewpoint_geometry import registered_identity
+        from yaw_control import YawArrival, run_rotation
+        with self.lock:
+            self.checkpoint(require_offboard=True)
+            guard = getattr(self, 'ev_guard', None)
+            if (not self.static_navigation_enabled() or not self.navigation_active
+                    or self.navigation_moving or self.navigation_map is None
+                    or not guard or not guard.required or self.landed != 2):
+                raise MissionError('rotation requires airborne registered static navigation and required VIO')
+            snapshot = guard.snapshot(time.monotonic())
+            if (snapshot.get('ekf') or {}).get('fusion_active') is not True:
+                raise MissionError('rotation requires active visual odometry fusion')
+            identity = json.dumps(registered_identity(self.navigation_map, coordinate_epoch(snapshot)), sort_keys=True)
+            position = self.position()
+            if not self.navigation_map.segment_safe(position, position):
+                raise MissionError('rotation position lacks static clearance')
+            self.target = self.commanded = list(position)
+            policy = YawArrival(target_rad, identity, position)
+
+        def read_pose():
+            with self.lock:
+                self.checkpoint(require_offboard=True)
+                now = time.monotonic()
+                if self.pose is None:
+                    raise MissionError('rotation requires actual pose')
+                current = json.dumps(registered_identity(self.navigation_map,
+                    coordinate_epoch(guard.snapshot(now))), sort_keys=True)
+                q = self.pose.pose.orientation
+                yaw = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
+                return {'actual_rad': yaw, 'position': self.position(), 'identity': current,
+                        'stamp_s': self.pose.header.stamp.to_sec(), 'received_age_s': now-self.pose_time}
+
+        def set_heading(yaw):
+            with self.lock:
+                self.checkpoint(require_offboard=True)
+                self.yaw = yaw
+
+        try:
+            result = run_rotation(policy, read_pose=read_pose, set_heading=set_heading,
+                                  checkpoint=lambda: self.checkpoint(require_offboard=True),
+                                  wait=self.cancel.wait, clock=time.monotonic)
+            with self.lock:
+                self.yaw_capture_barrier = result['stamp_s']
+            return result
+        except Exception:
+            with self.lock:
+                if self.pose is not None and 0 <= time.monotonic()-self.pose_time <= .5:
+                    q = self.pose.pose.orientation
+                    self.yaw = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
+                self.hold_position()
+            raise
+
     def move_direct(self, target):
         self.checkpoint(require_offboard=True)
         self.set_target(target)
@@ -906,6 +982,10 @@ class Controller:
 
     def motion_segment_safe(self, now):
         if self.static_navigation_enabled():
+            scope = (self.mission or {}).get('search_constraint')
+            if scope and (math.dist(self.target[:2], scope['origin_xy_enu_m']) > scope['search_radius_m']+1e-9
+                          or math.dist(self.position()[:2], scope['origin_xy_enu_m']) > scope['search_radius_m']+.35):
+                return False
             return self.navigation_map.segment_safe(self.position(), self.target, now)
         return self.navigation_map.segment_safe(self.position()[:2], self.target[:2], now)
 
@@ -924,7 +1004,10 @@ class Controller:
         if self.navigation_map is None or not self.navigation_active:
             self.start_navigation()
         self.checkpoint(require_offboard=True)
-        plan = self.navigation_map.plan(self.position(), list(target))
+        scope = (self.mission or {}).get('search_constraint')
+        options = ({'search_origin_xy': scope['origin_xy_enu_m'], 'search_radius_m': scope['search_radius_m']}
+                   if scope else {})
+        plan = self.navigation_map.plan(self.position(), list(target), **options)
         event = {"goal_enu_m": list(target), "plan": plan, "created_at": time.time(), "index": 1}
         with self.lock:
             self.mission.setdefault("navigation_plans", []).append(copy.deepcopy(event))
@@ -1270,18 +1353,144 @@ class Controller:
                              airborne=True, home_known=self.home is not None)
             try:
                 self.validate_scene_steps([dict(action="goto", x=goal[0], y=goal[1], altitude=goal[2])])
-                plan = self.navigation_map.plan(self.position(), goal)
+                plan = self.navigation_map.plan(self.position(), goal, record=False)
             except MissionError as exc:
                 return {"reachable": False, "reason": str(exc)}
             return {"reachable": True, "path_length_m": plan["path_length_m"],
                     "source": "verified_static_collision_map_3d"}
 
-    def submit(self, steps, description="", parent_mission_id=None):
+    def observation_geometry(self, pair_id, origin_xy):
+        metadata = self.stereo_reports.observation_metadata(pair_id)
+        with self.lock:
+            if not self.static_navigation_enabled() or self.navigation_map is None:
+                raise MissionError('observation geometry requires an active registered static map')
+            if (metadata['navigation_registration_id'] != self.navigation_map.registration_id
+                    or metadata['coordinate_epoch'] != coordinate_epoch(self.ev_guard.snapshot(time.monotonic()))):
+                raise MissionError('observation geometry belongs to another sortie or coordinate epoch')
+            result = self.navigation_map.observation_visibility(metadata['body_pose_enu'],
+                metadata['camera_info_for_visibility'], origin_xy)
+            result.update(capture_pair_id=pair_id, coordinate_epoch=metadata['coordinate_epoch'],
+                          stamp_sim_s=metadata['stamp_sim_s'], image_sha256=metadata['image_sha256'],
+                          body_pose_enu=metadata['body_pose_enu'], camera_intrinsics=metadata['camera_info_for_visibility'])
+            return result
+
+    def search_authority(self):
+        from viewpoint_authority import ViewpointAuthority
+        if getattr(self, '_search_authority', None) is None:
+            self._search_authority = ViewpointAuthority(clock=lambda: time.monotonic())
+        return self._search_authority
+
+    def check_search_constraint(self, scope):
+        from viewpoint_geometry import registered_identity
+        authority = self.search_authority()
+        active = authority.constraint()
+        if (scope.get('revoked') or active is None or active.get('revoked')
+                or any(active[k] != scope[k] for k in ('owner', 'identity', 'origin_xy_enu_m'))
+                or self.navigation_map is None
+                or registered_identity(self.navigation_map, coordinate_epoch(self.ev_guard.snapshot(time.monotonic()))) != scope['identity']):
+            raise MissionError('search execution identity or task ownership changed')
+        position = self.position()
+        if (math.dist(position[:2], scope['origin_xy_enu_m']) > scope['search_radius_m']+.35
+                or not .65 <= position[2] <= 10.35):
+            raise MissionError('search tracking exceeded its bounded volume tolerance')
+
+    def evaluate_viewpoints(self, operation, pair_id, origin_xy, expected_identity, candidates, search_context=None,
+                            probe_points_enu_m=None):
+        """Predict from fresh live ENU state; computation never publishes or creates flight."""
+        from viewpoint_geometry import StaticViewpointEvaluator, registered_identity
+        metadata = self.stereo_reports.observation_metadata(pair_id)
+
+        def permission():
+            self.ready()
+            if (not self.static_navigation_enabled() or not self.navigation_active
+                    or self.navigation_map is None or self.state_msg.armed is not True or self.landed != 2
+                    or self.navigation_moving or self.navigation_gate_error
+                    or (self.mission or {}).get('status') == 'running'):
+                raise MissionError('viewpoint prediction requires stable airborne registered static navigation')
+            reason = self.ev_guard.reason(time.monotonic())
+            if reason:
+                raise MissionError(reason)
+            epoch = coordinate_epoch(self.ev_guard.snapshot(time.monotonic()))
+            identity = registered_identity(self.navigation_map, epoch)
+            if (identity != expected_identity or metadata['coordinate_epoch'] != epoch
+                    or metadata['navigation_registration_id'] != self.navigation_map.registration_id):
+                raise MissionError('viewpoint prediction identity or capture epoch changed')
+            return epoch
+
+        with self.lock:
+            epoch = permission()
+            navigator = self.navigation_map
+            position = self.position()
+            q = self.pose.pose.orientation
+            yaw = self.yaw
+            if search_context is not None:
+                if math.dist(metadata['body_pose_enu']['position_m'], position) > .5:
+                    raise MissionError('candidate owner requires a current actual observation')
+                if operation == 'context':
+                    self.search_authority().bind(search_context, pair_id, metadata, expected_identity, origin_xy)
+                else:
+                    self.search_authority().require_batch(search_context)
+            pose = {'frame_id': 'map', 'body_reference': 'base_link', 'position_m': position,
+                    'orientation_xyzw': [q.x, q.y, q.z, q.w]}
+            evaluator = StaticViewpointEvaluator(navigator, pose, metadata['camera_info_for_visibility'],
+                epoch, fixed_yaw=yaw, reference_kind='live_enu_pose', probe_points_enu_m=probe_points_enu_m,
+                allow_yaw=os.getenv('UAV_ENABLE_YAW', '0') == '1' and os.getenv('UAV_ENABLE_NBV_YAW', '0') == '1')
+        # Keep A*/visibility work outside the publisher's controller lock. All inputs
+        # are immutable for this registration; preview_path never writes last_plan.
+        result = evaluator.query(operation, origin_xy, expected_identity, candidates)
+        with self.lock:
+            permission()
+            if (self.navigation_map is not navigator or math.dist(self.position(), position) > .35
+                    or abs(math.atan2(math.sin(self.yaw-yaw), math.cos(self.yaw-yaw))) > 1e-9):
+                raise MissionError('vehicle pose or heading changed during viewpoint prediction')
+            if search_context is not None:
+                self.search_authority().require_batch(search_context)
+                if operation == 'paths':
+                    self.search_authority().issue(search_context, result)
+        return result
+
+    def execute_viewpoint(self, owner, batch_id, map_revision, candidate_id, ticket, description='NBV observation'):
+        from viewpoint_geometry import registered_identity
+        with self.submit_lock, self.lock:
+            self.ready()
+            reason = self.ev_guard.reason(time.monotonic())
+            if reason:
+                raise MissionError(reason)
+            if not self.navigation_active or self.navigation_moving or (self.mission or {}).get('status') == 'running':
+                raise MissionError('wait for the current flight before executing a viewpoint')
+            identity = registered_identity(self.navigation_map, coordinate_epoch(self.ev_guard.snapshot(time.monotonic())))
+            accepted = self.search_authority().consume(owner, batch_id, map_revision, candidate_id, ticket,
+                                                     identity, self.position(), self.yaw)
+            point = accepted['goal_enu_m']
+            steps = [{'action': 'goto', 'x': point[0], 'y': point[1], 'altitude': point[2]}]
+            if 'target_yaw_enu_rad' in accepted:
+                steps.append({'action': 'rotate', 'yaw_rad': accepted['target_yaw_enu_rad']})
+            return self.submit(steps, description, search_authorization=accepted)
+
+    def release_search(self, owner):
+        from viewpoint_authority import owner_key
+        with self.submit_lock, self.lock:
+            authority = self.search_authority()
+            if authority.active is not None:
+                if tuple(authority.active['owner']) != owner_key(owner):
+                    raise MissionError('cannot release another search owner')
+                if (self.mission or {}).get('status') == 'running' or self.navigation_moving:
+                    raise MissionError('cannot release search ownership during flight')
+                authority.clear()
+            return {'status': 'ok', 'released': True}
+
+    def submit(self, steps, description="", parent_mission_id=None, search_authorization=None):
         with self.submit_lock, self.lock:
             if self.mission and self.mission["status"] == "running":
                 raise MissionError("a mission is already running; stop it before submitting another")
             airborne = self.state_msg.armed and self.landed != ExtendedState.LANDED_STATE_ON_GROUND
             normalized = validate_mission(steps, airborne=airborne, home_known=self.home is not None)
+            if any(s['action'] == 'rotate' for s in normalized):
+                owned_pair = (search_authorization is not None and len(normalized) == 2
+                              and [s['action'] for s in normalized] == ['goto', 'rotate']
+                              and os.getenv('UAV_ENABLE_NBV_YAW', '0') == '1')
+                if os.getenv('UAV_ENABLE_YAW', '0') != '1' or (len(normalized) != 1 and not owned_pair):
+                    raise MissionError('rotation requires explicit experimental enablement and a standalone step')
             pure_land = normalized == [{"action": "land"}]
             if pure_land:
                 self.landing_ready()
@@ -1299,7 +1508,25 @@ class Controller:
                 raise MissionError("takeoff requires a disarmed vehicle")
             if not pure_land:
                 self.validate_scene_steps(normalized)
+            scope = self.search_authority().constraint()
+            if not pure_land and scope:
+                self.check_search_constraint(scope)
+                if any(step['action'] == 'goto' for step in normalized):
+                    expected_steps = None
+                    if search_authorization is not None:
+                        goal = search_authorization['goal_enu_m']
+                        expected_steps = [{'action': 'goto', 'x': goal[0], 'y': goal[1], 'altitude': goal[2]}]
+                        if 'target_yaw_enu_rad' in search_authorization:
+                            expected_steps.append({'action': 'rotate', 'yaw_rad': search_authorization['target_yaw_enu_rad']})
+                    if (search_authorization is None or normalized != expected_steps
+                            or search_authorization['owner'] != scope['owner']
+                            or search_authorization['identity'] != scope['identity']):
+                        raise MissionError('active NBV search requires an executor-issued candidate ticket')
+                elif any(step['action'] not in ('return_home', 'land', 'hold') for step in normalized):
+                    raise MissionError('active NBV search permits only its checked candidate or safe completion')
             self.cancel = threading.Event()
+            if any(s['action'] == 'rotate' for s in normalized):
+                self.yaw_capture_barrier = float('inf')
             self.deadline = time.monotonic() + 900
             self.idle_since = None
             self.mission = {"id": uuid.uuid4().hex[:12], "status": "running", "step": 0,
@@ -1307,6 +1534,10 @@ class Controller:
                             "error": None, "started_at": time.time(), "events": []}
             if parent_mission_id is not None:
                 self.mission['parent_mission_id']=parent_mission_id
+            if not pure_land and scope:
+                self.mission['search_constraint'] = scope
+                if search_authorization:
+                    self.mission['viewpoint_candidate_id'] = search_authorization['candidate_id']
             if pure_land:
                 self.mission['landing_readiness_at_acceptance']=self.landing_snapshot()
             self.worker = threading.Thread(target=self.run_mission, daemon=True)
@@ -1341,6 +1572,8 @@ class Controller:
                     end = time.monotonic() + step["duration"]
                     self.wait_until(lambda: time.monotonic() >= end, step["duration"] + 1,
                                     require_offboard=True)
+                elif action == "rotate":
+                    rotation_result = self.rotate_heading(step['yaw_rad'])
                 elif action == "land":
                     self.land()
                 if action == "land":
@@ -1352,11 +1585,15 @@ class Controller:
                         if position is not None and not all(type(v) in (int, float) and math.isfinite(v) for v in position):
                             position = None
                         landing_evidence = self.landing_snapshot()
+                        self.search_authority().clear()
+                        self.yaw_capture_barrier = None
                 else:
                     position = self.position()
                     landing_evidence = None
                 event = {"step": index + 1, "action": action,
                          "position_enu_m": position, "finished_at": time.time()}
+                if action == 'rotate':
+                    event['rotation'] = rotation_result
                 if landing_evidence is not None:
                     event['landing_fcu_evidence']=landing_evidence
                 with self.lock:
@@ -1375,8 +1612,14 @@ class Controller:
                 self.idle_since = time.monotonic()
             self.log("mission_finished", mission_id=mission_id, status=status, error=error)
 
-    def stop(self):
-        with self.command_lock, self.lock:
+    def stop(self, expected_mission_id=None):
+        with self.submit_lock, self.command_lock, self.lock:
+            if expected_mission_id is not None:
+                if not isinstance(expected_mission_id, str) or not 1 <= len(expected_mission_id) <= 64:
+                    raise MissionError('expected_mission_id must be a nonempty mission id')
+                if not self.mission or self.mission.get('id') != expected_mission_id:
+                    raise MissionError('mission changed; refusing to stop another flight')
+            self.search_authority().revoke()
             self.cancel.set()
             self.hold_position()
             holding = self.state_msg.armed and self.state_msg.mode == "OFFBOARD" and self.target is not None
@@ -1436,6 +1679,27 @@ class Controller:
                 self.closed.wait(.5)
             raise MissionError("PX4 rejected grounded OFFBOARD preparation")
 
+    def rotation_pose_safety_landing(self):
+        """Request one owned FCU landing when rotation loses local pose receipt."""
+        with self.lock:
+            mission = self.mission or {}
+            identifier = mission.get('id')
+            failed_stale = mission.get('status') == 'failed' and 'stale' in (mission.get('error') or '').lower()
+            if (not identifier or mission.get('action') != 'rotate'
+                    or not (mission.get('status') == 'running' or failed_stale)
+                    or not self.state_msg.armed or self.state_msg.mode != 'OFFBOARD'
+                    or self.pose is None or time.monotonic() - self.pose_time <= 1
+                    or getattr(self, 'pose_landing_mission_id', None) == identifier):
+                return
+            self.pose_landing_mission_id = identifier
+        try:
+            self.log('rotation_pose_safety_landing', mission_id=identifier,
+                     reason='local position receipt stale')
+            self.emergency_land(expected_mission_id=identifier)
+        except Exception as exc:
+            self.log('rotation_pose_safety_landing_rejected', mission_id=identifier, error=str(exc))
+            rospy.logerr('Rotation pose safety landing failed: %s', str(exc))
+
     def watchdog_loop(self):
         while not self.closed.wait(.1) and not rospy.is_shutdown():
             with self.lock:
@@ -1457,6 +1721,7 @@ class Controller:
                     # any rejection; requesting it never proves FCU fallback.
                     self.log("external_vision_safety_landing_rejected", error=str(exc), reason=reason)
                     rospy.logerr("VIO safety landing failed: %s", str(exc))
+            self.rotation_pose_safety_landing()
             if should_land:
                 try:
                     self.submit([{"action": "land"}], "Automatic landing after idle timeout")
@@ -1564,8 +1829,30 @@ def main():
                     if set(payload) != {"goal_enu_m"}:
                         raise MissionError("preview requires only goal_enu_m")
                     result = controller.preview_navigation(payload["goal_enu_m"])
+                elif self.path == '/navigation/observation-geometry':
+                    if set(payload) != {'pair_id', 'origin_xy_enu_m'}:
+                        raise MissionError('observation geometry requires pair_id and origin_xy_enu_m')
+                    result = controller.observation_geometry(payload['pair_id'], payload['origin_xy_enu_m'])
+                elif self.path == '/navigation/viewpoints':
+                    if (set(payload)-{'search_context', 'probe_points_enu_m'} != {'operation', 'pair_id', 'origin_xy_enu_m', 'expected_identity', 'candidates'}):
+                        raise MissionError('invalid viewpoint prediction fields')
+                    result = controller.evaluate_viewpoints(payload['operation'], payload['pair_id'],
+                        payload['origin_xy_enu_m'], payload['expected_identity'], payload['candidates'], payload.get('search_context'),
+                        payload.get('probe_points_enu_m'))
+                elif self.path == '/navigation/execute-viewpoint':
+                    if set(payload) != {'owner', 'batch_id', 'map_revision', 'candidate_id', 'ticket', 'description'}:
+                        raise MissionError('viewpoint execution accepts only an owned ticket, never coordinates')
+                    result = controller.execute_viewpoint(**payload)
+                elif self.path == '/navigation/search-release':
+                    if set(payload) != {'owner'}:
+                        raise MissionError('search release requires owner')
+                    result = controller.release_search(payload['owner'])
                 elif self.path == "/stop":
-                    result = controller.stop()
+                    if set(payload)-{'expected_mission_id'}:
+                        raise MissionError('unknown stop request fields')
+                    if 'expected_mission_id' in payload and not isinstance(payload['expected_mission_id'], str):
+                        raise MissionError('expected_mission_id must be a mission id')
+                    result = controller.stop(payload.get('expected_mission_id'))
                 elif self.path == "/land":
                     if set(payload)-{'expected_mission_id'}:
                         raise MissionError('unknown landing request fields')

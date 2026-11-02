@@ -43,6 +43,13 @@ class BridgeClient:
         accepted = self.request("/mission", {"steps": steps, "description": description})
         return self.wait_for(accepted, on_progress)
 
+    def execute_viewpoint(self, owner, batch_id, map_revision, candidate_id, ticket,
+                          description='NBV observation', on_progress=None):
+        accepted = self.request('/navigation/execute-viewpoint', {
+            'owner': list(owner), 'batch_id': batch_id, 'map_revision': map_revision,
+            'candidate_id': candidate_id, 'ticket': ticket, 'description': description})
+        return self.wait_for(accepted, on_progress)
+
     def wait_for(self, accepted, on_progress=None):
         mission_id = accepted["mission"]["id"]
         last_step = None

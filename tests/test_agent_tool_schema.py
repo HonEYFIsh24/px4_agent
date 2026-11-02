@@ -57,8 +57,9 @@ class AgentToolSchemaTests(unittest.TestCase):
         item = schema["properties"]["steps"]["items"]
         self.assertEqual(item["discriminator"]["propertyName"], "action")
         variants = {variant["properties"]["action"]["const"]: variant for variant in item["oneOf"]}
-        self.assertEqual(set(variants), {step["action"] for step in VALID_STEPS})
-        for step in VALID_STEPS:
+        variants_to_check = VALID_STEPS + [{'action': 'rotate', 'yaw_rad': .5}]
+        self.assertEqual(set(variants), {step["action"] for step in variants_to_check})
+        for step in variants_to_check:
             with self.subTest(action=step["action"]):
                 variant = variants[step["action"]]
                 self.assertEqual(set(variant["properties"]), set(step))
@@ -70,6 +71,13 @@ class AgentToolSchemaTests(unittest.TestCase):
         # discriminator references to definitions it has removed.
         self.assertNotIn("#/$defs/", json.dumps(schema))
         self.assertNotIn("$ref", json.dumps(schema))
+
+    def test_rotation_schema_is_standalone_and_rejects_bad_headings(self):
+        self.invoke([{'action': 'rotate', 'yaw_rad': .5}])
+        self.assertEqual(self.client.execute.call_args.args[0], [{'action': 'rotate', 'yaw_rad': .5}])
+        for value in (True, '1', float('nan'), float('inf'), 4.):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                self.invoke([{'action': 'rotate', 'yaw_rad': value}])
 
     def test_missionstep_legacy_construction_reads_and_flat_export_still_work(self):
         for raw in VALID_STEPS:

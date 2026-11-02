@@ -372,6 +372,12 @@ def build_search_tools(client, manager=None):
     class ExecuteTargetViewArguments(BaseModel):
         model_config = ConfigDict(extra="forbid", strict=True)
 
+    class SelectTargetViewArguments(BaseModel):
+        model_config = ConfigDict(extra="forbid", strict=True)
+        batch_id: str = Field(pattern=r'^[0-9a-f]{32}$', description='Current batch_id returned by next_target_search_view')
+        candidate_id: str = Field(pattern=r'^view_[0-9]{3}$', description='One ID from the current offered candidates; no coordinates')
+        reason: str = Field(min_length=1, max_length=300, description='Reason grounded in current images, task and candidate metrics')
+
     class TurnSearchTool(StructuredTool):
         @property
         def tool_call_schema(self):
@@ -451,7 +457,7 @@ def build_search_tools(client, manager=None):
             if step is None or manager.adaptive.sessions[owner]['arrived']:
                 return manager.adaptive.summary(owner)
             manager.check_mission(owner, [step])
-            result = client.execute([step], "自主搜索：执行已验证的下一观察点")
+            result = manager.adaptive.execute_pending(owner, "自主搜索：执行已验证的下一观察点")
             if (result.get('mission') or {}).get('status') == 'succeeded':
                 manager.adaptive.sessions[owner]['arrived'] = True
             return manager._audit("execute_mission", result)
@@ -459,8 +465,22 @@ def build_search_tools(client, manager=None):
             manager.adaptive.fail(runtime_owner(runtime), str(exc))
             return manager._audit("execute_mission", {"status": "error", "error": str(exc)[:500]})
 
+    def select_target_search_view(batch_id: str, candidate_id: str, reason: str, runtime: ToolRuntime) -> dict:
+        """Choose one offered path-verified NBV candidate by ID, without flying.
+
+        Only used when next_tool requests this selection. Use its current batch
+        ID and candidates, compare the actual image/task with predicted gains
+        and costs. Then observe_target_search_view executes the private ticket.
+        """
+        try:
+            return manager._audit('select_target_search_view',
+                manager.adaptive.select_nbv(runtime_owner(runtime), batch_id, candidate_id, reason))
+        except Exception as exc:
+            return audited_error('select_target_search_view', exc)
+
     return ([TurnSearchTool.from_function(plan_region_search, args_schema=SearchPlanArguments),
              TurnSearchTool.from_function(search_observation_status, args_schema=SearchStatusArguments),
              TurnSearchTool.from_function(begin_target_search, args_schema=TargetSearchArguments),
              TurnSearchTool.from_function(next_target_search_view, args_schema=TargetViewArguments),
+             TurnSearchTool.from_function(select_target_search_view, args_schema=SelectTargetViewArguments),
              TurnSearchTool.from_function(execute_target_search_view, args_schema=ExecuteTargetViewArguments)], manager)

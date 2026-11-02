@@ -282,6 +282,50 @@ class ReliabilityBridgeTests(unittest.TestCase):
     def request(self, kind, duration=2.):
         self.parameter = fault_request(kind, duration, kind, self.fixture.fixture.wall_time+1700000000.)
 
+    def test_pose_drop_affects_only_receipt_and_recovers_after_expiry(self):
+        controller = self.controller
+        old_pose, old_time = controller.pose, controller.pose_time
+        self.request('pose_drop')
+        self.fixture.fixture.wall_time += .11
+        message = navigation_contract.pose_message([1., 2., 3.5], stamp=11.)
+        controller.on_pose(message)
+        self.assertIs(controller.pose, old_pose)
+        self.assertEqual(controller.pose_time, old_time)
+        state = controller.reliability_faults.snapshot(True)
+        self.assertEqual(state['fault_id'], 'pose_drop')
+        self.assertEqual(state['dropped_count'], 1)
+        self.assertEqual(message.header.stamp.to_sec(), 11.)
+        self.fixture.fixture.wall_time += 2.1
+        controller.on_pose(message)
+        self.assertIs(controller.pose, message)
+        self.assertEqual(controller.pose_time, self.fixture.fixture.wall_time)
+
+    def test_rotation_pose_watchdog_requests_one_owned_landing(self):
+        c = self.controller
+        c.state_msg.armed, c.state_msg.mode = True, 'OFFBOARD'
+        c.mission = {'id': 'rotation-1', 'action': 'rotate', 'status': 'running'}
+        c.pose_time = self.fixture.fixture.wall_time - 1.1
+        c.emergency_land = mock.Mock()
+        c.rotation_pose_safety_landing()
+        c.rotation_pose_safety_landing()
+        c.emergency_land.assert_called_once_with(expected_mission_id='rotation-1')
+        self.assertEqual(c.log.call_args.kwargs['mission_id'], 'rotation-1')
+
+    def test_pose_watchdog_requires_rotation_and_staleness(self):
+        c = self.controller
+        c.state_msg.armed, c.state_msg.mode = True, 'OFFBOARD'
+        c.emergency_land = mock.Mock()
+        for mission, age in [({'id': 'a', 'action': 'rotate', 'status': 'running'}, .5),
+                             ({'id': 'b', 'action': 'goto', 'status': 'running'}, 2.),
+                             ({'id': 'c', 'action': 'rotate', 'status': 'cancelled'}, 2.),
+                             ({'id': 'd', 'action': 'rotate', 'status': 'failed', 'error': 'other'}, 2.)]:
+            c.mission, c.pose_time = mission, self.fixture.fixture.wall_time-age
+            c.rotation_pose_safety_landing()
+        c.emergency_land.assert_not_called()
+        c.mission = {'id': 'e', 'action': 'rotate', 'status': 'failed', 'error': 'pose is stale'}
+        c.rotation_pose_safety_landing()
+        c.emergency_land.assert_called_once_with(expected_mission_id='e')
+
     def raw_scan(self, elapsed=.1):
         fixture = self.fixture.fixture
         fixture.wall_time += elapsed

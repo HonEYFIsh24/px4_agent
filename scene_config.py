@@ -12,6 +12,7 @@ DEFAULT_MANIFEST = ROOT / "scene/runtime_manifest.json"
 OBSTACLE_WORLD = ROOT / "scene/worlds/obstacle_yard.world"
 OBSTACLE_MANIFEST = ROOT / "scene/obstacle_manifest.json"
 RELIABILITY_SCENE_ROOT = ROOT / "scene/reliability"
+STATIC_TEST_SCENE_ROOT = ROOT / "scene/test_environments"
 
 
 def reliability_manifest(world, digest):
@@ -21,7 +22,11 @@ def reliability_manifest(world, digest):
     world files still cannot acquire these navigation assumptions by supplying
     an arbitrary manifest.
     """
-    directory = RELIABILITY_SCENE_ROOT.resolve()
+    return registered_manifest(world, digest, RELIABILITY_SCENE_ROOT)
+
+
+def registered_manifest(world, digest, root):
+    directory = Path(root).resolve()
     if world.parent != directory:
         return None
     index = directory / "index.json"
@@ -69,9 +74,13 @@ def load_scene(world_path=None, manifest_path=None, navigation_mode="lidar_grid"
                Path(OBSTACLE_WORLD).resolve(): Path(OBSTACLE_MANIFEST).resolve()}
     expected_manifest = trusted.get(world)
     reliability = False
+    static_test = False
     if expected_manifest is None:
         expected_manifest = reliability_manifest(world, digest)
         reliability = expected_manifest is not None
+    if expected_manifest is None:
+        expected_manifest = registered_manifest(world, digest, STATIC_TEST_SCENE_ROOT)
+        static_test = expected_manifest is not None
     if expected_manifest is None or Path(manifest_path or expected_manifest).resolve() != expected_manifest:
         return unknown
     manifest = json.loads(expected_manifest.read_text())
@@ -91,12 +100,15 @@ def load_scene(world_path=None, manifest_path=None, navigation_mode="lidar_grid"
             "ground_plane": {"known": True, "z_m": z, "bounds_xy_m": bounds},
             "flight_region": {"frame": "gazebo_world", "bounds_min_m": minimum,
                               "bounds_max_m": maximum, "margin_m": margin}}
-    if world == Path(OBSTACLE_WORLD).resolve() or reliability:
+    if world == Path(OBSTACLE_WORLD).resolve() or reliability or static_test:
         navigation = manifest["navigation"]
         nav_bounds = [number(v, "navigation bounds") for v in navigation["bounds_xy_m"]]
         altitude = number(navigation["flight_altitude_m"], "navigation altitude", 1, 5)
         clearance = number(navigation["minimum_clearance_m"], "navigation clearance", 1, 2)
-        if (navigation.get("enabled") is not True or navigation.get("method") != "lidar_grid"
+        declared_method = 'static_3d' if static_test else 'lidar_grid'
+        if static_test and navigation_mode != 'static_3d':
+            raise MissionError('registered static test environment requires static_3d navigation')
+        if (navigation.get("enabled") is not True or navigation.get("method") != declared_method
                 or len(nav_bounds) != 4 or nav_bounds != [minimum[0], minimum[1], maximum[0], maximum[1]]):
             raise MissionError("invalid autonomous navigation scene contract")
         pad = manifest["takeoff_pad"]
@@ -110,8 +122,8 @@ def load_scene(world_path=None, manifest_path=None, navigation_mode="lidar_grid"
                                  "radius_m": number(pad["radius_m"], "takeoff pad radius", .5, 2),
                                  "vertical_clearance_m": number(pad["vertical_clearance_m"], "pad clearance", 5, 10)}
     if navigation_mode == "static_3d":
-        if world != Path(OBSTACLE_WORLD).resolve():
-            raise MissionError("static 3-D navigation is supported only in the verified obstacle yard")
+        if world != Path(OBSTACLE_WORLD).resolve() and not static_test:
+            raise MissionError("static 3-D navigation requires the verified obstacle yard or a registered static test environment")
         result["navigation"].update(method="static_3d", altitude_mode="variable",
             flight_altitude_m=5., min_altitude_m=1., max_altitude_m=10.,
             source="verified_static_collision_map_3d",

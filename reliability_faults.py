@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 FAULT_PARAMETER = "/uav_agent_executor/reliability_fault"
 FAULT_KINDS = ("lidar_drop", "lidar_delay", "lidar_invalid", "lidar_near_obstacle",
-               "vio_drop", "vio_tracking_loss", "vio_reset")
+               "vio_drop", "vio_tracking_loss", "vio_reset", "pose_drop")
 MAX_DURATION_S = 30.
 
 
@@ -345,3 +345,17 @@ class ReliabilityFaults:
                     forced_tracking_ok=False if kind == "vio_tracking_loss" else None,
                     used_for_flight_control=False)
         return "drop" if dropped else "tracking_false"
+
+    def drop_pose(self, stamp, navigation_active=False):
+        """Drop only the controller's local pose receipt, never the ROS source."""
+        active = self.refresh(navigation_active)
+        if not active or active["kind"] != "pose_drop":
+            return False
+        with self.lock:
+            self.applied_count += 1
+            self.dropped_count += 1
+            self._event("sample", fault_id=active["id"], kind="pose_drop",
+                        source_topic="/mavros/local_position/pose",
+                        source_stamp_sim_s=stamp, dropped=True,
+                        used_for_flight_control=True)
+        return True

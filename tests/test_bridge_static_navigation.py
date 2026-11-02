@@ -15,10 +15,306 @@ class StaticBridgeTests(unittest.TestCase):
         self.c.scene=load_scene(OBSTACLE_WORLD,navigation_mode='static_3d')
         self.c.world_path=OBSTACLE_WORLD
 
+    def test_observation_geometry_uses_saved_capture_and_rejects_re_registration(self):
+        from test_semantic_map import navigator, observation, EPOCH
+        nav = navigator()
+        frame, _, geometry = observation(nav)
+        snapshot = frame['snapshot']
+        self.c.navigation_map = nav
+        self.c.stereo_reports = mock.Mock()
+        self.c.stereo_reports.observation_metadata.return_value = {
+            'navigation_registration_id': nav.registration_id,
+            'body_pose_enu': snapshot['body_pose_enu'], 'coordinate_epoch': EPOCH,
+            'camera_info_for_visibility': snapshot['camera_intrinsics'],
+            'stamp_sim_s': snapshot['stamp_sim_s'], 'image_sha256': snapshot['stereo_image_sha256']}
+        self.c.ev_guard = mock.Mock()
+        self.c.ev_guard.snapshot.return_value = {'adapter': {'epoch': 0},
+            'ekf': {'local_position_reset_counters': EPOCH['ekf_counters']}}
+        result = self.c.observation_geometry(snapshot['stereo_pair_id'], [0., 0.])
+        self.assertEqual(result['visible_cell_ids'], geometry['visible_cell_ids'])
+        self.assertEqual(result['body_pose_enu'], snapshot['body_pose_enu'])
+        self.assertIsNone(self.c.worker)
+        nav.registration_id = 'another-registration'
+        with self.assertRaisesRegex(MissionError, 'another sortie'):
+            self.c.observation_geometry(snapshot['stereo_pair_id'], [0., 0.])
+        self.c.ev_guard.snapshot.return_value['adapter']['epoch'] = 1
+        with self.assertRaises(MissionError):
+            self.c.observation_geometry(snapshot['stereo_pair_id'], [0., 0.])
+
     def test_hold_preserves_current_height_in_variable_height_mode(self):
         self.fixture.set_pose([0.,0.,8.])
         self.c.navigation_hold()
         self.assertEqual(self.c.target,[0.,0.,8.])
+
+    def prepare_viewpoint_capture(self):
+        from test_semantic_map import navigator, observation, EPOCH
+        from viewpoint_planner import map_identity
+        from semantic_map import SemanticMap
+        nav = navigator()
+        frame, _, geometry = observation(nav)
+        self.fixture.set_pose([0., 0., 3.])
+        self.c.navigation_map = nav
+        self.c.navigation_active = True
+        self.c.state_msg.armed, self.c.landed = True, 2
+        self.c.ev_guard = mock.Mock()
+        self.c.ev_guard.reason.return_value = None
+        self.c.ev_guard.snapshot.return_value = {'adapter': {'epoch': 0},
+            'ekf': {'local_position_reset_counters': EPOCH['ekf_counters']}}
+        self.c.stereo_reports = mock.Mock()
+        self.c.stereo_reports.observation_metadata.return_value = {
+            'navigation_registration_id': nav.registration_id, 'coordinate_epoch': EPOCH,
+            'stamp_sim_s': 1., 'body_pose_enu': frame['snapshot']['body_pose_enu'],
+            'camera_info_for_visibility': frame['snapshot']['camera_intrinsics']}
+        return nav, map_identity(SemanticMap(('test', 'turn'), geometry))
+
+    def owned_viewpoint(self):
+        nav, identity = self.prepare_viewpoint_capture()
+        self.c.home = [0., 0., 0.]
+        context = {'owner': ['thread', 'task'], 'map_revision': 'b'*64, 'batch_id': 'a'*32}
+        self.c.evaluate_viewpoints('context', 'pair', [0., 0.], identity, [], context)
+        result = self.c.evaluate_viewpoints('paths', 'pair', [0., 0.], identity,
+            [{'id': 'view_001', 'position_enu_m': [1., 0., 4.]}], context)
+        return nav, context, result['results'][0]['execution_ticket']
+
+    def prepare_rotation(self):
+        nav, _ = self.prepare_viewpoint_capture()
+        self.c.state_msg.armed = True
+        self.c.state_msg.mode = 'OFFBOARD'
+        self.c.landed = 2
+        self.c.ev_guard.required = True
+        self.c.ev_guard.reason.return_value = None
+        self.c.ev_guard.snapshot.return_value['ekf']['fusion_active'] = True
+        return nav
+
+    def test_internal_rotation_holds_actual_position_and_checks_real_pose(self):
+        self.prepare_rotation()
+        initial = self.c.position()
+        def exercise(policy, **callbacks):
+            callbacks['checkpoint']()
+            actual = callbacks['read_pose']()
+            self.assertAlmostEqual(actual['actual_rad'], 0.)
+            self.assertEqual(actual['position'], initial)
+            callbacks['set_heading'](.2)
+            self.assertEqual(self.c.target, initial)
+            self.assertEqual(self.c.commanded, initial)
+            # No synthetic arrival: return only a fixture outcome.
+            return {'status': 'fixture', 'stamp_s': 10.}
+        with mock.patch('yaw_control.run_rotation', side_effect=exercise):
+            self.assertEqual(self.c.rotate_heading(.3)['status'], 'fixture')
+        self.assertAlmostEqual(self.c.yaw, .2)
+        self.assertEqual(self.c.yaw_capture_barrier, 10.)
+
+    def test_rotation_failure_freezes_position_and_actual_heading(self):
+        self.prepare_rotation()
+        def fail(policy, **callbacks):
+            callbacks['set_heading'](.5)
+            raise ValueError('controlled stale sample')
+        with mock.patch('yaw_control.run_rotation', side_effect=fail):
+            with self.assertRaisesRegex(ValueError, 'stale'):
+                self.c.rotate_heading(1.)
+        self.assertAlmostEqual(self.c.yaw, 0.)
+        self.assertEqual(self.c.target, self.c.position())
+
+    def test_rotation_rejects_inactive_fusion_before_heading_change(self):
+        self.prepare_rotation()
+        self.c.ev_guard.snapshot.return_value['ekf']['fusion_active'] = False
+        with self.assertRaisesRegex(MissionError, 'fusion'):
+            self.c.rotate_heading(1.)
+        self.assertEqual(self.c.yaw, 0.)
+
+    def test_rotation_pose_detects_epoch_change_during_operation(self):
+        self.prepare_rotation()
+        def reset(policy, **callbacks):
+            self.c.ev_guard.snapshot.return_value['adapter']['epoch'] = 1
+            with self.assertRaisesRegex(ValueError, 'identity'):
+                pose = callbacks['read_pose']()
+                policy.observe(**pose, wall_s=self.fixture.fixture.wall_time)
+            raise ValueError('coordinate reset')
+        with mock.patch('yaw_control.run_rotation', side_effect=reset):
+            with self.assertRaisesRegex(ValueError, 'coordinate reset'):
+                self.c.rotate_heading(.5)
+        self.assertEqual(self.c.target, self.c.position())
+
+    def test_rotation_requires_offboard_before_heading_change(self):
+        self.prepare_rotation()
+        self.c.state_msg.mode = 'POSCTL'
+        with self.assertRaisesRegex(MissionError, 'OFFBOARD'):
+            self.c.rotate_heading(.5)
+        self.assertEqual(self.c.yaw, 0.)
+
+    def test_rotation_action_requires_opt_in_and_standalone_step(self):
+        self.prepare_rotation()
+        with mock.patch.dict('os.environ', {'UAV_ENABLE_YAW': '0'}):
+            with self.assertRaisesRegex(MissionError, 'experimental'):
+                self.c.submit([{'action': 'rotate', 'yaw_rad': .2}])
+        with mock.patch.dict('os.environ', {'UAV_ENABLE_YAW': '1'}):
+            with self.assertRaisesRegex(MissionError, 'standalone'):
+                self.c.submit([{'action': 'rotate', 'yaw_rad': .2}, {'action': 'land'}])
+        self.assertIsNone(self.c.worker)
+
+    def test_active_nbv_search_cannot_use_unscoped_rotation(self):
+        self.owned_viewpoint()
+        with mock.patch.dict('os.environ', {'UAV_ENABLE_YAW': '1'}), \
+             mock.patch.object(self.c, 'validate_scene_steps'):
+            with self.assertRaisesRegex(MissionError, 'active NBV search'):
+                self.c.submit([{'action': 'rotate', 'yaw_rad': .2}])
+        self.assertIsNone(self.c.worker)
+
+    def test_owned_heading_ticket_schedules_move_then_exact_rotation_and_blocks_capture(self):
+        import math
+        nav, identity = self.prepare_viewpoint_capture()
+        self.c.home = [0., 0., 0.]
+        context = {'owner': ['thread', 'task'], 'map_revision': 'b'*64, 'batch_id': 'a'*32}
+        with mock.patch.dict('os.environ', {'UAV_ENABLE_YAW': '1', 'UAV_ENABLE_NBV_YAW': '1'}), \
+             mock.patch.object(self.c, 'validate_scene_steps'), \
+             mock.patch.object(nav_fixture.bridge.threading, 'Thread'):
+            self.c.evaluate_viewpoints('context', 'pair', [0., 0.], identity, [], context)
+            result = self.c.evaluate_viewpoints('paths', 'pair', [0., 0.], identity,
+                [{'id': 'view_001', 'position_enu_m': [1., 0., 4.], 'heading_step': 1}], context)
+            ticket = result['results'][0]['execution_ticket']
+            mission = self.c.execute_viewpoint(context['owner'], context['batch_id'], context['map_revision'],
+                                               'view_001', ticket)['mission']
+            self.assertEqual([s['action'] for s in mission['steps']], ['goto', 'rotate'])
+            self.assertAlmostEqual(mission['steps'][1]['yaw_rad'], math.pi/4)
+            self.assertEqual(self.c.yaw_capture_barrier, float('inf'))
+            with self.assertRaises(MissionError):
+                self.c.execute_viewpoint(context['owner'], context['batch_id'], context['map_revision'], 'view_001', ticket)
+
+    def test_heading_cannot_be_forged_through_regular_search_mission(self):
+        self.owned_viewpoint()
+        with mock.patch.dict('os.environ', {'UAV_ENABLE_YAW': '1', 'UAV_ENABLE_NBV_YAW': '1'}), \
+             mock.patch.object(self.c, 'validate_scene_steps'):
+            with self.assertRaises(MissionError):
+                self.c.submit([{'action': 'goto', 'x': 1., 'y': 0., 'altitude': 4.},
+                               {'action': 'rotate', 'yaw_rad': 2.}])
+
+    def test_rotation_mission_clears_barrier_only_with_actual_arrival_evidence(self):
+        self.prepare_rotation()
+        def reached(target):
+            self.c.yaw_capture_barrier = 12.5
+            return {'status': 'reached', 'target_rad': target, 'actual_rad': .19,
+                    'stamp_s': 12.5, 'elapsed_s': 1.2}
+        with mock.patch.dict('os.environ', {'UAV_ENABLE_YAW': '1'}), \
+             mock.patch.object(self.c, 'validate_scene_steps'), \
+             mock.patch.object(nav_fixture.bridge.threading, 'Thread'), \
+             mock.patch.object(self.c, 'rotate_heading', side_effect=reached):
+            self.c.submit([{'action': 'rotate', 'yaw_rad': .2}])
+            self.assertEqual(self.c.yaw_capture_barrier, float('inf'))
+            self.c.run_mission()
+        self.assertEqual(self.c.mission['status'], 'succeeded')
+        self.assertEqual(self.c.yaw_capture_barrier, 12.5)
+        self.assertEqual(self.c.mission['events'][0]['rotation']['actual_rad'], .19)
+
+    def test_failed_rotation_keeps_image_barrier_closed(self):
+        self.prepare_rotation()
+        with mock.patch.dict('os.environ', {'UAV_ENABLE_YAW': '1'}), \
+             mock.patch.object(self.c, 'validate_scene_steps'), \
+             mock.patch.object(nav_fixture.bridge.threading, 'Thread'), \
+             mock.patch.object(nav_fixture.bridge.rospy, 'logerr', create=True), \
+             mock.patch.object(self.c, 'rotate_heading', side_effect=ValueError('pose stale')):
+            self.c.submit([{'action': 'rotate', 'yaw_rad': .2}])
+            self.c.run_mission()
+        self.assertEqual(self.c.mission['status'], 'failed')
+        self.assertEqual(self.c.yaw_capture_barrier, float('inf'))
+
+    def test_scoped_stop_cannot_cancel_a_different_mission(self):
+        self.prepare_rotation()
+        self.c.mission = {'id': 'current', 'status': 'running'}
+        self.c.target = self.c.position()
+        with self.assertRaisesRegex(MissionError, 'another flight'):
+            self.c.stop('earlier')
+        self.assertFalse(self.c.cancel.is_set())
+        with mock.patch.object(self.c, 'snapshot', return_value={'ready': True}):
+            result = self.c.stop('current')
+        self.assertTrue(self.c.cancel.is_set())
+        self.assertTrue(result['holding'])
+
+    def test_confirmation_probes_use_raw_occlusion_without_changing_navigation(self):
+        nav, identity = self.prepare_viewpoint_capture()
+        nav.raw_boxes = [([2.9, -1., 0.], [3.6, 1., 4.])]
+        nav.last_plan = {'executing': 'keep'}
+        result = self.c.evaluate_viewpoints('visibility', 'pair', [0., 0.], identity,
+            [{'id': 'view_001', 'position_enu_m': [0., 0., 3.]}],
+            probe_points_enu_m=[[5., 0., 1.], [5., 4., 1.]])
+        probes = result['results'][0]['probe_visibility']
+        self.assertFalse(probes[0]['unoccluded'])
+        self.assertTrue(probes[1]['unoccluded'])
+        self.assertEqual(nav.last_plan, {'executing': 'keep'})
+        self.assertIsNone(self.c.worker)
+
+    def test_owned_ticket_submits_cached_goal_and_actual_planning_retains_scope(self):
+        nav, context, ticket = self.owned_viewpoint()
+        with mock.patch.object(nav_fixture.bridge.threading, 'Thread'):
+            result = self.c.execute_viewpoint(context['owner'], context['batch_id'], context['map_revision'],
+                                             'view_001', ticket)
+        self.assertEqual(result['mission']['steps'], [{'action': 'goto', 'x': 1., 'y': 0., 'altitude': 4.}])
+        self.assertEqual(result['mission']['search_constraint']['origin_xy_enu_m'], [0., 0.])
+        self.c.checkpoint = mock.Mock()
+        self.c.wait_until = mock.Mock()
+        with mock.patch.object(nav, 'plan', wraps=nav.plan) as planner:
+            self.c.move_static([1., 0., 4.])
+        self.assertEqual(planner.call_args.kwargs['search_origin_xy'], [0., 0.])
+        self.assertEqual(planner.call_args.kwargs['search_radius_m'], 12.)
+        self.assertTrue(self.c.mission['navigation_plans'][0]['plan']['full_route_within_search_volume'])
+
+    def test_active_nbv_search_cannot_bypass_ticket_with_generic_goto(self):
+        self.owned_viewpoint()
+        with self.assertRaisesRegex(MissionError, 'candidate ticket'):
+            self.c.submit([{'action': 'goto', 'x': 1., 'y': 0., 'altitude': 4.}])
+        self.assertIsNone(self.c.worker)
+
+    def test_revoked_search_still_allows_independent_landing(self):
+        self.owned_viewpoint()
+        self.c.search_authority().revoke()
+        self.c.landing_ready = mock.Mock()
+        self.c.landing_snapshot = mock.Mock(return_value={'fresh': True})
+        with mock.patch.object(nav_fixture.bridge.threading, 'Thread'):
+            result = self.c.submit([{'action': 'land'}])
+        self.assertNotIn('search_constraint', result['mission'])
+
+    def test_executor_checks_scope_epoch_again_before_any_movement(self):
+        _, context, ticket = self.owned_viewpoint()
+        with mock.patch.object(nav_fixture.bridge.threading, 'Thread'):
+            self.c.execute_viewpoint(context['owner'], context['batch_id'], context['map_revision'], 'view_001', ticket)
+        self.c.ev_guard.snapshot.return_value['adapter']['epoch'] += 1
+        with self.assertRaisesRegex(MissionError, 'identity or task ownership changed'):
+            self.c.checkpoint()
+
+    def test_viewpoint_query_is_read_only_and_preserves_the_executing_plan(self):
+        nav, identity = self.prepare_viewpoint_capture()
+        nav.last_plan = {'executing': 'keep'}
+        result = self.c.evaluate_viewpoints('paths', 'pair', [0., 0.], identity,
+            [{'id': 'view_001', 'position_enu_m': [2., 0., 5.]}])
+        self.assertTrue(result['prediction_only'])
+        self.assertTrue(result['results'][0]['reachable'])
+        self.assertEqual(result['fixed_yaw_enu_rad'], self.c.yaw)
+        self.assertEqual(nav.last_plan, {'executing': 'keep'})
+        self.assertIsNone(self.c.worker)
+        self.assertIsNone(self.c.mission)
+
+    def test_viewpoint_geometry_does_not_hold_publisher_lock_and_rejects_mid_query_reset(self):
+        nav, identity = self.prepare_viewpoint_capture()
+        original = nav.observation_visibility
+        def query(*args, **kwargs):
+            self.assertFalse(self.c.lock._is_owned())
+            result = original(*args, **kwargs)
+            self.c.ev_guard.snapshot.return_value['adapter']['epoch'] = 1
+            return result
+        with mock.patch.object(nav, 'observation_visibility', side_effect=query):
+            with self.assertRaisesRegex(MissionError, 'identity or capture epoch changed'):
+                self.c.evaluate_viewpoints('visibility', 'pair', [0., 0.], identity,
+                    [{'id': 'view_001', 'position_enu_m': [0., 2., 3.]}])
+        self.assertIsNone(self.c.worker)
+
+    def test_viewpoint_query_rejects_running_flight_or_guard_failure(self):
+        _, identity = self.prepare_viewpoint_capture()
+        self.c.mission = {'status': 'running'}
+        with self.assertRaisesRegex(MissionError, 'stable airborne'):
+            self.c.evaluate_viewpoints('context', 'pair', [0., 0.], identity, [])
+        self.c.mission = None
+        self.c.ev_guard.reason.return_value = 'coordinate reset'
+        with self.assertRaisesRegex(MissionError, 'coordinate reset'):
+            self.c.evaluate_viewpoints('context', 'pair', [0., 0.], identity, [])
 
     def test_horizontal_lidar_does_not_reimpose_old_height_gate(self):
         self.fixture.set_pose([0.,0.,8.])
@@ -69,9 +365,11 @@ class StaticBridgeTests(unittest.TestCase):
         navigator.bind(self.c.position(), [q.x, q.y, q.z, q.w], body)
         self.c.navigation_map = navigator
         self.c.navigation_active = True
+        navigator.last_plan = {'executing': 'preserve during legacy preview'}
         with mock.patch.object(StaticNavigator, 'from_scene', side_effect=AssertionError('must not re-register mid-sortie')):
             self.c.validate_scene_steps([{'action': 'goto', 'x': 0., 'y': 0., 'altitude': 5.}])
             self.assertTrue(self.c.preview_navigation([0., 0., 5.])['reachable'])
+        self.assertEqual(navigator.last_plan, {'executing': 'preserve during legacy preview'})
 
     def test_static_cruise_speeds_up_but_approach_and_tracking_lag_slow_down(self):
         self.fixture.set_pose([0., 0., 3.])

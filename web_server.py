@@ -47,6 +47,32 @@ def reply_text(message):
     return str(content)
 
 
+def multiview_search_result(command):
+    """Render class-confirmation outcome from tool facts, not final model prose."""
+    progress = [e['result'] for e in command.get('search_events', [])
+                if isinstance(e.get('result'), dict) and e['result'].get('target_confirmation_mode') == 'multiview']
+    if not progress:
+        return None
+    last = progress[-1]
+    reviews = [e for e in command.get('target_confirmation_events', [])
+               if e.get('outcome') in ('confirmed', 'rejected', 'unconfirmed')]
+    confirmed = last.get('search_status') == 'target_found' and any(e['outcome'] == 'confirmed' for e in reviews)
+    outcome = {'target_confirmed': confirmed, 'query': last.get('query'),
+               'search_status': last.get('search_status'), 'review_count': len(reviews),
+               'observation_count': len(command.get('perceptions', [])),
+               'basis': 'structured_search_and_confirmation_tools'}
+    reply = ('本次多视角确认流程已确认目标：'+str(last.get('query'))+'。' if confirmed else
+             '本次搜索尚未完成目标的多视角确认。')
+    if last.get('search_status') == 'budget_exhausted':
+        reply += '搜索预算已用尽。'
+    reply += '已保存{}次观察报告，完成{}次候选复核。'.format(outcome['observation_count'], len(reviews))
+    if not confirmed and reviews:
+        reply += '候选复核未满足确认条件，不能把模型的目标描述当成已确认结果。'
+    if completed_flight_evidence(command.get('tool_results', [])):
+        reply += '已完成降落并上锁。'
+    return outcome, reply
+
+
 def result_error(value, require_completed=False):
     if not isinstance(value, dict):
         return "工具没有返回有效的状态对象"
@@ -157,14 +183,35 @@ class AuditedClient:
                         result = {"status": "error", "error": command["vision_failure"] + "；本指令后续报告不再采纳",
                                   "targets": [], "limitations": []}
                 command["tool_results"].append((tool_name, copy.deepcopy(result)))
+                if tool_name == 'semantic_map':
+                    command.setdefault('semantic_map_events', []).append(copy.deepcopy(result))
+                if tool_name == 'nbv_prediction':
+                    command.setdefault('nbv_events', []).append(copy.deepcopy(result))
+                if tool_name == 'nbv_candidates':
+                    command.setdefault('nbv_candidate_events', []).append(copy.deepcopy(result))
+                if tool_name == 'target_confirmation':
+                    command.setdefault('target_confirmation_events', []).append(copy.deepcopy(result))
                 if tool_name in ('/mission','/land') and isinstance(result,dict):
                     accepted_mission=result.get('mission')
                     if isinstance(accepted_mission,dict) and isinstance(accepted_mission.get('id'),str):
                         command.setdefault('flight_missions',[]).append({
                             'path':tool_name,'wall_s':time.time(),
+                            'accepted_via': result.get('accepted_via', tool_name),
                             'mission':self.application.clean_perception(accepted_mission)})
+                if tool_name in ('execute_mission', 'land_drone') and isinstance(result, dict):
+                    mission = result.get('mission')
+                    accepted_ids = {item['mission']['id'] for item in command.get('flight_missions', [])}
+                    if (isinstance(mission, dict) and mission.get('id') in accepted_ids
+                            and mission.get('status') in ('succeeded', 'failed', 'cancelled')):
+                        # Keep completed plans before the next mission replaces
+                        # /state. Repeated middleware auditing must not duplicate them.
+                        cleaned = self.application.clean_perception(mission)
+                        history = command.setdefault('flight_mission_results', [])
+                        if not any(item['mission'] == cleaned for item in history):
+                            history.append({'wall_s': time.time(), 'mission': cleaned})
                 if tool_name in ('plan_region_search', 'search_observation_status', 'search_progress',
-                                 'begin_target_search', 'next_target_search_view', 'target_search_progress'):
+                                 'begin_target_search', 'next_target_search_view', 'select_target_search_view',
+                                 'review_target_candidate', 'target_search_progress'):
                     event = {'tool': tool_name, 'result': self.application.clean_perception(result), 'wall_s': time.time()}
                     command.setdefault('search_events', []).append(event)
                     if tool_name == 'plan_region_search' and result.get('status') == 'ok':
@@ -206,10 +253,18 @@ class AuditedClient:
                     p['targets'] = [{'label': t.get('label')} for t in raw.get('targets', [])]
                 record['mission'] = {key: copy.deepcopy((command.get('mission') or {}).get(key))
                                      for key in ('status', 'action')}
+                reviews = [e for e in command.get('target_confirmation_events', [])
+                           if e.get('outcome') in ('confirmed', 'rejected', 'unconfirmed')]
+                if reviews:
+                    record['target_confirmation_reviews'] = [{
+                        'query': e.get('query'), 'outcome': e['outcome'],
+                        'source_capture_id': (e.get('candidate') or {}).get('source_capture_id'),
+                        'current_capture_id': (e.get('candidate') or {}).get('current_capture_id'),
+                        'reason': str(e.get('reason', ''))[:240]} for e in reviews[-8:]]
                 records.append(record)
             return records
 
-    def request(self, path, payload=None):
+    def request(self, path, payload=None, timeout=None):
         if payload is None:
             return self.application.client.request(path)
         try:
@@ -218,18 +273,24 @@ class AuditedClient:
                     command = self.application.current_command
                     if command is not None and command.get("interrupted"):
                         raise RuntimeError("操作员已中断此指令，禁止继续提交飞行动作")
-                    if path in ("/mission", "/land", "/stop") and command is not None and command["mode"] == "observe":
+                    if path in ("/mission", "/land", "/stop", '/navigation/execute-viewpoint') and command is not None and command["mode"] == "observe":
                         raise RuntimeError("本次指令仅允许视觉观察，禁止提交飞行动作")
-                    if path == "/mission" and command is not None and command.get("vision_failure"):
+                    if path in ("/mission", '/navigation/execute-viewpoint') and command is not None and command.get("vision_failure"):
                         raise RuntimeError("本次视觉分析已失败，禁止据此继续提交飞行任务")
-                    if path == "/mission" and command is not None and command["flight_failure"]:
+                    if path in ("/mission", '/navigation/execute-viewpoint') and command is not None and command["flight_failure"]:
                         raise RuntimeError("此指令的飞行任务已失败，禁止自动重试；请查看状态后发布新指令")
-                result = self.application.client.request(path, payload)
+                result = (self.application.client.request(path, payload) if timeout is None else
+                          self.application.client.request(path, payload, timeout=timeout))
         except Exception as exc:
-            if path in ("/mission", "/land"):
-                self.record("execute_mission" if path == "/mission" else "land_drone",
+            if path in ("/mission", "/land", '/navigation/execute-viewpoint'):
+                self.record("land_drone" if path == "/land" else "execute_mission",
                             {"status": "error", "error": str(exc)})
             raise
+        if path == '/navigation/execute-viewpoint':
+            # Keep the existing accepted/waited mission ownership contract. The
+            # transport endpoint remains explicit and no coordinates came from LLM.
+            result = {**result, 'accepted_via': path}
+            return self.record('/mission', result)
         return self.record(path, result)
 
     def execute(self, steps, description="", on_progress=None):
@@ -240,6 +301,18 @@ class AuditedClient:
             self.record("execute_mission", {"status": "error", "error": str(exc)})
             raise
         return self.record("execute_mission", result)
+
+    def execute_viewpoint(self, owner, batch_id, map_revision, candidate_id, ticket,
+                          description='NBV observation', on_progress=None):
+        accepted = self.request('/navigation/execute-viewpoint', {
+            'owner': list(owner), 'batch_id': batch_id, 'map_revision': map_revision,
+            'candidate_id': candidate_id, 'ticket': ticket, 'description': description})
+        try:
+            result = self.application.client.wait_for(accepted, on_progress)
+        except Exception as exc:
+            self.record('execute_mission', {'status': 'error', 'error': str(exc)})
+            raise
+        return self.record('execute_mission', result)
 
     def wait_for(self, accepted, on_progress=None):
         try:
@@ -499,6 +572,11 @@ class WebApplication:
                             self.clean_error(error))
                     if command.get("safety_landing"):
                         reply += "\n指令失败后，独立执行器已完成安全降落并上锁。" if command["safety_landing"]["status"] == "ok" else "\n安全降落未确认完成，请查看飞行状态并使用立即降落。"
+                if status == 'succeeded' and command['mode'] == 'task':
+                    verified = multiview_search_result(command)
+                    if verified is not None:
+                        command['model_reply_before_search_verification'] = self.clean_error(reply)
+                        command['search_outcome'], reply = verified
                 command.update(status=status, reply=reply, error=self.clean_error(error) if error else None,
                                finished_at=time.time())
                 if mission:

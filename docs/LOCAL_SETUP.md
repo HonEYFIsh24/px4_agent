@@ -1,5 +1,7 @@
 # 本机配置记录
 
+> 本文按时间保留配置与修复历史，前段“尚未验证”等状态可能已被后段取代。新终端应先读 [项目交接与下一步](../PROJECT_HANDOFF.md)，再按需查阅本机细节。
+
 项目目录：`/home/fxxk/px4_agent`。PX4 目录：`/home/fxxk/PX4-Autopilot`。
 
 ## 已完成
@@ -123,3 +125,12 @@ iKuuu 中 PX4 DashScope 分流组仍存在，原为 Bypass node。将仅该组�
 178 个解锁状态采样中，EV 位置及高度接受融合均为 178，速度为 174，GPS 位置/高度接受融合均为 0。4 个速度未判为有效的采样均在降落阶段（landed_state=4），原记录保留；此次有限采样不能声称连续每一时刻均融合。任务结束后实际检查 VIO 三项融合与健康均恢复，坐标重置保护无锁存错误。未调用模型或发送相机图像。本轮只验证这条有限仿真航线，不替代历史原生 VIO 精度/故障全套验收。
 
 新增/相关检查：三维规划 11 项、三维执行器 4 项、静态地图搜索许可 3 项、1.14/1.15 aid schema 3 项、桌面 13 项、原二维导航 37 项、场景许可 25 项、单 VLM 38 项等均通过。原启动契约 12 项通过、1 项按环境跳过，退出/重启 5 项通过。回退旧桌面模式可用 `UAV_NAVIGATION_MODE=lidar_grid PX4_DESKTOP_EV_PROFILE=shadow bash scripts/launch_desktop.sh`。退出依然恢复原参数，下一次桌面启动重新应用所选 profile。
+
+
+### 2026-10-27：桌面启动时的继承代理冲突
+
+本轮出现另一种已定位故障：桌面进程继承 `ALL_PROXY` / `all_proxy=socks://127.0.0.1:7897`，而项目仅覆盖了 HTTP/HTTPS 变量。httpx 构造客户端时仍会解析 ALL_PROXY，因不支持 `socks://` 格式而直接报错；尚未发送模型请求。桌面退出后，生命周期管理器会关闭仿真，随后采图请求表现为本地 8765 连接被拒绝。此现象不能归因于 API Key 或 DashScope 拒绝响应。
+
+`model_network.configure_agent_network` 已修复：明确设置 `UAV_MODEL_PROXY` 时，覆盖大小写 HTTP_PROXY、HTTPS_PROXY 和 ALL_PROXY；保留现有 NO_PROXY 并加入回环地址。没有设置项目代理时不改继承环境。仍只作用于 Agent Python 进程，不修改 iKuuu 分流或系统代理。3 项配置回归和 18 项模型诊断/错误阶段测试通过。新桌面实例启动成功，实际 VIO 融合健康，原模型真实图像请求成功（5.258 秒）。证据：`logs/setup/nbv-closed-loop-20261027/startup-review.md`。
+
+这一客户端初始化错误与前一日 TLS EOF 是不同故障；不能用本次修复声称已证明先前握手中断的底层原因。

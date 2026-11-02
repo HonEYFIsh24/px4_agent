@@ -1,0 +1,283 @@
+{
+  "evaluation_only": true,
+  "objects": [
+    {
+      "id": "red_shipping_container",
+      "collision_bounds": {
+        "x": [
+          7.971,
+          14.029
+        ],
+        "y": [
+          3.781,
+          6.219
+        ],
+        "z": [
+          0.003,
+          2.594
+        ]
+      }
+    },
+    {
+      "id": "white_delivery_van",
+      "collision_bounds": {
+        "x": [
+          6.55,
+          11.35
+        ],
+        "y": [
+          -3.61,
+          -1.39
+        ],
+        "z": [
+          0.003,
+          2.788
+        ]
+      }
+    },
+    {
+      "id": "traffic_cone_1",
+      "collision_bounds": {
+        "x": [
+          7.23,
+          7.77
+        ],
+        "y": [
+          -0.57,
+          -0.03
+        ],
+        "z": [
+          0.003,
+          0.758
+        ]
+      }
+    },
+    {
+      "id": "traffic_cone_2",
+      "collision_bounds": {
+        "x": [
+          8.13,
+          8.67
+        ],
+        "y": [
+          -0.57,
+          -0.03
+        ],
+        "z": [
+          0.003,
+          0.758
+        ]
+      }
+    },
+    {
+      "id": "blue_drum",
+      "collision_bounds": {
+        "x": [
+          14.18,
+          14.82
+        ],
+        "y": [
+          4.68,
+          5.32
+        ],
+        "z": [
+          0.013,
+          0.953
+        ]
+      }
+    },
+    {
+      "id": "brick_warehouse",
+      "collision_bounds": {
+        "x": [
+          7.25,
+          16.125
+        ],
+        "y": [
+          -12.625,
+          -5.375
+        ],
+        "z": [
+          0.003,
+          5.213
+        ]
+      }
+    },
+    {
+      "id": "park_office",
+      "collision_bounds": {
+        "x": [
+          9.9,
+          16.1
+        ],
+        "y": [
+          8.9,
+          15.1
+        ],
+        "z": [
+          0.003,
+          6.283
+        ]
+      }
+    },
+    {
+      "id": "yard_tree_1",
+      "collision_bounds": {
+        "x": [
+          -10.7,
+          -7.3
+        ],
+        "y": [
+          -9.7,
+          -6.3
+        ],
+        "z": [
+          0.003,
+          5.653
+        ]
+      }
+    },
+    {
+      "id": "yard_tree_2",
+      "collision_bounds": {
+        "x": [
+          -11.6,
+          -8.4
+        ],
+        "y": [
+          6.4,
+          9.6
+        ],
+        "z": [
+          0.003,
+          5.553
+        ]
+      }
+    },
+    {
+      "id": "street_lamp_south",
+      "collision_bounds": {
+        "x": [
+          13.925,
+          14.075
+        ],
+        "y": [
+          -5.075,
+          -4.925
+        ],
+        "z": [
+          0.003,
+          6.153
+        ]
+      }
+    },
+    {
+      "id": "street_lamp_north",
+      "collision_bounds": {
+        "x": [
+          14.925,
+          15.075
+        ],
+        "y": [
+          6.925,
+          7.075
+        ],
+        "z": [
+          0.003,
+          6.153
+        ]
+      }
+    },
+    {
+      "id": "north_fence",
+      "collision_bounds": {
+        "x": [
+          -19.0,
+          19.0
+        ],
+        "y": [
+          18.94,
+          19.06
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      }
+    },
+    {
+      "id": "south_fence",
+      "collision_bounds": {
+        "x": [
+          -19.0,
+          19.0
+        ],
+        "y": [
+          -19.06,
+          -18.94
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      }
+    },
+    {
+      "id": "east_fence",
+      "collision_bounds": {
+        "x": [
+          19.88,
+          20.0
+        ],
+        "y": [
+          -19.0,
+          19.0
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      }
+    },
+    {
+      "id": "west_fence",
+      "collision_bounds": {
+        "x": [
+          -19.06,
+          -18.94
+        ],
+        "y": [
+          -19.0,
+          19.0
+        ],
+        "z": [
+          0.003,
+          1.803
+        ]
+      }
+    },
+    {
+      "id": "courtyard_screen",
+      "collision_bounds": {
+        "x": [
+          3.5,
+          4.5
+        ],
+        "y": [
+          -4.5,
+          1.5
+        ],
+        "z": [
+          0.003,
+          3.503
+        ]
+      }
+    }
+  ],
+  "target_ids": [
+    "white_delivery_van",
+    "traffic_cone_1",
+    "traffic_cone_2"
+  ],
+  "changes": "new screen height, vehicle/cargo/cone/building layout; baseline worlds untouched"
+}

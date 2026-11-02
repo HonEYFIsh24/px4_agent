@@ -36,6 +36,9 @@ capture_scene 只采图，不完成观察。没有图像或报告工具失败时
 report_scene 的 capture_id 必须来自本次指令成功取得的快照，不能使用上一轮快照。
 只根据该帧可见证据判断，未发现只表示当前视野未确认；不要猜测视野外或被遮挡物体。
 targets 最多8项，bbox为归一化[左,上,右,下]，0≤左<右≤1、0≤上<下≤1。
+targets必须是JSON数组，不是字符串；没有可辨认目标时使用空数组[]，不要用全零bbox占位。
+targets优先记录搜索目标，并记录与用户描述的空间关系有关的实际可见地标；
+地标也需要当前图像中的真实bbox，不从摘要、静态地图或常识补造物体。可见颜色写入label。
 confidence是未校准的主观判断，可为null；surroundings只描述画面中可见的邻接关系。
 position_basis默认image_only；明确地面平面图案才用flat_ground_marking；完整可见且
 底边明确接触地面的直立物体才用visible_ground_contact。裁切、遮挡、接触点不明用image_only。
@@ -88,13 +91,20 @@ class FrameStore:
         self.client, self.model_config = client, model_config
         self.ttl_seconds, self.max_frames, self.clock = ttl_seconds, max_frames, clock
         self.frames = {}
+        self.pinned_confirmation_sources = {}
         self.traces = {}
         self.trace_times = {}
         self.lock = threading.RLock()
 
     def prune(self):
         now = self.clock()
-        expired = [key for key, frame in self.frames.items() if now-frame["created_monotonic"] > self.ttl_seconds]
+        for owner, key in list(self.pinned_confirmation_sources.items()):
+            frame = self.frames.get(key)
+            if frame is None or now-frame['created_monotonic'] > 900.:
+                del self.pinned_confirmation_sources[owner]
+        pins = set(self.pinned_confirmation_sources.values())
+        expired = [key for key, frame in self.frames.items()
+                   if key not in pins and now-frame["created_monotonic"] > self.ttl_seconds]
         for key in expired:
             del self.frames[key]
         for owner in list(self.traces):
@@ -215,11 +225,15 @@ class FrameStore:
         with self.lock:
             self.prune()
             # Keep only the two most recent views per turn, and bound all threads together.
-            same = [key for key, item in self.frames.items() if item["owner"] == owner]
+            pins = set(self.pinned_confirmation_sources.values())
+            same = [key for key, item in self.frames.items() if item["owner"] == owner and key not in pins]
             for key in same[:-1]:
                 del self.frames[key]
             while len(self.frames) >= self.max_frames:
-                del self.frames[next(iter(self.frames))]
+                removable = next((key for key in self.frames if key not in pins), None)
+                if removable is None:
+                    raise RuntimeError('确认图像缓存已满，无法安全保留新快照')
+                del self.frames[removable]
             self.frames[capture_id] = frame
         return {"status": "ok", "capture_id": capture_id, "query": query, "camera": copy.deepcopy(camera),
                 "captured_at_sim_s": stamp, "architecture": "single_vlm",
@@ -234,6 +248,22 @@ class FrameStore:
             if require_delivered and not frame["delivered"]:
                 raise RuntimeError("该快照尚未成功传给当前VLM，不能保存观察报告")
             return copy.deepcopy(frame)
+
+    def pin_confirmation_source(self, owner, capture_id):
+        """Retain one already-delivered owned source for a bounded re-observation."""
+        with self.lock:
+            self.prune()
+            frame = self.frames.get(capture_id)
+            if frame is None or frame['owner'] != owner or frame['delivered'] is not True:
+                raise RuntimeError('确认源图不存在、已过期或不属于本次指令')
+            if (owner not in self.pinned_confirmation_sources
+                    and len(self.pinned_confirmation_sources) >= max(0, self.max_frames-1)):
+                raise RuntimeError('确认图像缓存无法为新观察保留空间')
+            self.pinned_confirmation_sources[owner] = capture_id
+
+    def unpin_confirmation_source(self, owner):
+        with self.lock:
+            self.pinned_confirmation_sources.pop(owner, None)
 
     def frame_for_request(self, messages, config):
         owner = turn_owner(messages, config)
@@ -329,11 +359,17 @@ class SceneMiddleware(AgentMiddleware):
 
     def wrap_tool_call(self, request, handler):
         name = request.tool_call["name"]
+        fatal_report_schema = False
         try:
             if self.search_manager and name == "execute_mission":
                 owner = turn_owner(request.state["messages"], request.runtime.config)
                 self.search_manager.check_mission(owner, request.tool_call.get("args", {}).get("steps"))
-            result = handler(request)
+            if (self.search_manager and name == 'execute_mission' and self.search_manager.adaptive.is_nbv(owner)
+                    and [s.get('action') for s in request.tool_call.get('args', {}).get('steps', [])] == ['goto']):
+                value = self.search_manager.adaptive.execute_pending(owner, request.tool_call['args'].get('description', 'NBV观察'))
+                result = ToolMessage(content=json.dumps(value, ensure_ascii=False), tool_call_id=request.tool_call['id'], name=name)
+            else:
+                result = handler(request)
             if self.search_manager and isinstance(getattr(result, 'content', None), str):
                 try:
                     value = json.loads(result.content)
@@ -352,6 +388,17 @@ class SceneMiddleware(AgentMiddleware):
                     result = result.model_copy(update={'content': json.dumps(compact_flight_evidence(value), ensure_ascii=False)})
             if getattr(result, "status", None) != "error":
                 return result
+            # Only abort the graph when the independent failure handler can
+            # prove that this command owns a flight and therefore can safely
+            # perform its own landing. Otherwise preserve the tool-error path:
+            # the user may have requested landing an already-airborne vehicle.
+            application = getattr(self.client, 'application', None)
+            if name == 'report_scene' and application is not None:
+                with application.lock:
+                    command = application.current_command or {}
+                    fatal_report_schema = any(isinstance(item.get('mission'), dict)
+                        and isinstance(item['mission'].get('id'), str)
+                        and item.get('path') == '/mission' for item in command.get('flight_missions', []))
             raise ValueError("{} 工具调用失败：{}".format(name, str(result.content)[:500]))
         except Exception as exc:
             if self.search_manager:
@@ -364,12 +411,42 @@ class SceneMiddleware(AgentMiddleware):
             if hasattr(self.client, "record"):
                 audit_name = "inspect_scene" if name in ("capture_scene", "report_scene") else name
                 failure = self.client.record(audit_name, failure)
+            if fatal_report_schema:
+                # A schema-invalid call cannot safely become a saved image report.
+                # End the graph so the independent task failure handler lands once;
+                # returning another tool message can trigger an unbounded model loop.
+                raise RuntimeError(failure['error']) from None
             return ToolMessage(content=json.dumps(failure, ensure_ascii=False), name=name,
                                tool_call_id=request.tool_call["id"], status="error")
 
     def wrap_model_call(self, request, handler):
+        selection_frame = False
+        review_frames, crop_metadata, current_roi_metadata = None, None, []
         try:
             owner, frame = self.store.frame_for_request(request.messages, get_config())
+            session = self.search_manager.adaptive.sessions.get(owner) if self.search_manager else None
+            if session and (session.get('status') != 'searching'
+                            or session.get('search_phase') not in ('confirming', 'awaiting_review')):
+                self.store.unpin_confirmation_source(owner)
+            if session and session.get('search_phase') == 'awaiting_review' and session['status'] != 'failed':
+                from target_confirmation import observation_for, prepare_review_images, PAIRED_REVIEW_PROMPT
+                active = session['confirmation']
+                source = self.store.get(owner, active['source_capture_id'], require_delivered=True)
+                current = self.store.get(owner, active['current_capture_id'], require_delivered=True)
+                semantic_map = self.search_manager.adaptive.semantic_maps.maps[owner]
+                _, source_observation = observation_for(semantic_map, active['target_id'], source['capture_id'])
+                current_boxes = [(identifier, observation_for(semantic_map, identifier, current['capture_id'])[1]['bbox'])
+                                 for identifier in active['current_target_ids']]
+                review_content, review_metadata = prepare_review_images(source, current, source_observation['bbox'],
+                    current_boxes, os.getenv('UAV_CAPTURE_EVIDENCE_DIR'))
+                crop_metadata, current_roi_metadata = review_metadata['derived_roi'], review_metadata['current_rois']
+                review_frames = (source, current)
+                frame = current
+            if frame is None and session and session.get('nbv_awaiting_selection'):
+                if self.search_manager.adaptive.summary(owner)['search_status'] == 'searching':
+                    self.search_manager.adaptive.validate_nbv_batch(owner)
+                    frame = self.store.get(owner, session['observations'][-1]['capture_id'], require_delivered=True)
+                    selection_frame = True
         except Exception as exc:
             failure = {"status": "error", "model": self.model_config["model"], "architecture": "single_vlm",
                        "phase": "image_preparation", "targets": [], "limitations": [], **safe_error(exc, self.model_config)}
@@ -383,10 +460,19 @@ class SceneMiddleware(AgentMiddleware):
         if guidance:
             messages.append(SystemMessage(content="当前自主搜索实际进度：" + json.dumps(guidance[0], ensure_ascii=False)
                                           + "。未完成时继续调用工具，不向用户索取下一步路线；结束前按end_behavior完成收尾。"))
-        if frame:
+        if review_frames:
+            metadata = {**session['confirmation'], 'query': session['query'],
+                        'source_bbox': source_observation['bbox'], **review_metadata}
+            messages.append(HumanMessage(content=[{'type': 'text', 'text': PAIRED_REVIEW_PROMPT+
+                '调用review_target_candidate。元数据：'+json.dumps(metadata, ensure_ascii=False)}, *review_content]))
+        elif frame:
             metadata = {"capture_id": frame["capture_id"], "query": frame["query"], "camera": frame["camera"]}
+            instruction = ('此照片已有保存报告，此处重用同一张实际图像选择本批NBV候选。'
+                           '调用select_target_search_view，只返回本批batch_id、candidate_id和理由，'
+                           '不要重复report_scene或将候选预测当成新观察。' if selection_frame else
+                           '本次指令的真实相机快照。按其采集时刻观察，随后调用report_scene。')
             messages.append(HumanMessage(content=[
-                {"type": "text", "text": "本次指令的真实相机快照。按其采集时刻观察，随后调用report_scene。元数据：" + json.dumps(metadata, ensure_ascii=False)},
+                {"type": "text", "text": instruction+"元数据：" + json.dumps(metadata, ensure_ascii=False)},
                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,"+frame["image_base64"]}},
             ]))
         started = time.monotonic()
@@ -412,10 +498,12 @@ class SceneMiddleware(AgentMiddleware):
             failure = {"status": "error", "model": self.model_config["model"], "architecture": "single_vlm",
                        "targets": [], "limitations": [], **safe_error(exc, self.model_config)}
             trace = {"status": "error", "model": self.model_config["model"],
+                     "image_purpose": 'target_confirmation' if review_frames else 'nbv_candidate_selection' if selection_frame else 'observation' if frame else None,
                      "context_memory": context_metrics,
                      "created_at": created_at, "completed_at": time.time(),
                      "input_modalities": ["text", "image"] if frame else ["text"],
-                     "capture_ids": [frame["capture_id"]] if frame else [],
+                     "capture_ids": [f['capture_id'] for f in review_frames[:2]] if review_frames else [frame["capture_id"]] if frame else [],
+                     "derived_roi": crop_metadata, "current_rois": current_roi_metadata,
                      "duration_seconds": round(time.monotonic()-started, 3), **safe_error(exc, self.model_config)}
             self.store.record_call(owner, trace)
             if frame:
@@ -438,14 +526,19 @@ class SceneMiddleware(AgentMiddleware):
                                      "mission_actions": [step.get("action") for step in args.get("steps", []) if isinstance(step, dict)]
                                      if isinstance(args.get("steps", []), list) else []})
         trace = {"status": "ok", "model": self.model_config["model"],
+                 "image_purpose": 'target_confirmation' if review_frames else 'nbv_candidate_selection' if selection_frame else 'observation' if frame else None,
                  "context_memory": context_metrics,
                  "created_at": created_at, "completed_at": time.time(),
                  "input_modalities": ["text", "image"] if frame else ["text"],
-                 "capture_ids": [frame["capture_id"]] if frame else [], "token_usage": usage,
+                 "capture_ids": [f['capture_id'] for f in review_frames[:2]] if review_frames else [frame["capture_id"]] if frame else [], "token_usage": usage,
+                 "derived_roi": crop_metadata, "current_rois": current_roi_metadata,
                  "called_tools": called_tools,
                  "duration_seconds": round(time.monotonic()-started, 3)}
         self.store.record_call(owner, trace)
-        if frame:
+        if review_frames:
+            for item in review_frames[:2]:
+                self.store.mark_delivered(owner, item['capture_id'], trace)
+        elif frame:
             self.store.mark_delivered(owner, frame["capture_id"], trace)
         if hasattr(self.client, "record"):
             self.client.record("vlm_call", trace)
@@ -457,6 +550,9 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
     from search_tools import build_search_tools, SEARCH_PROMPT
     from autonomous_search import AUTONOMY_PROMPT
     search_tools, search_manager = build_search_tools(client)
+    from semantic_map_runtime import SemanticMapRuntime
+    semantic_maps = SemanticMapRuntime(client)
+    search_manager.adaptive.semantic_maps = semantic_maps
 
     def audited(result, name="inspect_scene"):
         return client.record(name, result) if hasattr(client, "record") else result
@@ -499,7 +595,7 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
                 return search_manager.adaptive.summary(owner)
             if step and not session['arrived']:
                 search_manager.check_mission(owner, [step])
-                result = audited(client.execute([step], '自主搜索：换位并采图'), 'execute_mission')
+                result = audited(search_manager.adaptive.execute_pending(owner), 'execute_mission')
                 if (result.get('mission') or {}).get('status') != 'succeeded':
                     raise RuntimeError((result.get('mission') or {}).get('error') or result.get('error') or '观察点飞行未成功')
                 session['arrived'] = True
@@ -514,6 +610,7 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
         """Save structured findings from an image actually shown to this SAME VLM this turn.
 
         Normalized bbox; visible surroundings; no invented depth or world coordinates.
+        Include the target and visible landmarks relevant to explicit task relations.
         Synchronized stereo computes historical ENU surface estimates with uncertainty.
         Unavailable stereo has no invented depth; estimates are never flight points.
         """
@@ -552,6 +649,31 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
                 result["search_progress"] = progress
                 if hasattr(client, 'record'):
                     client.record('search_progress', progress)
+            # Passive MVP: collect geometry/evidence after the existing report and
+            # ownership checks. No map data enters the model or changes next_view.
+            try:
+                user_text = next((message_value(m, 'content', '') for m in reversed(runtime.state['messages'])
+                                  if message_value(m, 'id') == owner[1]), '')
+                session = search_manager.adaptive.sessions.get(owner)
+                callback = ((lambda semantic_map: search_manager.adaptive.after_map_observation(owner, semantic_map, frame, result))
+                            if session and session.get('target_confirmation_mode') == 'multiview' else None)
+                context = semantic_maps.observe(owner, frame, result, session, user_text, after_update=callback)
+            except Exception as exc:
+                context = {'status': 'rejected', **safe_error(exc, model_config), 'passive_only': True}
+            if hasattr(client, 'record'):
+                client.record('semantic_map', context)
+            if search_manager.adaptive.is_nbv(owner) and context.get('status') != 'valid':
+                raise ValueError('NBV空间地图更新失败，禁止后续移动：'+str(context.get('error') or context.get('reason') or context.get('status')))
+            session = search_manager.adaptive.sessions.get(owner)
+            if session and session.get('target_confirmation_mode') == 'multiview':
+                result['search_progress'] = search_manager.adaptive.summary(owner)
+            if (session and session.get('nbv_auto_prepare')
+                    and search_manager.adaptive.summary(owner)['search_status'] == 'searching'):
+                prepared = search_manager.adaptive.next_view(owner, 'auto', '有效报告与空间地图已保存，准备下一观察点',
+                                                             preparation_source='report_scene')
+                result['search_progress'] = prepared
+                if hasattr(client, 'record'):
+                    client.record('search_progress', prepared)
             return result
         except Exception as exc:
             try:
@@ -560,11 +682,61 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
                 pass
             return failure(exc)
 
+    @tool
+    def review_target_candidate(source_capture_id: str, current_capture_id: str, current_target_id: str,
+                                source_supported: bool, current_supported: bool, same_object: bool,
+                                source_description: str, current_description: str, reason: str,
+                                runtime: ToolRuntime, source_uncertain: bool = False,
+                                current_uncertain: bool = False) -> dict:
+        """Review the injected actual image pair and source ROI, without flying.
+
+        Assess visible pixels independently of prior labels/stereo. Current ID
+        must be one of the current reported candidates, or empty if not seen.
+        A failed hypothesis can be rejected; not-seen alone is not absence proof.
+        """
+        try:
+            owner = turn_owner(runtime.state['messages'], runtime.config)
+            if not all(isinstance(v, str) and 0 < len(v) <= 1000 for v in
+                       (source_description, current_description, reason)):
+                raise ValueError('Confirmation requires actual visual descriptions and a bounded reason')
+            delivered = any(t.get('status') == 'ok' and t.get('image_purpose') == 'target_confirmation'
+                and t.get('capture_ids') == [source_capture_id, current_capture_id]
+                and (not current_target_id or any(r.get('target_id') == current_target_id for r in t.get('current_rois', [])))
+                and any(c.get('name') == 'review_target_candidate' for c in t.get('called_tools', []))
+                for t in store.calls(owner))
+            if not delivered:
+                raise ValueError('Confirmation review lacks actual paired image delivery in this task')
+            result = search_manager.adaptive.review_confirmation(owner, source_capture_id, current_capture_id,
+                current_target_id, source_supported, current_supported, same_object,
+                (source_description+'；'+current_description+'；'+reason)[:1000], source_uncertain, current_uncertain)
+            session = search_manager.adaptive.sessions[owner]
+            retained = (session.get('search_phase') == 'confirming'
+                        and (session.get('confirmation') or {}).get('source_capture_id') == source_capture_id)
+            if retained:
+                store.pin_confirmation_source(owner, source_capture_id)
+            else:
+                store.unpin_confirmation_source(owner)
+            result = audited(result, 'review_target_candidate')
+            if session.get('nbv_auto_prepare') and result['search_status'] == 'searching':
+                result['next_view'] = search_manager.adaptive.next_view(owner, 'auto', '复核后继续自主搜索',
+                    preparation_source='review_target_candidate')
+                if session.get('search_phase') != 'confirming':
+                    store.unpin_confirmation_source(owner)
+            return result
+        except Exception as exc:
+            try:
+                store.unpin_confirmation_source(turn_owner(runtime.state['messages'], runtime.config))
+            except Exception:
+                pass
+            search_manager.fail(turn_owner(runtime.state['messages'], runtime.config), str(exc))
+            return failure(exc)
+
     if model is None:
         options = {"temperature": 0, "timeout": 45, "max_retries": 0, "max_tokens": 2200}
         if (urlsplit(model_config.get("base_url") or "").hostname or "").endswith("aliyuncs.com"):
             options["extra_body"] = {"enable_thinking": False}
         model = ChatOpenAI(**model_config, **options)
-    return create_agent(model, [*flight_tools, capture_scene, observe_target_search_view, report_scene, *search_tools],
+    return create_agent(model, [*flight_tools, capture_scene, observe_target_search_view, report_scene,
+                               review_target_candidate, *search_tools],
                         system_prompt=system_prompt + SINGLE_VLM_PROMPT + SEARCH_PROMPT + AUTONOMY_PROMPT,
                         middleware=[SceneMiddleware(store, client, model_config, search_manager)], checkpointer=InMemorySaver())

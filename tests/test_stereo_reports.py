@@ -16,6 +16,20 @@ def pair():
 
 
 class HistoricalStereoTests(unittest.TestCase):
+    def test_observation_metadata_is_immutable_and_expires(self):
+        now = [0.]
+        store = StereoReports(clock=lambda: now[0], ttl=180)
+        item = pair()
+        item.update(stamp_sim_s=10., coordinate_epoch={'vio_epoch': 1}, image_sha256={'left': 'a'*64, 'right': 'b'*64},
+                    navigation_registration_id='registered-sortie', camera_info_for_visibility=item['left']['camera_intrinsics'])
+        key = store.put(item)
+        metadata = store.observation_metadata(key)
+        metadata['body_pose_enu']['position_m'][0] = 100
+        self.assertEqual(store.observation_metadata(key)['body_pose_enu']['position_m'][0], 0.)
+        now[0] = 181.
+        with self.assertRaisesRegex(ValueError, 'expired'):
+            store.observation_metadata(key)
+
     def test_capture_freshness_and_expiration_are_distinct(self):
         now=[0.]
         store=StereoReports(clock=lambda:now[0],ttl=180)

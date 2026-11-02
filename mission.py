@@ -31,6 +31,7 @@ def validate_mission(steps, airborne=False, home_known=False):
         "takeoff": {"altitude"},
         "goto": {"x", "y", "altitude"},
         "hold": {"duration"},
+        "rotate": {"yaw_rad"},
         "return_home": set(),
         "land": set(),
     }
@@ -52,7 +53,7 @@ def validate_mission(steps, airborne=False, home_known=False):
             if airborne or has_takeoff:
                 raise MissionError("takeoff requires a landed vehicle; one takeoff per mission")
             airborne, home_known, has_takeoff = True, True, True
-        elif action in ("goto", "hold", "return_home"):
+        elif action in ("goto", "hold", "return_home", "rotate"):
             if not airborne:
                 raise MissionError("{} requires takeoff first or an airborne vehicle".format(action))
             if action == "goto":
@@ -62,6 +63,8 @@ def validate_mission(steps, airborne=False, home_known=False):
                     raise MissionError("waypoint exceeds {} m radius".format(MAX_RADIUS))
             if action == "hold":
                 step["duration"] = number(step["duration"], "duration", 0.1, 60.0)
+            if action == "rotate":
+                step["yaw_rad"] = number(step["yaw_rad"], "yaw_rad", -math.pi, math.pi)
             if action == "return_home" and not home_known:
                 raise MissionError("takeoff position is unknown; cannot return home")
         elif action == "land":

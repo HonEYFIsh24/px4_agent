@@ -35,6 +35,7 @@ execute_mission 的每步必须严格使用该动作自己的字段，不存在�
 takeoff 只允许 {"action":"takeoff","altitude":3.5}。
 goto 只允许 {"action":"goto","x":13,"y":0,"altitude":3.5}。
 hold 只允许 {"action":"hold","duration":2}。
+仅执行器显式启用仿真航向试验且无活动搜索时，rotate 是独立任务：{"action":"rotate","yaw_rad":0.5}，角度为本地 ENU 弧度。
 return_home 只允许 {"action":"return_home"}；land 只允许 {"action":"land"}。
 return_home 和 land 禁止带 altitude、x、y、duration，也禁止用 null 填充任何多余字段。
 以上数值仅演示字段格式，实际参数必须依据使用者任务和当前场景；不得自动套用。
@@ -140,6 +141,12 @@ class HoldStep(_MissionAction):
     duration: float = Field(ge=.1, le=60, description="Required hold duration in seconds")
 
 
+class RotateStep(_MissionAction):
+    """Experimental standalone rotation to an absolute local ENU yaw in radians."""
+    action: Literal["rotate"]
+    yaw_rad: float = Field(ge=-3.141592653589793, le=3.141592653589793)
+
+
 class ReturnHomeStep(_MissionAction):
     """Return to recorded home at current altitude: action only; no extra fields, even null."""
     action: Literal["return_home"]
@@ -151,7 +158,7 @@ class LandStep(_MissionAction):
 
 
 class MissionStep(RootModel[Annotated[
-        Union[TakeoffStep, GotoStep, HoldStep, ReturnHomeStep, LandStep],
+        Union[TakeoffStep, GotoStep, HoldStep, RotateStep, ReturnHomeStep, LandStep],
         Field(discriminator="action")]]):
     """One step with exactly its action's required fields; reject extras and null placeholders."""
     # LangChain inlines $defs when converting tool schemas. Keep the discriminator
@@ -161,7 +168,7 @@ class MissionStep(RootModel[Annotated[
     def __getattr__(self, name):
         # Preserve legacy reads such as step.action and step.altitude; absent
         # action-specific fields are not serialized into the tool payload.
-        if name in ("action", "x", "y", "altitude", "duration"):
+        if name in ("action", "x", "y", "altitude", "duration", "yaw_rad"):
             return getattr(self.root, name, None)
         return super().__getattr__(name)
 

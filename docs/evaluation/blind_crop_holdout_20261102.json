@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "frozen_before_model_requests": true,
+  "annotation_source": "assistant visual inspection of source images, not independent human review or Gazebo truth",
+  "selection_limitations": "Two simulated worlds; same layouts and nearby frames; purposive sample; no positive barrel; not representative or statistically independent",
+  "prompt_variant": "v3",
+  "prompt_sha256": "d1664c0b061602c39f0999ba8ceb84607ec5507dc54c1bd2cfefbcde9fe20d49",
+  "excluded_development_image_sha256": [
+    "1154431daa3fd63f7b560ab27037ab25c33df925f8efc3dcb6cf8a187a997cd2",
+    "1830531a770c01907fc694f216f99d76f730d8bcf11833af140f2c94e0a2f3dc",
+    "334a5842c979e5f73317f1f0e17770f7bded0b70bde63f3f51213e243731e41c",
+    "3a7ca193ad351a24419a5df9388b9d9000b76758ada07601fad75fe4e55d57f2",
+    "54cdd899b516553c712a58478d5353671c3037bef9e7da9797671dd457b2e3ca",
+    "6b0c57cc1ec9ba505f81b575e5173d8b2d66f60bd6d922c07102475519555003",
+    "6d05a881f5d853aa0c2d38748c6b4c1eecea671fdc1068271654b948dd4b61ad",
+    "8cbd320ee0dc3d39142828d67af4ec6f9c6732e210ec3e62adad399bd46b23e0",
+    "bfd045e5e482852fe72a69baa375881abcf6156324476c21df8f3e9e7f95b0c8",
+    "c51b818a09d8d621942123005af7b194b69e41290843ba48e2535e8002e8d03c",
+    "cff5e96937f56b3f12b23b6d7738b078ef75b2f04bf9c903e18692af886b2cdb",
+    "e9ad3c387d7063d7065b2b29b694eaf15f2439e81f7a74fcf8015ac9f5dd49c6"
+  ],
+  "cases": [
+    {
+      "id": "obstacle-wall",
+      "source_result": "logs/setup/autonomous-target-search/result.json",
+      "capture_id": "a2576424993342ba91f173b25b615676",
+      "source_image_sha256": "6b6c86bb1e8e51db3f5759ab9ce7227030db8f9979d08aebad085ab597d0893f",
+      "target_category": "vehicle",
+      "visually_present": false,
+      "annotation_note": "灰色墙面；未见车辆",
+      "manual_bbox": [
+        0.3,
+        0.1,
+        0.8,
+        0.58
+      ]
+    },
+    {
+      "id": "obstacle-ground",
+      "source_result": "logs/setup/autonomous-target-search/result.json",
+      "capture_id": "035773460475498491d63099b0a4bea9",
+      "source_image_sha256": "374f1f6994750bbe1c3ede324694e1e1b1b7846d9ce7da584f8dd0093ce1c02f",
+      "target_category": "barrel",
+      "visually_present": false,
+      "annotation_note": "沥青地面与标线；未见油桶",
+      "manual_bbox": [
+        0.01,
+        0.78,
+        0.3,
+        0.98
+      ]
+    },
+    {
+      "id": "yard-wall",
+      "source_result": "logs/setup/nbv-closed-loop-20261027/semantic-guidance/result.json",
+      "capture_id": "f14d463882cd498390187873de16a207",
+      "source_image_sha256": "25b0480184cdb9c6dc1ca49eb278f817402e7c8ceecab470d6270e4abd4f88c3",
+      "target_category": "vehicle",
+      "visually_present": false,
+      "annotation_note": "灰色墙板和警示条；报告误称货车",
+      "target_index": 2
+    },
+    {
+      "id": "occluded-van",
+      "source_result": "logs/setup/semantic-map-mvp/live/result.json",
+      "capture_id": "9fe8141e607c4a25ae9554e928a77ba0",
+      "source_image_sha256": "5fca4b57a8440ca1858b1efdf672b4f7d07bc63409cd9fe02d0dac9037ff3c27",
+      "target_category": "vehicle",
+      "visually_present": true,
+      "annotation_note": "白色货车上部和驾驶室局部，底部受遮挡",
+      "target_index": 0
+    },
+    {
+      "id": "cone",
+      "source_result": "logs/setup/courtyard-tests/traffic-cones-restarted/result.json",
+      "capture_id": "787190785ba1413885d71749ee35c8a2",
+      "source_image_sha256": "25a743844fbc50a2f18ac86bc305c15969de4851a530ecbac64af9ca62538eed",
+      "target_category": "traffic_cone",
+      "visually_present": true,
+      "annotation_note": "小型橙白交通锥局部",
+      "target_index": 0
+    },
+    {
+      "id": "van",
+      "source_result": "logs/setup/courtyard-tests/white-van/result.json",
+      "capture_id": "93a7378cfb254091b1a53bd072435533",
+      "source_image_sha256": "497c1bf2a557a0e3d909a7a3580b042c1366144e3ecdbfe571ca36c84a8b16f1",
+      "target_category": "vehicle",
+      "visually_present": true,
+      "annotation_note": "白色货车上部和驾驶室，部分遮挡",
+      "target_index": 0
+    },
+    {
+      "id": "edge-van",
+      "source_result": "logs/setup/target-confirmation-20261027/white-van-multiview/result.json",
+      "capture_id": "d8c30e38cd30482196723d4c34d58317",
+      "source_image_sha256": "4376e32ae7454c0ed7fab5d63387172802db40b7480a8d4b5e5e3863f59a702e",
+      "target_category": "vehicle",
+      "visually_present": true,
+      "annotation_note": "图像右缘可见白色货车车身与车轮局部",
+      "target_index": 0
+    },
+    {
+      "id": "container",
+      "source_result": "logs/setup/nbv-closed-loop-20261027/semantic-guidance/result.json",
+      "capture_id": "910151c20a8e4fb3b4c986acd0ffbdb8",
+      "source_image_sha256": "1a830be6c9078d6b24c512bd3a874e67d0b82f728d30bc2186304663a21f2728",
+      "target_category": "barrel",
+      "visually_present": false,
+      "annotation_note": "红色集装箱；未见油桶",
+      "manual_bbox": [
+        0.13,
+        0.39,
+        0.38,
+        0.67
+      ]
+    },
+    {
+      "id": "ground",
+      "source_result": "logs/setup/nbv-closed-loop-20261027/semantic-guidance/result.json",
+      "capture_id": "3b6c38554a404805a318a226176c7fa2",
+      "source_image_sha256": "4636ee926050c9bc7ccbd6f6a0455f601f2822e6d0609622924cc2b8f06be217",
+      "target_category": "barrel",
+      "visually_present": false,
+      "annotation_note": "沥青路面；未见油桶",
+      "manual_bbox": [
+        0.05,
+        0.55,
+        0.45,
+        0.95
+      ]
+    },
+    {
+      "id": "occluded-van2",
+      "source_result": "logs/setup/semantic-map-evidence-20261026/multiview-fresh/result.json",
+      "capture_id": "33071870c25349c7a0210f104dd22507",
+      "source_image_sha256": "f817bc53aa5f368b32ce47994649911d4e2c7a143bf6a21869138a0797a4a0fd",
+      "target_category": "vehicle",
+      "visually_present": true,
+      "annotation_note": "白色货车上部和驾驶室局部，底部受遮挡",
+      "target_index": 1
+    }
+  ]
+}

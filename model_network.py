@@ -12,8 +12,10 @@ def configure_agent_network(env_file):
     parsed = urlsplit(proxy)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise ValueError("UAV_MODEL_PROXY 必须为有效的 HTTP/HTTPS 代理地址")
-    # Both cases are set because urllib and httpx can prefer lowercase values.
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+    # httpx parses ALL_PROXY even when HTTP(S)_PROXY would win for the
+    # request. Desktop sessions can inherit an unsupported socks:// fallback;
+    # the explicit Agent proxy must override every inherited proxy spelling.
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
         os.environ[name] = proxy
     bypass = {item.strip() for name in ("NO_PROXY", "no_proxy")
               for item in os.environ.get(name, "").split(",") if item.strip()}

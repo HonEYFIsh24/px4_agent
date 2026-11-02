@@ -5,6 +5,8 @@ import json
 import math
 import os
 import re
+import socket
+import ssl
 import time
 from urllib.parse import urlsplit
 
@@ -71,6 +73,32 @@ def observation_reply(report):
     return "\n".join(lines)
 
 
+def _transport_failure_stage(exc):
+    """Classify a bounded exception chain; never return provider text or credentials."""
+    chain, seen, current = [], set(), exc
+    while current is not None and id(current) not in seen and len(chain) < 12:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
+    transport = any(isinstance(e, (ConnectionError, ssl.SSLError)) or type(e).__name__ in
+                    ('APIConnectionError', 'ConnectError', 'ProxyError') for e in chain)
+    if any(isinstance(e, ssl.SSLCertVerificationError) or (transport and 'CERTIFICATE_VERIFY_FAILED' in str(e)) for e in chain):
+        return 'tls_certificate'
+    if any(isinstance(e, ssl.SSLError) or (transport and 'UNEXPECTED_EOF_WHILE_READING' in str(e)) for e in chain):
+        return 'tls_connection'
+    if any(isinstance(e, socket.gaierror) for e in chain):
+        return 'dns'
+    if any('ProxyError' == type(e).__name__ for e in chain):
+        return 'proxy_connection'
+    if any(isinstance(e, ConnectionRefusedError) for e in chain):
+        return 'tcp_connection_refused'
+    if any(isinstance(e, TimeoutError) or 'Timeout' in type(e).__name__ for e in chain):
+        return 'timeout'
+    if any('Connection' in type(e).__name__ or 'ConnectError' == type(e).__name__ for e in chain):
+        return 'connection'
+    return None
+
+
 def safe_error(exc, config):
     """Expose diagnosis without sending credentials or image payloads to the UI."""
     status = getattr(exc, "status_code", None)
@@ -80,6 +108,7 @@ def safe_error(exc, config):
                404: "视觉模型不存在或当前接口地域不提供该模型",
                429: "视觉模型请求限流或额度不足"}
     name = type(exc).__name__
+    stage = 'http_response' if status else _transport_failure_stage(exc)
     def redact(value):
         value = str(value)
         key = (config or {}).get("api_key")
@@ -88,13 +117,24 @@ def safe_error(exc, config):
         return re.sub(r"data:image/[^\s\"']+", "[已隐藏图像数据]", value)
     if status:
         message = reasons.get(status, "视觉模型服务异常") + " (HTTP {})".format(status)
-    elif "Timeout" in name or isinstance(exc, TimeoutError):
+    elif stage == 'tls_certificate':
+        message = "视觉模型TLS证书校验失败，请检查接口证书与网络路径"
+    elif stage == 'tls_connection':
+        message = "视觉模型TLS连接中断，未取得HTTP响应，请检查接口网络路径"
+    elif stage == 'dns':
+        message = "视觉模型接口域名解析失败，请检查DNS与代理路径"
+    elif stage == 'proxy_connection':
+        message = "视觉模型代理连接失败，请检查所配置代理的状态"
+    elif stage == 'tcp_connection_refused':
+        message = "视觉模型连接被拒绝，请检查接口或代理端口"
+    elif stage == 'timeout' or "Timeout" in name or isinstance(exc, TimeoutError):
         message = "视觉模型调用超时，未取得分析结果"
-    elif "Connection" in name:
+    elif stage == 'connection':
         message = "无法连接视觉模型接口"
     else:
         message = redact(exc)[:300]
     return {"error": message, "error_type": name, "http_status": status,
+            "failure_stage": stage,
             "request_id": redact(getattr(exc, "request_id", "") or "")[:128] or None}
 
 

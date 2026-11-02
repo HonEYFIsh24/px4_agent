@@ -106,6 +106,20 @@ class CameraCaptureTests(unittest.TestCase):
         self.assertEqual(self.controller.local_pose_history[0]["position_m"][0], -1)
         self.assertEqual(base64.b64decode(result["image_base64"]), b"\xff\xd8left-frame\xff\xd9")
 
+    def test_yaw_barrier_rejects_rotation_and_equal_or_older_frames(self):
+        self.controller.yaw_capture_barrier = float('inf')
+        with self.assertRaisesRegex(bridge.MissionError, 'rotation'):
+            self.controller.capture_camera()
+        self.controller.stereo_cache = mock.Mock()
+        self.controller.stereo_cache.snapshot.return_value = {'stamp_sim_s': 10.}
+        with self.assertRaisesRegex(bridge.MissionError, 'rotation'):
+            self.controller.capture_stereo()
+        self.controller.yaw_capture_barrier = 10.
+        with self.assertRaisesRegex(bridge.MissionError, 'rotation'):
+            self.controller.capture_camera()
+        self.controller.yaw_capture_barrier = 9.99
+        self.assertEqual(self.controller.capture_camera()['stamp_sim_s'], 10.)
+
     def test_stereo_rejects_historical_pose_after_coordinate_reset(self):
         self.controller.ev_guard = ExternalVisionFlightGuard()
         self.controller.ev_guard.observe_adapter({'mode':'shadow','epoch':0}, self.wall_time)

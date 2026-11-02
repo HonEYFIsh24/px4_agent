@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "scenes": [
+    {
+      "id": "courtyard_delivery",
+      "world": "courtyard_delivery.world",
+      "manifest": "courtyard_delivery_manifest.json",
+      "world_sha256": "4e8bb8b06314def07753afd3fae70ee3f20cbc61add2282fdb1ebf8e3739b30b",
+      "asset_sha256": {
+        "world": "4e8bb8b06314def07753afd3fae70ee3f20cbc61add2282fdb1ebf8e3739b30b",
+        "manifest": "b9b1bbf5cde4557fcbd6bca0668d577a91b20b4e9838beac9c6e4e466115c8f9"
+      }
+    }
+  ]
+}

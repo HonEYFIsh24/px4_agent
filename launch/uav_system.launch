@@ -15,6 +15,8 @@
   <arg name="ev_profile" default="shadow"/>
   <arg name="ev_test_faults" default="false"/>
   <arg name="gazebo_sync" default="false"/>
+  <!-- Empty keeps Gazebo's default seeding; explicit decimal values are validated by the manager. -->
+  <arg name="gazebo_seed" default=""/>
 
   <node pkg="px4_agent" type="start_system_roslaunch.sh" name="uav_system_manager"
         output="screen" required="true">
@@ -30,5 +32,6 @@
     <env name="PX4_AGENT_EV_PROFILE" value="$(arg ev_profile)"/>
     <env name="PX4_AGENT_EV_TEST_FAULTS" value="$(arg ev_test_faults)"/>
     <env name="PX4_AGENT_GAZEBO_SYNC" value="$(eval 1 if arg('gazebo_sync') else 0)"/>
+    <env name="PX4_AGENT_GAZEBO_SEED" value="$(arg gazebo_seed)"/>
   </node>
 </launch>
