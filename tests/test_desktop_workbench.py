@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 try:
@@ -16,6 +17,29 @@ except ImportError as exc:
 
 @unittest.skipUnless(os.environ.get('UAV_DESKTOP_UI_TEST')=='1','requires explicit Qt test')
 class WorkbenchTests(unittest.TestCase):
+    def test_new_observations_follow_latest_until_user_selects_history(self):
+        app=QApplication.instance() or QApplication([]);app.setQuitOnLastWindowClosed(False)
+        widget=SearchWorkbench();widget.show()
+        snap={'status':'valid','owner':['thread','cmd'],'world_sha256':'world','sortie_id':'sortie',
+              'coordinate_epoch':{},'grid':{'rows':48,'cols':48,'origin_xy_enu_m':[0,0],'radius_m':12,'resolution_m':.5},
+              'cells':[{'coverage':0,'semantic_score':0} for _ in range(2304)],'eligible_cell_ids':[],
+              'landmarks':[],'observations':[],'geometric_coverage_fraction':0}
+        command={'id':'cmd','status':'running','perceptions':[]}
+        with mock.patch('desktop_workbench.search_snapshot',return_value=snap):
+            for identifier in ('one','two'):
+                digest=identifier*20
+                snap['observations'].append({'capture_id':identifier,'image_sha256':{'left':digest}})
+                command['perceptions'].append({'status':'ok','capture_id':identifier,'camera':{'image_sha256':digest}})
+                widget.update_data({},command)
+            self.assertEqual(widget.selected_capture,'two')
+            widget.history.setCurrentRow(0)
+            self.assertFalse(widget.follow_latest_observation)
+            snap['observations'].append({'capture_id':'three','image_sha256':{'left':'three'*20}})
+            command['perceptions'].append({'status':'ok','capture_id':'three','camera':{'image_sha256':'three'*20}})
+            widget.update_data({},command)
+            self.assertEqual(widget.selected_capture,'one')
+        widget.close()
+
     def test_owned_history_and_candidate_are_read_only_and_stale_data_disappears(self):
         app=QApplication.instance() or QApplication([]);app.setQuitOnLastWindowClosed(False)
         with tempfile.TemporaryDirectory() as tmp:
@@ -40,6 +64,12 @@ class WorkbenchTests(unittest.TestCase):
                 'nbv_events':[{'owner':['thread','cmd'],'source_capture_id':'f','map_revision':hashlib.sha256(json.dumps(snapshot,ensure_ascii=False,sort_keys=True,allow_nan=False).encode()).hexdigest(),'identity':{'world_sha256':'world','sortie_id':'sortie','coordinate_epoch':epoch},'selected_id':'v1','batch_id':'b','ranked_candidates':[candidate]}]}
             widget=SearchWorkbench();widget.evidence_dir=tmp;widget.resize(900,600);widget.show();widget.update_data({},command);app.processEvents()
             self.assertEqual(widget.history.count(),1);self.assertEqual(widget.candidates.count(),1);self.assertEqual(widget.selected_candidate,'v1');self.assertIsNotNone(widget._last_image)
+            widget.update_data({'mission':{'status':'running','action':'land'}},command)
+            self.assertEqual(widget.candidates.count(),0, 'landing must not display a current search candidate')
+            command['status']='failed';widget.update_data({},command)
+            self.assertEqual(widget.candidates.count(),0, 'a failed task cannot display an active candidate')
+            command['status']='running';widget.update_data({},command)
+            self.assertEqual(widget.candidates.count(),1)
             self.assertEqual(len(widget.map.relations),1)
             self.assertIn('指令描述：红色集装箱 旁边 蓝色油桶',widget.landmark_details.toPlainText())
             self.assertIn('地面物体占据范围尚未测得',widget.landmark_details.toPlainText())
@@ -56,6 +86,15 @@ class WorkbenchTests(unittest.TestCase):
                 top=image.mapTo(widget,image.rect().topLeft());bottom=image.mapTo(widget,image.rect().bottomRight())
                 text_top=widget.pair_status.mapTo(widget,widget.pair_status.rect().topLeft())
                 self.assertLess(bottom.y(),text_top.y())
+            widget.command={'target_confirmation_events':[{'outcome':'review_required','owner':['thread','cmd'],
+                'candidate':{'source_capture_id':'f','current_capture_id':'g'}}]}
+            widget._reports=[{'capture_id':'f'},{'capture_id':'g'}]
+            widget.detail_tabs.setCurrentIndex(0)
+            widget.refresh_pair()
+            self.assertEqual(widget.detail_tabs.currentIndex(),1)
+            widget.detail_tabs.setCurrentIndex(0)
+            widget.refresh_pair()
+            self.assertEqual(widget.detail_tabs.currentIndex(),0, 'do not override a user choice repeatedly')
             command['semantic_map_events'].append({'status':'invalid'});widget.update_data({},command);app.processEvents()
             self.assertIsNone(widget.snapshot);self.assertEqual(widget.history.count(),0);self.assertEqual(widget.candidates.count(),0)
             widget.close()

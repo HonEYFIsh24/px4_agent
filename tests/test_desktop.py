@@ -118,6 +118,20 @@ class NativeWindowTests(unittest.TestCase):
         self.assertEqual(self.window.map.zoom, 1.)
         self.assertEqual(self.window.trail, before)
 
+    def test_workbench_fits_viewport_without_overlapping_map_controls(self):
+        from PySide6.QtCore import QRect
+        self.root.resize(1200,900)
+        self.window.notebook.setCurrentIndex(self.window.workbench_tab)
+        self.qt.processEvents()
+        self.window.fit_workbench()
+        self.qt.processEvents()
+        workbench=self.window.workbench
+        def rect(widget):
+            return QRect(widget.mapTo(self.root,widget.rect().topLeft()),widget.size())
+        self.assertFalse(rect(workbench.map).intersects(rect(workbench.layer_checks['coverage'])))
+        self.assertFalse(rect(workbench.image).intersects(rect(workbench.report)))
+        self.assertLessEqual(workbench.height(),max(self.window.workbench_page.viewport().height(),workbench.minimumSizeHint().height()))
+
     def test_scalable_chinese_font_and_persistent_size(self):
         self.assertIn(QFontInfo(self.window.prompt.font()).family(),
                       ('Noto Sans CJK SC', 'WenQuanYi Micro Hei'))

@@ -132,6 +132,18 @@ class NBVGraphTests(unittest.TestCase):
                 tool_call('begin_target_search', {'query': '蓝色油桶'}, 'begin'),
                 tool_call('observe_target_search_view', {}, 'first-view'), saved_report]
 
+    def test_failed_search_initialization_prevents_fallback_takeoff(self):
+        bridge = ScopedFixtureBridge()
+        script = [tool_call('begin_target_search', {'query': '蓝色油桶'}, 'begin'),
+                  tool_call('execute_mission', {'steps': [{'action': 'takeoff', 'altitude': 3}],
+                      'description': 'fallback takeoff'}, 'fallback'), AIMessage('完成')]
+        with mock.patch.dict(os.environ, {'UAV_NBV_HEADING_MODE': 'discrete'}):
+            result, _, _ = self.run_task(bridge, script, confirmation='multiview', architecture='single_vlm')
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('航向NBV', result['search_initialization_failure'])
+        self.assertFalse(any(x['path'] == '/mission' for x in bridge.flight_requests))
+        self.assertFalse(bridge.telemetry['armed'])
+
     def test_invalid_report_schema_stops_graph_and_lands_once(self):
         bridge = ScopedFixtureBridge()
         def invalid(messages):
@@ -173,7 +185,10 @@ class NBVGraphTests(unittest.TestCase):
                 'source_description': 'controlled source', 'current_description': 'controlled current',
                 'reason': 'controlled review'}, 'review-'+active['current_capture_id'])
         script = self.prefix()[:-1] + [candidate, tool_call('observe_target_search_view', {}, 'second'),
-            saved_report, lambda m: review(m, False), tool_call('observe_target_search_view', {}, 'third'),
+            saved_report, lambda m: review(m, False),
+            tool_call('execute_mission', {'steps': [{'action': 'return_home'}, {'action': 'land'}],
+                'description': 'premature plan before confirmation'}, 'premature-return'),
+            tool_call('observe_target_search_view', {}, 'third'),
             candidate, lambda m: review(m, True)] + self.suffix()[-2:]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -191,6 +206,38 @@ class NBVGraphTests(unittest.TestCase):
         self.assertEqual(calls[0]['capture_ids'][0], calls[1]['capture_ids'][0])
         self.assertNotEqual(calls[0]['capture_ids'][1], calls[1]['capture_ids'][1])
         self.assertEqual(bridge.ticket_executions, 2)
+        self.assertEqual(len(result['search_protocol_corrections']), 1)
+        self.assertFalse(result['search_protocol_corrections'][0]['mission_submitted'])
+        self.assertEqual(len([x for x in bridge.flight_requests if x['path'] == '/mission'
+                              and x['steps'][0]['action'] == 'return_home']), 1)
+        self.assertFalse(bridge.telemetry['armed'])
+
+        # Repeated premature plans exhaust the single correction; they must
+        # not trigger an unbounded loop or submit a return mission.
+        bridge = ScopedFixtureBridge()
+        bridge.localize_stereo = lambda pair_id, bboxes: synthetic_metric_target(bridge, pair_id, bboxes)
+        repeated = script[:8] + [tool_call('execute_mission', {'steps': [
+            {'action': 'return_home'}, {'action': 'land'}], 'description': 'repeated premature plan'}, 'again'),
+            tool_call('land_drone', {'reason': 'safe stop'}, 'land'), AIMessage('已停止。')]
+        result, _, _ = self.run_task(bridge, repeated, auto_prepare=True, confirmation='multiview', architecture='single_vlm')
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(len(result['search_protocol_corrections']), 1)
+        self.assertEqual(result['flight_failure_stage'], 'search_mission_precheck')
+        self.assertFalse(any(x['path'] == '/mission' and x['steps'][0]['action'] == 'return_home'
+                             for x in bridge.flight_requests))
+        self.assertFalse(bridge.telemetry['armed'])
+
+        bridge = ScopedFixtureBridge()
+        bridge.localize_stereo = lambda pair_id, bboxes: synthetic_metric_target(bridge, pair_id, bboxes)
+        def reset_before_return(messages):
+            bridge.telemetry['external_vision']['adapter']['epoch'] += 1
+            return tool_call('execute_mission', {'steps': [{'action': 'return_home'}, {'action': 'land'}],
+                             'description': 'return after reset'}, 'reset-return')
+        result, _, _ = self.run_task(bridge, script[:7] + [reset_before_return,
+            tool_call('land_drone', {'reason': 'safe stop'}, 'land'), AIMessage('已停止。')],
+            auto_prepare=True, confirmation='multiview', architecture='single_vlm')
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(result.get('search_protocol_corrections'))
         self.assertFalse(bridge.telemetry['armed'])
 
     def suffix(self):
@@ -368,11 +415,44 @@ class NBVGraphTests(unittest.TestCase):
                 result, _, _ = self.run_task(bridge, self.prefix()+[
                     tool_call('next_target_search_view', {'strategy': 'auto', 'reason': 'fixture'}, 'next'),
                     choose, tool_call('land_drone', {'reason': 'failed selection'}, 'land'),
-                    AIMessage('选择失败，已降落。')], selector='vlm')
+                    AIMessage('选择失败，已降落。')], selector='vlm', architecture='single_vlm')
                 self.assertEqual(result['status'], 'failed')
                 self.assertEqual(bridge.ticket_executions, 0)
                 self.assertEqual(bridge.generic_gotos, 0)
-                self.assertFalse(bridge.telemetry['armed'])
+                self.assertFalse(bridge.telemetry['armed'],
+                    {'error':result.get('error'),'safety_landing':result.get('safety_landing'),
+                     'flight_requests':bridge.flight_requests,'tool_errors':result.get('tool_errors')})
+
+    def test_failed_selection_followed_by_model_failure_triggers_owned_safety_landing(self):
+        bridge = ScopedFixtureBridge()
+        def choose(messages):
+            value = json.loads(next(m for m in reversed(messages)
+                if getattr(m, 'name', None) == 'next_target_search_view').content)
+            return tool_call('select_target_search_view', {'batch_id':value['batch_id'],
+                'candidate_id':'view_999','reason':'invalid test ID'}, 'select')
+        result, _, _ = self.run_task(bridge, self.prefix()+[
+            tool_call('next_target_search_view', {'strategy':'auto','reason':'fixture'}, 'next'),
+            choose, RuntimeError('controlled model outage before landing')],
+            selector='vlm', architecture='single_vlm')
+        self.assertEqual(result['status'],'failed')
+        self.assertEqual(bridge.ticket_executions,0)
+        self.assertFalse(bridge.telemetry['armed'])
+        self.assertEqual(result['safety_landing']['status'],'ok')
+        self.assertEqual(len([x for x in bridge.flight_requests if x['path']=='/land']),1)
+
+    def test_premature_return_is_marked_as_rejected_before_submission_and_lands_safely(self):
+        bridge = ScopedFixtureBridge()
+        script=self.prefix()+[tool_call('execute_mission', {'steps':[{'action':'return_home'},{'action':'land'}],
+            'description':'premature return in active search'}, 'premature'),
+            tool_call('land_drone', {'reason':'safe stop'}, 'land'), AIMessage('已停止。')]
+        result, _, _ = self.run_task(bridge, script, auto_prepare=True, confirmation='multiview', architecture='single_vlm')
+        self.assertEqual(result['status'],'failed')
+        self.assertEqual(result['flight_failure_stage'],'search_mission_precheck')
+        self.assertIn('未通过提交前的搜索检查，该计划未被提交执行',result['reply'])
+        self.assertFalse(result['search_outcome']['target_confirmed'])
+        self.assertFalse(any(step['action']=='return_home' for request in bridge.flight_requests for step in request['steps']))
+        self.assertEqual(len([request for request in bridge.flight_requests if request['path']=='/land']),1)
+        self.assertFalse(bridge.telemetry['armed'])
 
     def test_even_matching_generic_flight_call_is_routed_through_private_ticket(self):
         bridge = ScopedFixtureBridge()

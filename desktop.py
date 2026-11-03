@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt, QTimer, QPointF
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPen, QPixmap, QShortcut, QKeySequence
 from PySide6.QtWidgets import (QApplication, QCheckBox, QHBoxLayout, QLabel, QMainWindow,
                                QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
-                               QSizePolicy, QTabWidget, QVBoxLayout, QWidget)
+                               QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget)
 
 from web_server import DEFAULT_ENV_FILE, build_application
 
@@ -224,7 +224,10 @@ class DesktopWindow:
         notebook.addTab(map_frame, "航迹监测")
         from desktop_workbench import SearchWorkbench
         self.workbench = SearchWorkbench()
-        workbench_tab = self.workbench_tab = notebook.addTab(self.workbench, "自主搜索工作台")
+        self.workbench_page = QScrollArea()
+        self.workbench_page.setWidgetResizable(True)
+        self.workbench_page.setWidget(self.workbench)
+        workbench_tab = self.workbench_tab = notebook.addTab(self.workbench_page, "自主搜索工作台")
         notebook.currentChanged.connect(lambda index: self.panes.setSizes([850, 350]) if index == workbench_tab else None)
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -265,8 +268,8 @@ class DesktopWindow:
         self.prompt.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
         self.prompt.setPlaceholderText("输入中文指令，例如：查看无人机当前状态")
         self.prompt.setPlainText("查看无人机当前状态。")
-        self.prompt.setMinimumHeight(88)
-        self.prompt.setMaximumHeight(160)
+        self.prompt.setMinimumHeight(70)
+        self.prompt.setMaximumHeight(100)
         entry.addWidget(self.prompt, 1)
         self.send_button = QPushButton("发送指令")
         self.send_button.clicked.connect(self.submit)
@@ -375,6 +378,7 @@ class DesktopWindow:
     def render_state(self, state, command):
         self.state, self.last_state_at = state, time.monotonic()
         self.workbench.update_data(state, command)
+        self.fit_workbench()
         connected = state.get("connected") is True
         ready = state.get("ready") is True
         if state.get("armed") or state.get("active_command_id"):
@@ -456,6 +460,12 @@ class DesktopWindow:
     def draw_map(self):
         self.map.update()
 
+    def fit_workbench(self):
+        """Fit available space, retaining scroll when legible content needs more."""
+        height = self.workbench_page.viewport().height()
+        if height > 0:
+            self.workbench.setMaximumHeight(max(height, self.workbench.minimumSizeHint().height()))
+
     def render_cameras(self, fresh):
         for side, label in self.camera_labels.items():
             metadata = (self.state.get("camera") or {}).get(side) or {}
@@ -512,6 +522,7 @@ class DesktopWindow:
         except queue.Empty:
             pass
         fresh = time.monotonic()-self.last_state_at < 2
+        self.fit_workbench()
         if not fresh:
             self.connection.setText("遥测已过期 / 正在重连")
             self.metrics["position"].setText("— / — / —")

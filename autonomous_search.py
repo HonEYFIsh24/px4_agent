@@ -10,6 +10,10 @@ from pathlib import Path
 from stereo_localization import quaternion_rotation, vector
 
 
+class PrematureSearchCompletion(ValueError):
+    """An unsubmitted return plan conflicts with an unfinished reviewed search."""
+
+
 AUTONOMY_PROMPT = """
 自主搜索任务：使用者说“找到前方的油桶，报告周围情况”等，已经授权完成目标所需的仿真起飞、
 变高、横移、推进、绕障与采图，不需要逐步确认，不要求使用者提供坐标或路线。
@@ -370,6 +374,11 @@ class AdaptiveSearch:
             raise ValueError('请执行已选择的初始起飞高度')
         state = self.client.state()
         self.validate_state(owner, state)
+        if (actions == ['return_home', 'land'] and len(steps) == 2
+                and all(set(step) == {'action'} for step in steps)
+                and s.get('target_confirmation_mode') == 'multiview'
+                and s.get('last_review_outcome') == 'unconfirmed'):
+            raise PrematureSearchCompletion('目标尚未确认，返航计划未提交；请按当前搜索进度继续')
         if (len(steps) != 1 or not s["pending"] or actions != ['goto']
                 or set(steps[0]) != set(s['pending'])
                 or any(type(steps[0][k]) not in (int, float) or not math.isfinite(steps[0][k])
@@ -494,6 +503,7 @@ class AdaptiveSearch:
         outcome = ('rejected' if not source_supported and not source_uncertain else
                    'confirmed' if source_supported and current_supported and same_object
                    and association_allows_confirmation(geometry) else 'unconfirmed')
+        s['last_review_outcome'] = outcome
         self.confirmation_event(owner, outcome, current_target_id=current_target_id,
             geometry_policy=CONFIRMATION_GEOMETRY_POLICY,
             source_supported=source_supported, current_supported=current_supported, same_object=same_object,

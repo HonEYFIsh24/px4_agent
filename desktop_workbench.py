@@ -3,7 +3,7 @@ import math
 import os
 import time
 
-from PySide6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtCore import Qt, QPointF, QRectF, QSize
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (QCheckBox, QGridLayout, QHBoxLayout, QLabel, QListWidget, QPlainTextEdit, QPushButton,
                                QSizePolicy, QSplitter, QTabWidget, QVBoxLayout, QWidget)
@@ -42,10 +42,26 @@ class ScaledImage(QLabel):
         super().resizeEvent(event)
         self.rescale()
 
+    def minimumSizeHint(self):
+        return self.minimumSize()
+
+    def sizeHint(self):
+        return self.minimumSizeHint()
+
+
+class CompactTextEdit(QPlainTextEdit):
+    def minimumSizeHint(self):
+        return QSize(70, 42)
+
+
+class CompactList(QListWidget):
+    def minimumSizeHint(self):
+        return QSize(70, 42)
+
 
 class SearchMap(QWidget):
     def __init__(self):
-        super().__init__(); self.setMinimumSize(260,260); self.snapshot=None; self.prediction=None
+        super().__init__(); self.setMinimumSize(160,140); self.snapshot=None; self.prediction=None
         self.candidate=None; self.selected_observation=None; self.position=None; self.trail=[];self.outlines=None;self.relations=[]
         self.layers={'coverage':True,'semantic':True,'observations':True,'candidates':True,'path':True,'predicted':False,'obstacles':True}
         self.zoom=1.;self.offset=QPointF();self.drag=None;self.follow=False
@@ -76,6 +92,15 @@ class SearchMap(QWidget):
         center=QPointF(self.width()/2,self.height()/2)+self.offset
         cx,cy=(self.position[:2] if self.follow and self.position else (ox,oy))
         def point(x,y):return QPointF(center.x()+(x-cx)*scale,center.y()-(y-cy)*scale)
+        occupied=[QRectF(0,0,self.width(),50)]
+        def draw_label(position,text):
+            metrics=p.fontMetrics();width=metrics.horizontalAdvance(text);height=metrics.height()
+            for dx,dy in ((6,-6),(6,-25),(6,18),(-width-6,-6),(-width-6,-25),(-width-6,18),(6,-45),(6,38)):
+                baseline=QPointF(position.x()+dx,position.y()+dy)
+                box=QRectF(baseline.x(),baseline.y()-metrics.ascent(),width,height).adjusted(-2,-1,2,1)
+                if (box.left()>=0 and box.right()<=self.width() and box.top()>=0 and box.bottom()<=self.height()
+                        and not any(box.intersects(old) for old in occupied)):
+                    p.drawText(baseline,text);occupied.append(box);return
         eligible=set(s.get('eligible_cell_ids') or [])
         predicted=set((self.candidate or {}).get('visible_cell_ids') or []) if self.layers['predicted'] else set()
         for i in eligible:
@@ -107,14 +132,14 @@ class SearchMap(QWidget):
                 pos=c.get('position_enu_m')
                 if not pos or c.get('path_verified') is not True:continue
                 p.setPen(QPen(QColor('#ffd66a') if self.candidate and c['id']==self.candidate.get('id') else QColor('#edf3f7'),1))
-                p.drawRect(QRectF(point(*pos[:2])-QPointF(4,4),point(*pos[:2])+QPointF(4,4)));p.drawText(point(*pos[:2])+QPointF(6,-3),c['id'])
+                p.drawRect(QRectF(point(*pos[:2])-QPointF(4,4),point(*pos[:2])+QPointF(4,4)));draw_label(point(*pos[:2]),c['id'])
         if self.layers['observations']:
             for relation in self.relations:
                 anchor,target=relation['anchor'],relation['target']
                 p.setPen(QPen(QColor('#ed8dff'),2,Qt.PenStyle.DashLine))
                 p.drawLine(point(*anchor[:2]),point(*target[:2]))
                 middle=point((anchor[0]+target[0])/2,(anchor[1]+target[1])/2)
-                p.drawText(middle,'指令：'+relation['relation'])
+                draw_label(middle,'指令：'+relation['relation'])
             selected=next((o for o in s.get('observations',[]) if o.get('capture_id')==self.selected_observation),None)
             if selected:
                 p.setBrush(Qt.BrushStyle.NoBrush);p.setPen(QPen(QColor(145,230,255,120),1))
@@ -126,7 +151,7 @@ class SearchMap(QWidget):
                 pos=o.get('position_enu_m')
                 if pos:
                     p.setPen(QColor('#ffffff'));p.setBrush(QColor('#ffcf68') if o['capture_id']==self.selected_observation else QColor('#98c2e0'))
-                    p.drawEllipse(point(*pos[:2]),4,4);p.drawText(point(*pos[:2])+QPointF(5,-5),str(index))
+                    p.drawEllipse(point(*pos[:2]),4,4);draw_label(point(*pos[:2]),str(index))
                     q=o.get('orientation_xyzw')
                     if isinstance(q,list) and len(q)==4 and all(type(v) in (int,float) and math.isfinite(v) for v in q):
                         x,y,z,w=q;heading=math.atan2(2*(w*z+x*y),1-2*(y*y+z*z))
@@ -139,13 +164,13 @@ class SearchMap(QWidget):
                         major,minor,angle=ellipse;p.save();p.translate(point(*pos[:2]));p.rotate(-math.degrees(angle))
                         p.setBrush(Qt.BrushStyle.NoBrush);p.setPen(QPen(QColor('#ffab69'),1,Qt.PenStyle.DashLine))
                         p.drawEllipse(QRectF(-major*scale,-minor*scale,2*major*scale,2*minor*scale));p.restore()
-                    p.setPen(QColor('#ffab69'));p.drawText(point(*pos[:2]),'◆ '+str(landmark.get('label',''))+' '+str(landmark.get('id','')))
+                    p.setPen(QColor('#ffab69'));draw_label(point(*pos[:2]),'◆ '+str(landmark.get('label',''))+' '+str(landmark.get('id','')))
                 else:
                     for obs in (landmark.get('observations') or [])[-1:]:
                         origin=obs.get('bearing_origin_enu_m');ray=obs.get('bearing_direction_enu')
                         if origin and ray:
                             end=point(origin[0]+ray[0]*3,origin[1]+ray[1]*3);p.drawLine(point(*origin[:2]),end)
-                            p.drawText(end,str(landmark.get('label',''))+'（方位，未定位）')
+                            draw_label(end,str(landmark.get('label',''))+'（方位，未定位）')
         if self.position:
             p.setBrush(QColor('#5ef1ce'));p.setPen(QColor('#142332'));p.drawEllipse(point(*self.position[:2]),6,6)
         p.setPen(QColor('#e2eaf1'));p.drawText(10,20,'ENU 坐标 · 米 | 蓝：几何观察 | 黄：预测 | 绿实线：采样航迹')
@@ -154,7 +179,7 @@ class SearchMap(QWidget):
 
 class SearchWorkbench(QWidget):
     def __init__(self):
-        super().__init__(); self.command=None;self.snapshot=None;self.prediction=None;self.evidence_dir=os.getenv('UAV_CAPTURE_EVIDENCE_DIR');self.selected_capture=None;self.selected_candidate=None;self.identity=None
+        super().__init__(); self.command=None;self.snapshot=None;self.prediction=None;self.evidence_dir=os.getenv('UAV_CAPTURE_EVIDENCE_DIR');self.selected_capture=None;self.selected_candidate=None;self.identity=None;self.follow_latest_observation=True
         root=QVBoxLayout(self);self.status=QLabel('等待指令');self.status.setWordWrap(True);root.addWidget(self.status)
         self.flight_status=QLabel('飞行状态：等待遥测');root.addWidget(self.flight_status)
         self.metrics=QLabel('观察：— · 几何覆盖：— · 视点执行：— · 模型调用：—');self.metrics.setWordWrap(True);root.addWidget(self.metrics)
@@ -168,21 +193,26 @@ class SearchWorkbench(QWidget):
         self.follow=QCheckBox('跟随');self.follow.toggled.connect(self.set_follow);controls.addWidget(self.follow,2,2)
         self.legend=QLabel('ENU 坐标，单位米 · 地图：等待 · 覆盖为几何可见性，不等于目标识别成功率');self.legend.setWordWrap(True);left_layout.addWidget(self.legend)
         right=QWidget();column=QVBoxLayout(right);split.addWidget(right);split.setSizes([700,430])
-        column.addWidget(QLabel('下一视点（只读，路径经过预检查）'));self.candidates=QListWidget();self.candidates.setMaximumHeight(145);self.candidates.currentRowChanged.connect(self.choose_candidate);column.addWidget(self.candidates)
-        self.decision=QLabel('暂无当前地图对应的候选');self.decision.setWordWrap(True);column.addWidget(self.decision)
-        column.addWidget(QLabel('有效观察历史'));self.history=QListWidget();self.history.setMaximumHeight(150);self.history.currentRowChanged.connect(self.choose_observation);column.addWidget(self.history)
+        column.addWidget(QLabel('下一视点（只读，路径经过预检查）'));self.candidates=CompactList();self.candidates.setMaximumHeight(110);self.candidates.currentRowChanged.connect(self.choose_candidate);column.addWidget(self.candidates)
+        self.decision=CompactTextEdit('暂无当前地图对应的候选');self.decision.setReadOnly(True);self.decision.setMinimumHeight(42);self.decision.setMaximumHeight(75);column.addWidget(self.decision)
+        column.addWidget(QLabel('有效观察历史'));self.history=CompactList();self.history.setMaximumHeight(70);self.history.currentRowChanged.connect(self.choose_observation);column.addWidget(self.history)
         tabs=self.detail_tabs=QTabWidget();column.addWidget(tabs,1)
         obs_tab=QWidget();obs_layout=QVBoxLayout(obs_tab);tabs.addTab(obs_tab,'观察照片')
-        self.image=ScaledImage('选择观察以查看模型实际收到的照片');self.image.setMinimumSize(200,140);obs_layout.addWidget(self.image,1)
-        self.report=QLabel('');self.report.setWordWrap(True);self.report.setTextFormat(Qt.TextFormat.PlainText);obs_layout.addWidget(self.report)
+        self.image=ScaledImage('选择观察以查看模型实际收到的照片');self.image.setMinimumSize(100,55);obs_layout.addWidget(self.image,1)
+        self.report=CompactTextEdit();self.report.setReadOnly(True);self.report.setMinimumHeight(42);self.report.setMaximumHeight(65);obs_layout.addWidget(self.report)
+        obs_layout.setStretch(0,3);obs_layout.setStretch(1,1)
         pair_tab=QWidget();pair_layout=QVBoxLayout(pair_tab);tabs.addTab(pair_tab,'多视角复核')
         pair_split=QSplitter(Qt.Orientation.Vertical);pair_layout.addWidget(pair_split,1)
         pair_frame=QWidget();pair_images=QHBoxLayout(pair_frame);pair_split.addWidget(pair_frame);self.pair_images=[]
         for title in ('候选源图','当前观察'):
-            cell=QVBoxLayout();cell.addWidget(QLabel(title));label=ScaledImage('暂无');label.setMinimumSize(90,75);cell.addWidget(label,1);pair_images.addLayout(cell);self.pair_images.append(label)
-        self.pair_status=QPlainTextEdit('暂无多视角复核');self.pair_status.setReadOnly(True);self.pair_status.setMinimumHeight(95);pair_split.addWidget(self.pair_status);pair_split.setSizes([250,130])
-        self.landmark_details=QPlainTextEdit();self.landmark_details.setReadOnly(True);tabs.addTab(self.landmark_details,'语义地标')
-        self._reports=[];self._candidates=[];self._last_image=None;self._candidate_signature=None;self._pix_cache={};self.live_mission={}
+            cell=QVBoxLayout();cell.addWidget(QLabel(title));label=ScaledImage('暂无');label.setMinimumSize(90,50);cell.addWidget(label,1);pair_images.addLayout(cell);self.pair_images.append(label)
+        self.pair_status=CompactTextEdit('暂无多视角复核');self.pair_status.setReadOnly(True);self.pair_status.setMinimumHeight(50);pair_split.addWidget(self.pair_status);pair_split.setSizes([250,130])
+        self.landmark_details=CompactTextEdit();self.landmark_details.setReadOnly(True);tabs.addTab(self.landmark_details,'语义地标')
+        self._reports=[];self._candidates=[];self._last_image=None;self._candidate_signature=None;self._pix_cache={};self.live_mission={};self._shown_review_pair=None
+
+    def sizeHint(self):
+        # Let a resizable scroll area use the available viewport before scrolling.
+        return self.minimumSizeHint()
 
     def toggle_layer(self,key,value):self.map.layers[key]=value;self.map.update()
     def set_follow(self,value):self.map.follow=value;self.map.update()
@@ -197,7 +227,7 @@ class SearchWorkbench(QWidget):
         snap=search_snapshot(command,self.evidence_dir);self.snapshot=snap;self.map.snapshot=snap
         new_identity=(snap.get('world_sha256'),snap.get('sortie_id'),str(snap.get('coordinate_epoch'))) if snap else None
         if new_identity != self.identity or old_id != (command or {}).get('id'):
-            self.map.trail=[];self.identity=new_identity;self.selected_capture=None;self.selected_candidate=None;self._pix_cache.clear()
+            self.map.trail=[];self.identity=new_identity;self.selected_capture=None;self.selected_candidate=None;self._pix_cache.clear();self._shown_review_pair=None;self.follow_latest_observation=True
             self.map.outlines=static_obstacle_outlines(snap,os.getenv('PX4_AGENT_WORLD'))
         if snap and telemetry_matches(state,snap):
             pos=state.get('position_enu_m')
@@ -205,7 +235,11 @@ class SearchWorkbench(QWidget):
                 self.map.position=list(pos[:3]);self.map.trail=(self.map.trail+[list(pos[:2])])[-2000:] if not self.map.trail or math.dist(self.map.trail[-1],pos[:2])>.05 else self.map.trail
             else:self.map.position=None
         else:self.map.position=None;self.map.trail=[]
-        self.prediction=current_prediction(command,snap);self.map.prediction=self.prediction
+        stopping = (self.live_mission.get('status') == 'running'
+                    and self.live_mission.get('action') in ('return_home', 'land'))
+        self.prediction=(current_prediction(command,snap)
+                         if command and command.get('status')=='running' and not stopping else None)
+        self.map.prediction=self.prediction
         self.map.relations=[]
         if snap and command:
             landmarks=snap.get('landmarks') or [];query=snap.get('query') or '';instruction=command.get('prompt') or ''
@@ -247,7 +281,8 @@ class SearchWorkbench(QWidget):
         if old_reports != [p.get('capture_id') for p in reports]:
             self.history.blockSignals(True);self.history.clear()
             for i,report in enumerate(reports,1):self.history.addItem('观察 #{:02d} · {} · {} s'.format(i,report['capture_id'][:8],fmt(report.get('captured_at_sim_s'))))
-            idx=next((i for i,r in enumerate(reports) if r['capture_id']==self.selected_capture),len(reports)-1)
+            idx=(len(reports)-1 if self.follow_latest_observation else
+                 next((i for i,r in enumerate(reports) if r['capture_id']==self.selected_capture),len(reports)-1))
             if idx>=0:self.history.setCurrentRow(idx);self.selected_capture=reports[idx]['capture_id']
             else:self.selected_capture=None
             self.history.blockSignals(False)
@@ -256,7 +291,7 @@ class SearchWorkbench(QWidget):
         self.refresh_landmarks()
         events=(command or {}).get('semantic_map_events') or []
         map_status=('有效' if snap else '已失效或不可用' if events and events[-1].get('status')!='valid' else '等待有效快照')
-        self.legend.setText('ENU 坐标，单位米 · 地图：{} · 几何覆盖 {}（非识别成功率）\n白框：静态包围盒俯视投影 · 橙虚线：定位不确定范围，非物体占地{}'.format(
+        self.legend.setText('ENU / 米 · 地图：{} · 几何覆盖 {}（非识别率）\n白框：静态投影 · 橙虚线：位置不确定范围，非物体占地{}'.format(
             map_status,fmt(100*snap.get('geometric_coverage_fraction',0),'%') if snap else '—',
             ('' if self.map.outlines is not None else ' · 静态轮廓不可用') + ('' if not snap or telemetry_matches(state,snap) else ' · 实时坐标身份不匹配，已隐藏飞机')))
         self.map.update()
@@ -264,7 +299,9 @@ class SearchWorkbench(QWidget):
     def choose_candidate(self,index):
         self.selected_candidate=self._candidates[index]['id'] if 0<=index<len(self._candidates) else None;self.refresh_selection();self.map.update()
     def choose_observation(self,index):
-        self.selected_capture=self._reports[index]['capture_id'] if 0<=index<len(self._reports) else None;self.refresh_selection();self.map.update()
+        self.selected_capture=self._reports[index]['capture_id'] if 0<=index<len(self._reports) else None
+        self.follow_latest_observation=index==len(self._reports)-1
+        self.refresh_selection();self.map.update()
 
     def refresh_selection(self):
         c=next((x for x in self._candidates if x.get('id')==self.selected_candidate),None);self.map.candidate=c;self.map.selected_observation=self.selected_capture
@@ -275,17 +312,23 @@ class SearchWorkbench(QWidget):
                    if selected and mission.get('viewpoint_candidate_id')==c['id'] and batch==(self.prediction or {}).get('batch_id') else '已选择，等待执行器状态' if selected else '候选预览')
             labels={'coverage':'覆盖','semantic':'语义','motion':'移动代价','repeat':'重复代价','target_visibility':'目标可见性','parallax':'视差'}
             selector='模型选择：'+str((self.prediction or {}).get('selection_reason','')) if (self.prediction or {}).get('selector')=='vlm' else '确定性评分选择'
-            self.decision.setText('{} · {} · {}\n新增覆盖 {} m² · 语义 {} · 路径 {} m · 预计 {} s\n评分贡献：{}\n{}'.format(
+            text='{} · {} · {}\n新增覆盖 {} m² · 语义 {} · 路径 {} m · 预计 {} s\n评分贡献：{}\n{}'.format(
                 '确认视角' if mode=='confirmation' else '探索视角',stage,c.get('direction',''),
                 fmt(c.get('coverage_gain_m2')),fmt(c.get('semantic_gain_m2')),fmt((c.get('path') or {}).get('path_length_m')),fmt(c.get('motion_seconds')),
-                ' / '.join('{} {}'.format(labels.get(k,k),fmt(v)) for k,v in (c.get('score_terms') or {}).items()),selector))
-        else:self.decision.setText('暂无当前地图对应的候选；预览不代表已执行。')
+                ' / '.join('{} {}'.format(labels.get(k,k),fmt(v)) for k,v in (c.get('score_terms') or {}).items()),selector)
+        else:text='暂无当前地图对应的候选；预览不代表已执行。'
+        if self.decision.toPlainText()!=text:self.decision.setPlainText(text)
         report=next((x for x in self._reports if x.get('capture_id')==self.selected_capture),None)
         if not report:self.image.set_image(None,'暂无已保存的有效观察');self.report.clear();return
         pix=self.report_pixmap(report)
-        if pix is None:self.image.set_image(None,'原图缺失或哈希不符');self.report.setText(report.get('summary',''));return
+        if pix is None:
+            self.image.set_image(None,'原图缺失或哈希不符')
+            text=report.get('summary','')
+            if self.report.toPlainText()!=text:self.report.setPlainText(text)
+            return
         self._last_image=pix;self.image.set_image(pix)
-        self.report.setText('截图 {} · 仿真时间 {} s\n{}'.format(self.selected_capture[:12],fmt(report.get('captured_at_sim_s')),report.get('summary','')))
+        text='截图 {} · 仿真时间 {} s\n{}'.format(self.selected_capture[:12],fmt(report.get('captured_at_sim_s')),report.get('summary',''))
+        if self.report.toPlainText()!=text:self.report.setPlainText(text)
 
     def report_pixmap(self,report):
         capture=report.get('capture_id');signature=None
@@ -317,8 +360,14 @@ class SearchWorkbench(QWidget):
 
     def refresh_pair(self):
         events=(self.command or {}).get('target_confirmation_events') or []
-        event=next((e for e in reversed(events) if (e.get('candidate') or {}).get('current_capture_id')),None)
+        event=next((e for e in reversed(events) if self.snapshot and e.get('owner')==self.snapshot.get('owner')
+                    and (e.get('candidate') or {}).get('current_capture_id')),None)
         candidate=(event or {}).get('candidate') or {}
+        pair=(candidate.get('source_capture_id'),candidate.get('current_capture_id'))
+        report_ids={r.get('capture_id') for r in self._reports}
+        if all(pair) and set(pair) <= report_ids and pair != self._shown_review_pair:
+            self._shown_review_pair=pair
+            self.detail_tabs.setCurrentIndex(1)
         for label,key in zip(self.pair_images,('source_capture_id','current_capture_id')):
             capture=candidate.get(key);report=next((r for r in self._reports if r.get('capture_id')==capture),None)
             pix=self.report_pixmap(report) if report else None

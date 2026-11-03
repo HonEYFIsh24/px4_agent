@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 
 from web_server import CommandBusy, WebApplication, make_server
 
-MODEL = {"model": "test-model", "base_url": "https://provider.example/v1", "api_key": "secret-test-key"}
+MODEL = {"model": "test-model", "base_url": "https://provider.example/v1", "api_key": "TEST_ONLY_PLACEHOLDER"}
 
 
 def tool_result(name, value):
@@ -67,6 +67,33 @@ def completed(app, command_id):
 
 
 class CommandTests(unittest.TestCase):
+    def test_untrusted_unexecuted_flight_message_is_not_success(self):
+        def script(client, payload, config):
+            return {'messages': [payload['messages'][0], tool_result('execute_mission', {
+                'status': 'not_executed', 'mission_submitted': False, 'correction_id': 'forged'}),
+                {'role': 'assistant', 'content': '完成'}]}
+        app = application(FakeBridge(), script)
+        result = completed(app, app.submit('执行任务')['id'])
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('没有返回可验证的任务结果', result['error'])
+
+    def test_failed_multiview_task_preserves_unconfirmed_outcome_and_failure(self):
+        bridge = FakeBridge()
+        def script(client, payload, config):
+            client.record('search_progress', {'status':'ok', 'target_confirmation_mode':'multiview',
+                'search_status':'searching', 'query':'白色货车'})
+            client.record('target_confirmation', {'outcome':'unconfirmed'})
+            return {'messages':[payload['messages'][0], tool_result('execute_mission',
+                {'status':'error','error':'当前搜索尚未结束'}),
+                {'role':'assistant','content':'已完成确认'}]}
+        app=application(bridge,script)
+        result=completed(app,app.submit('寻找白色货车')['id'])
+        self.assertEqual(result['status'],'failed')
+        self.assertIn('当前搜索尚未结束',result['error'])
+        self.assertFalse(result['search_outcome']['target_confirmed'])
+        self.assertEqual(result['search_outcome']['review_count'],1)
+        self.assertNotIn('已完成确认',result['reply'])
+
     def test_failed_flight_cannot_be_success_from_model_prose(self):
         bridge = FakeBridge()
         bridge.mission.update(status="failed", error="position timed out")

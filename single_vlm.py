@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictFloat
 
 from vision import finite_number, parse_observation, safe_error, target_location, text_field
 from search_tools import coordinate_epoch
+from autonomous_search import PrematureSearchCompletion
 
 
 SINGLE_VLM_PROMPT = """
@@ -48,6 +49,10 @@ position_basis默认image_only；明确地面平面图案才用flat_ground_marki
 可按“飞行阶段→采图与报告→后续飞行阶段”顺序执行，阶段之间检查状态，不并行调用工具。
 例如用户明确要求“起飞到2米，观察当前场景，然后降落”，先完成起飞，再采图报告，最后降落。
 不根据粗略视觉投影自行生成航点；自主目标搜索用begin_target_search和next_target_search_view持续执行。
+多视角搜索中，review_target_candidate返回unconfirmed或rejected时，目标尚未确认；即便两张图
+都看似支持，也必须按返回的search_status和next_tool继续搜索或复核，不能仅凭自己的视觉结论
+提前宣布确认或开始常规返航。仅在搜索状态已结束后按任务要求收尾；紧急降落始终可用。
+复核结果若包含自动准备的next_view，以该嵌套结果中的最新search_status和next_tool为准。
 navigation.enabled=true时可以提交用户目的地或搜索工具提供的观察点；中间绕行航点由对应导航规划器产生，
 VLM不自行推测绕障路线。method=lidar_grid仅支持固定高度二维绕障；method=static_3d使用已知静态
 三维地图，支持1～10米变高飞行，不能称为实时三维雷达建图或动态避障。观察失败仍停止后续移动。
@@ -360,10 +365,47 @@ class SceneMiddleware(AgentMiddleware):
     def wrap_tool_call(self, request, handler):
         name = request.tool_call["name"]
         fatal_report_schema = False
+        search_gate_rejected = False
         try:
             if self.search_manager and name == "execute_mission":
                 owner = turn_owner(request.state["messages"], request.runtime.config)
-                self.search_manager.check_mission(owner, request.tool_call.get("args", {}).get("steps"))
+                try:
+                    self.search_manager.check_mission(owner, request.tool_call.get("args", {}).get("steps"))
+                except PrematureSearchCompletion:
+                    search_gate_rejected = True
+                    # This is a rejected plan, not an executed or retried flight.
+                    # One correction per owned search; all other failures remain fatal.
+                    application = getattr(self.client, 'application', None)
+                    session = self.search_manager.adaptive.sessions.get(owner)
+                    if application is None or session is None:
+                        raise
+                    current_mission = self.client.state().get('mission') or {}
+                    with application.lock:
+                        command = application.current_command or {}
+                        accepted = {item['mission']['id'] for item in command.get('flight_missions', [])
+                            if item.get('path') == '/mission' and isinstance(item.get('mission'), dict)
+                            and isinstance(item['mission'].get('id'), str)}
+                        if (command.get('id') != owner[1] or command.get('interrupted')
+                                or command.get('flight_failure') or command.get('vision_failure')
+                                or current_mission.get('status') != 'succeeded'
+                                or current_mission.get('id') not in accepted
+                                or session.get('completion_corrections', 0) >= 1):
+                            raise
+                        progress = self.search_manager.adaptive.summary(owner)
+                        if progress['search_status'] != 'searching':
+                            raise
+                        event = {'tool_call_id': request.tool_call['id'], 'correction_id': uuid.uuid4().hex,
+                                 'mission_submitted': False, 'reason': 'unconfirmed_search',
+                                 'next_tool': progress['next_tool']}
+                        command.setdefault('search_protocol_corrections', []).append(copy.deepcopy(event))
+                        session['completion_corrections'] = session.get('completion_corrections', 0) + 1
+                    value = {'status': 'not_executed', **event, 'search_progress': progress,
+                             'message': '返航计划未提交；目标未确认，请按最新搜索进度继续。紧急降落始终可用。'}
+                    return ToolMessage(content=json.dumps(value, ensure_ascii=False), name=name,
+                                       tool_call_id=request.tool_call['id'])
+                except Exception:
+                    search_gate_rejected = True
+                    raise
             if (self.search_manager and name == 'execute_mission' and self.search_manager.adaptive.is_nbv(owner)
                     and [s.get('action') for s in request.tool_call.get('args', {}).get('steps', [])] == ['goto']):
                 value = self.search_manager.adaptive.execute_pending(owner, request.tool_call['args'].get('description', 'NBV观察'))
@@ -408,6 +450,8 @@ class SceneMiddleware(AgentMiddleware):
                     pass
             failure = {"status": "error", "model": self.model_config["model"], "architecture": "single_vlm",
                        "targets": [], "limitations": [], **safe_error(exc, self.model_config)}
+            if search_gate_rejected:
+                failure.update(failure_stage='search_mission_precheck', mission_submitted=False)
             if hasattr(self.client, "record"):
                 audit_name = "inspect_scene" if name in ("capture_scene", "report_scene") else name
                 failure = self.client.record(audit_name, failure)

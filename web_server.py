@@ -216,6 +216,10 @@ class AuditedClient:
                     command.setdefault('search_events', []).append(event)
                     if tool_name == 'plan_region_search' and result.get('status') == 'ok':
                         command['search_plan'] = copy.deepcopy(event['result'])
+                    if tool_name == 'begin_target_search' and result_error(result):
+                        # An uninitialized search has no session gate. Do not
+                        # allow the model to fall back to arbitrary flight.
+                        command['search_initialization_failure'] = self.application.clean_error(result_error(result))
                 if tool_name == "vlm_call":
                     command["model_calls"].append(self.application.clean_perception(result))
                     if command.get("perception"):
@@ -232,6 +236,9 @@ class AuditedClient:
                     failure = result_error(result, require_completed=True)
                     if failure and not command["flight_failure"]:
                         command["flight_failure"] = self.application.clean_error(failure)
+                        if (tool_name == 'execute_mission' and isinstance(result, dict) and result.get('failure_stage') == 'search_mission_precheck'
+                                and result.get('mission_submitted') is False):
+                            command['flight_failure_stage'] = 'search_mission_precheck'
         return result
 
     def state(self):
@@ -277,6 +284,8 @@ class AuditedClient:
                         raise RuntimeError("本次指令仅允许视觉观察，禁止提交飞行动作")
                     if path in ("/mission", '/navigation/execute-viewpoint') and command is not None and command.get("vision_failure"):
                         raise RuntimeError("本次视觉分析已失败，禁止据此继续提交飞行任务")
+                    if path in ("/mission", '/navigation/execute-viewpoint') and command is not None and command.get('search_initialization_failure'):
+                        raise RuntimeError('自主搜索初始化失败，禁止继续提交飞行任务')
                     if path in ("/mission", '/navigation/execute-viewpoint') and command is not None and command["flight_failure"]:
                         raise RuntimeError("此指令的飞行任务已失败，禁止自动重试；请查看状态后发布新指令")
                 result = (self.application.client.request(path, payload) if timeout is None else
@@ -459,7 +468,15 @@ class WebApplication:
                 failure = result_error(value)
                 if failure:
                     command["tool_errors"].append({"tool": tool_name, "error": self.clean_error(failure)})
-                error = error or result_error(value, tool_name in ("execute_mission", "land_drone"))
+                # Only the middleware can create this command-owned event before
+                # any flight is submitted; model text alone cannot claim success.
+                correction = (tool_name == 'execute_mission' and isinstance(value, dict)
+                    and value.get('status') == 'not_executed' and value.get('mission_submitted') is False
+                    and any(event.get('tool_call_id') == message_value(message, 'tool_call_id')
+                        and event.get('correction_id') == value.get('correction_id')
+                        and event.get('mission_submitted') is False
+                        for event in command.get('search_protocol_corrections', [])))
+                error = error or result_error(value, tool_name in ("execute_mission", "land_drone") and not correction)
                 if tool_name in ("execute_mission", "land_drone") and isinstance(value, dict):
                     if isinstance(value.get("mission"), dict):
                         mission = value["mission"]
@@ -558,8 +575,12 @@ class WebApplication:
                         reply += "Agent 不会自动重试或继续提交飞行动作。"
                     elif (command["mode"] == "task" and command["flight_failure"] and saved_observation
                             and not command["vision_failure"] and not model_failure):
-                        reply = "视觉观察报告已保存；飞行任务失败：{}。Agent 不会自动重试飞行任务，请查看任务进度和当前飞行状态。".format(
-                            self.clean_error(error))
+                        if command.get('flight_failure_stage') == 'search_mission_precheck':
+                            reply = "视觉观察报告已保存；模型提出的飞行计划未通过提交前的搜索检查，该计划未被提交执行：{}。请查看搜索进度和当前飞行状态。".format(
+                                self.clean_error(error))
+                        else:
+                            reply = "视觉观察报告已保存；飞行任务失败：{}。Agent 不会自动重试飞行任务，请查看任务进度和当前飞行状态。".format(
+                                self.clean_error(error))
                     elif command["mode"] == "observe" or command.get("perception"):
                         reply = "视觉观察未完成：{}。请检查视觉报告和模型配置后重新发起观察。".format(self.clean_error(error))
                         if command["perception"] is None:
@@ -572,11 +593,13 @@ class WebApplication:
                             self.clean_error(error))
                     if command.get("safety_landing"):
                         reply += "\n指令失败后，独立执行器已完成安全降落并上锁。" if command["safety_landing"]["status"] == "ok" else "\n安全降落未确认完成，请查看飞行状态并使用立即降落。"
-                if status == 'succeeded' and command['mode'] == 'task':
+                if command['mode'] == 'task':
                     verified = multiview_search_result(command)
                     if verified is not None:
-                        command['model_reply_before_search_verification'] = self.clean_error(reply)
-                        command['search_outcome'], reply = verified
+                        command['search_outcome'], search_reply = verified
+                        if status == 'succeeded':
+                            command['model_reply_before_search_verification'] = self.clean_error(reply)
+                            reply = search_reply
                 command.update(status=status, reply=reply, error=self.clean_error(error) if error else None,
                                finished_at=time.time())
                 if mission:
