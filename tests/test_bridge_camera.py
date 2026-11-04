@@ -133,6 +133,39 @@ class CameraCaptureTests(unittest.TestCase):
             self.controller.capture_stereo()
         self.controller.stereo_reports.put.assert_not_called()
 
+    def test_stereo_waits_for_new_pair_after_completed_rotation(self):
+        self.controller.yaw_capture_barrier = 10.0
+        self.controller.ev_guard = mock.Mock()
+        self.controller.ev_guard.snapshot.return_value = {}
+        self.controller.local_pose_history[0].update(stamp_sim_s=10.1, coordinate_epoch=None,
+                                                    orientation_xyzw=[0.,0.,0.,1.])
+        for side in ('left', 'right'):
+            self.frame(side, 10.1, b'new-image')
+        image = {'jpeg': b'new-image', 'width': 640, 'height': 480,
+                 'frame_id': 'camera', 'image_quality': {}}
+        newer = {'stamp_sim_s': 10.1, 'received': 999.95, 'left': image, 'right': image}
+        self.controller.stereo_cache = mock.Mock()
+        self.controller.stereo_cache.snapshot.side_effect = [{'stamp_sim_s': 10.0}, newer]
+        self.controller.stereo_reports = mock.Mock()
+        self.controller.stereo_reports.put.return_value = 'new-pair'
+        self.controller.navigation_map = None
+        with mock.patch.object(bridge.time, 'sleep') as wait:
+            result = self.controller.capture_stereo()
+        self.assertEqual(result['stamp_sim_s'], 10.1)
+        self.assertEqual(result['pair_id'], 'new-pair')
+        self.assertEqual(self.controller.stereo_cache.snapshot.call_count, 2)
+        wait.assert_called_once()
+
+    def test_stereo_does_not_wait_through_failed_rotation_or_accept_stale_pair(self):
+        self.controller.stereo_cache = mock.Mock()
+        self.controller.stereo_cache.snapshot.return_value = {'stamp_sim_s': 10.0}
+        for barrier, expected_calls in ((float('inf'), 1), (10.0, 41)):
+            self.controller.yaw_capture_barrier = barrier
+            self.controller.stereo_cache.snapshot.reset_mock()
+            with mock.patch.object(bridge.time, 'sleep'), self.assertRaises(bridge.MissionError):
+                self.controller.capture_stereo()
+            self.assertEqual(self.controller.stereo_cache.snapshot.call_count, expected_calls)
+
     def test_optical_axes_and_yaw_match_generated_sdf(self):
         pose = bridge.camera_world_pose({"position_m": [0, 0, 1], "orientation_xyzw": [0, 0, 0, 1]}, "left")
         q = pose["orientation_xyzw"]

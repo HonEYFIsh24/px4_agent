@@ -2,7 +2,7 @@
 import math
 
 MIN_ALTITUDE = 1.0
-MAX_ALTITUDE = 10.0
+MAX_ALTITUDE = 20.0
 MAX_RADIUS = 30.0
 MAX_STEPS = 24
 MAX_SPEED = 1.0
@@ -10,6 +10,10 @@ MAX_SPEED = 1.0
 
 class MissionError(ValueError):
     pass
+
+
+class PathUnavailable(MissionError):
+    """A geometric candidate rejection, never an executed-flight failure."""
 
 
 def number(value, name, low=None, high=None):

@@ -1,0 +1,65 @@
+diff --git a/src/modules/ekf2/EKF/mag_3d_control.cpp b/src/modules/ekf2/EKF/mag_3d_control.cpp
+index 41192f2cbf..510d8bb6f8 100644
+--- a/src/modules/ekf2/EKF/mag_3d_control.cpp
++++ b/src/modules/ekf2/EKF/mag_3d_control.cpp
+@@ -37,6 +37,8 @@
+  */
+ 
+ #include "ekf.h"
++#include <px4_platform_common/log.h>
++#define MAGDBG(...) px4_log_modulename(_PX4_LOG_LEVEL_INFO, "ekf2_magdiag", __VA_ARGS__)
+ 
+ void Ekf::controlMag3DFusion(const magSample &mag_sample, const bool common_starting_conditions_passing,
+ 			     estimator_aid_source3d_s &aid_src)
+@@ -47,6 +49,20 @@ void Ekf::controlMag3DFusion(const magSample &mag_sample, const bool common_star
+ 
+ 	const bool wmm_updated = (_wmm_gps_time_last_set >= aid_src.time_last_fuse); // WMM update can occur on the last epoch, just after mag fusion
+ 
++	// SITL-only diagnostic copy: report each call site before state mutation.
++	// Delayed estimator time and sensor sample time are both retained so the
++	// record can be correlated with (later) output-predictor reset counters.
++	const auto report_mag_reset = [&](const char *site, bool hagl_requested, bool reset_heading) {
++		MAGDBG("MAGDBG site=%s t=%llu sample=%llu", site,
++			 (unsigned long long)_time_delayed_us, (unsigned long long)mag_sample.time_us);
++		MAGDBG("MAGDBG cause sample=%d hagl=%d wmm=%d heading=%d", (int)mag_sample.reset,
++			 (int)hagl_requested, (int)wmm_updated, (int)reset_heading);
++		MAGDBG("MAGDBG state air=%d yaw=%d aligned=%d hdg=%d 3d=%d hagl=%.3f",
++			 (int)_control_status.flags.in_air, (int)_control_status.flags.yaw_align,
++			 (int)_control_status.flags.mag_aligned_in_flight, (int)_control_status.flags.mag_hdg,
++			 (int)_control_status.flags.mag_3D, (double)(getTerrainVPos() - _state.pos(2)));
++	};
++
+ 	// determine if we should use mag fusion
+ 	bool continuing_conditions_passing = (_params.mag_fusion_type != MagFuseType::NONE)
+ 					     && _control_status.flags.tilt_align
+@@ -99,8 +115,10 @@ void Ekf::controlMag3DFusion(const magSample &mag_sample, const bool common_star
+ 
+ 		if (continuing_conditions_passing && _control_status.flags.yaw_align) {
+ 
+-			if (mag_sample.reset || checkHaglYawResetReq() || wmm_updated) {
++			const bool hagl_requested = checkHaglYawResetReq();
++			if (mag_sample.reset || hagl_requested || wmm_updated) {
+ 				ECL_INFO("reset to %s", AID_SRC_NAME);
++				report_mag_reset("active", hagl_requested, _control_status.flags.mag_hdg || _control_status.flags.mag_3D);
+ 				resetMagStates(_mag_lpf.getState(), _control_status.flags.mag_hdg || _control_status.flags.mag_3D);
+ 				aid_src.time_last_fuse = _time_delayed_us;
+ 
+@@ -134,6 +152,7 @@ void Ekf::controlMag3DFusion(const magSample &mag_sample, const bool common_star
+ 				if (_nb_mag_3d_reset_available > 0) {
+ 					// Data seems good, attempt a reset (mag states only unless mag_3D currently active)
+ 					ECL_WARN("%s fusion failing, resetting", AID_SRC_NAME);
++					report_mag_reset("timeout", checkHaglYawResetReq(), _control_status.flags.mag_hdg || _control_status.flags.mag_3D);
+ 					resetMagStates(_mag_lpf.getState(), _control_status.flags.mag_hdg || _control_status.flags.mag_3D);
+ 					aid_src.time_last_fuse = _time_delayed_us;
+ 
+@@ -178,6 +197,10 @@ void Ekf::controlMag3DFusion(const magSample &mag_sample, const bool common_star
+ 				ECL_INFO("starting %s fusion, resetting states", AID_SRC_NAME);
+ 
+ 				bool reset_heading = !_control_status.flags.yaw_align;
++				report_mag_reset("initialize", checkHaglYawResetReq(), reset_heading);
++				MAGDBG("MAGDBG init decl=%d magI=%d varI=%d varB=%d", (int)_mag_decl_cov_reset,
++					 (int)_state.mag_I.longerThan(0.f), (int)(getStateVariance<State::mag_I>().min() < kMagVarianceMin),
++					 (int)(getStateVariance<State::mag_B>().min() < kMagVarianceMin));
+ 
+ 				resetMagStates(_mag_lpf.getState(), reset_heading);
+ 

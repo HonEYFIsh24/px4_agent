@@ -27,7 +27,7 @@ class FakeBridge:
     def state(self):
         if self.offline:
             raise OSError("connection refused")
-        return {"ready": True, "armed": False, "position_enu_m": [0, 0, 0],
+        return {"ready": True, "armed": False, "landed_state": 1, "position_enu_m": [0, 0, 0],
                 "gazebo": {"available": True, "position_m": [0, 0, 0]},
                 "mission": copy.deepcopy(self.mission)}
 

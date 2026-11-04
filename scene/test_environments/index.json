@@ -10,6 +10,26 @@
         "world": "4e8bb8b06314def07753afd3fae70ee3f20cbc61add2282fdb1ebf8e3739b30b",
         "manifest": "b9b1bbf5cde4557fcbd6bca0668d577a91b20b4e9838beac9c6e4e466115c8f9"
       }
+    },
+    {
+      "id": "forest_rescue",
+      "world": "forest_rescue.world",
+      "manifest": "forest_rescue_manifest.json",
+      "world_sha256": "d3861efc8a760df518a8c2ac01fa7cc46f30f50e51778d5efc7c58fdd615a295",
+      "asset_sha256": {
+        "world": "d3861efc8a760df518a8c2ac01fa7cc46f30f50e51778d5efc7c58fdd615a295",
+        "manifest": "f0c458eda5cf179b857a4f564ecfae19c5c16e0810c2270e0643380c8b0183a4"
+      }
+    },
+    {
+      "id": "orchard_flat_test",
+      "world": "orchard_flat_test.world",
+      "manifest": "orchard_flat_test_manifest.json",
+      "world_sha256": "857a9639be2c2deb829c0acadca9023533afa7f0d9b95090c16a20fbe2632e4d",
+      "asset_sha256": {
+        "world": "857a9639be2c2deb829c0acadca9023533afa7f0d9b95090c16a20fbe2632e4d",
+        "manifest": "b02f45fc963552f8878449b268be15a80b91d2dccec5ad196da4b26bf18b5cf0"
+      }
     }
   ]
 }

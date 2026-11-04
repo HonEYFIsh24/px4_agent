@@ -3,6 +3,7 @@
 The VLM moves using the existing supervised execute_mission tool. This module
 only returns deterministic observation points and accepts real saved reports.
 """
+from mission import MAX_ALTITUDE
 import copy
 import math
 import threading
@@ -16,7 +17,7 @@ from stereo_localization import calibration_from_camera_info, finite, quaternion
 SEARCH_PROMPT = """
 以下规则仅针对给定区域的网格搜索；自然语言寻找目标使用begin_target_search，不要求用户提供区域。
 使用者给定ENU区域搜索时调用plan_region_search；query填目标名称，与后续report_scene的目标label保持一致。
-先get_drone_state。区域搜索需要已验证ENU导航地图；lidar_grid先起飞到固定3.5米，static_3d可在1～10米选高，等执行器完成后再规划。
+先get_drone_state。区域搜索需要已验证ENU导航地图；lidar_grid先起飞到固定3.5米，static_3d可在1～20米选高，等执行器完成后再规划。
 plan_region_search只生成观察点，不执行飞行。不能把scene世界坐标bounds直接作为ENU边界。
 bounds表示要寻找目标的区域，不是飞机必须停留的区域。前俯摄像头需要在区域后方观察；工具返回的车辆观察点可能在目标区域外，但必须在已验证的ENU飞行许可内，不能自行改回cell中心。
 依次search_observation_status(view='next')取得当前点，用execute_mission的goto到返回的point，再capture_scene并report_scene。
@@ -61,8 +62,8 @@ def _navigation_permission(state):
         permission = navigation_goal_permission(bounds,sensed_map.get("obstacle_inflation_m"),
                                                 sensed_map.get("visible_clearance_m"))
         altitude = vector(state.get("position_enu_m"),3,"current ENU position")[2]
-        if not 1 <= altitude <= 10:
-            raise CoverageSearchError("搜索观察高度必须位于本地 1～10 米范围内")
+        if not 1 <= altitude <= MAX_ALTITUDE:
+            raise CoverageSearchError("搜索观察高度必须位于本地 1～20 米范围内")
         _require_coordinate_evidence(state)
         return permission["usable_goal_bounds_enu_m"],altitude,permission
     if (state.get("simulation_only") is not True or state.get("ready") is not True or state.get("armed") is not True
@@ -362,7 +363,7 @@ def build_search_tools(client, manager=None):
         model_config = ConfigDict(extra="forbid", strict=True)
         query: str = Field(min_length=1, max_length=80, description="Target label; use exactly this label in report_scene")
         end_behavior: Literal["land", "hold"] = "land"
-        initial_altitude: float = Field(default=3., ge=1, le=10, description="Initial observation ENU altitude; default 3m; respect user-specified height")
+        initial_altitude: float = Field(default=3., ge=1, le=MAX_ALTITUDE, description="Initial observation ENU altitude; default 3m; respect user-specified height")
 
     class TargetViewArguments(BaseModel):
         model_config = ConfigDict(extra="forbid", strict=True)
@@ -422,7 +423,7 @@ def build_search_tools(client, manager=None):
         """Start autonomous simulation target search without user-specified coordinates.
 
         Forward means initial body heading. Authorizes takeoff and adaptive safe
-        views within 12m, 1..10m altitude, eight observations and 900 seconds.
+        views within 12m, 1..20m altitude, eight observations and 900 seconds.
         Then take off if grounded, capture_scene, report_scene, and keep searching.
         """
         try:

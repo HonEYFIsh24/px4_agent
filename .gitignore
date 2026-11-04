@@ -12,6 +12,8 @@ id_ed25519*
 # Dependencies and interpreter caches.
 .venv/
 .tools/
+# Downloaded third-party Gazebo assets; pinned sources/configuration are tracked.
+scene/external_worlds/
 venv/
 node_modules/
 __pycache__/

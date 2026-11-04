@@ -1,0 +1,49 @@
+{
+  "id": "forest_rescue",
+  "world_sha256": "d3861efc8a760df518a8c2ac01fa7cc46f30f50e51778d5efc7c58fdd615a295",
+  "ground_plane": {
+    "known": true,
+    "z_m": 0.003,
+    "bounds_xy_m": [
+      -50,
+      -40,
+      50,
+      40
+    ]
+  },
+  "flight_region": {
+    "frame": "gazebo_world",
+    "bounds_min_m": [
+      -48,
+      -38,
+      -0.2
+    ],
+    "bounds_max_m": [
+      48,
+      38,
+      10.6
+    ],
+    "margin_m": 0.6
+  },
+  "takeoff_pad": {
+    "center_world_m": [
+      0,
+      0,
+      0.003
+    ],
+    "radius_m": 1.0,
+    "vertical_clearance_m": 10.0
+  },
+  "navigation": {
+    "enabled": true,
+    "method": "static_3d",
+    "bounds_xy_m": [
+      -48,
+      -38,
+      48,
+      38
+    ],
+    "flight_altitude_m": 3.0,
+    "minimum_clearance_m": 1.0
+  }
+}

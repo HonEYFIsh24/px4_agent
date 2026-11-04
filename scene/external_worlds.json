@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "flight_approved": false,
+  "worlds": {
+    "warehouse": {
+      "directory": "aws-warehouse",
+      "repository": "https://github.com/aws-robotics/aws-robomaker-small-warehouse-world",
+      "commit": "3c23a698bf0b4e366ddf8b084af507c519bd3483",
+      "world": "worlds/no_roof_small_warehouse.world",
+      "world_sha256": "bd05d247e4715b7810c1f1edd8353a907af5bd8b81391c126dcb73803b7906bf",
+      "model_paths": [
+        "aws-warehouse/models"
+      ],
+      "license": "MIT-0; LICENSE"
+    },
+    "city": {
+      "directory": "citysim-pinned",
+      "repository": "https://github.com/osrf/citysim",
+      "commit": "3928b08e2598f5ead2e9b24640fe1bde262a136d",
+      "world": "worlds/simple_city.world",
+      "world_sha256": "b36f8a3974f22643169b153e0475c66eaa3ab73f9e929460b1d2c0f37fed491e",
+      "model_paths": [
+        "citysim-pinned/models",
+        "gazebo-models"
+      ],
+      "license": "Apache-2.0; LICENSE",
+      "omit_preview_plugins": [
+        "libJoyPlugin.so",
+        "libKeyboardGUIPlugin.so",
+        "libTrafficLightsGUIPlugin.so",
+        "libBloomVisualPlugin.so",
+        "libLensFlareVisualPlugin.so",
+        "libPriusHybridPlugin.so"
+      ],
+      "camera_pose": "-70 -60 65 0 0.60 0.55",
+      "texture_search_models": [
+        "fast_food",
+        "house_1",
+        "gas_station"
+      ]
+    },
+    "orchard": {
+      "directory": "clearpath-pinned",
+      "repository": "https://github.com/clearpathrobotics/cpr_gazebo",
+      "commit": "509afbeec942c6aad376a5a76a24330f1c56dc17",
+      "world": "cpr_orchard_gazebo/worlds/actually_empty_world.world",
+      "world_sha256": "b6e47a45585c423749df8047c75761a2ad47074a1815fb60c735936ae968a59e",
+      "model_paths": [
+        "clearpath-pinned"
+      ],
+      "license": "BSD-3-Clause; cpr_orchard_gazebo/docs/LICENSE.txt",
+      "orchard_xacro": "cpr_orchard_gazebo/urdf/orchard_geometry.urdf.xacro"
+    }
+  },
+  "additional_models": {
+    "repository": "https://github.com/osrf/gazebo_models",
+    "git_tree": "8163eb4b5e7e21985c6591d1c0bfb56468c0093f",
+    "directory": "gazebo-models",
+    "downloaded_models": 24,
+    "downloaded_files": 126,
+    "verification": "Git blob SHA1 checked for all downloaded files; full manifest in local .source_revision.json",
+    "license_note": "Retain upstream model.config and per-model notices; assets are not redistributed in this repository."
+  }
+}

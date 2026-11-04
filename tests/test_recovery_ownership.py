@@ -66,7 +66,8 @@ class WebRecoveryTests(unittest.TestCase):
         original_request=bridge_client.request
         def request(path,payload=None):
             if path=='/land':
-                self.assertEqual(payload,{'expected_mission_id':'flight-1'})
+                self.assertEqual(payload,{'expected_mission_id':'flight-1',
+                                          'reason':'Independent task failure cleanup'})
                 bridge_client.mission={'id':'landing-1','parent_mission_id':'flight-1',
                     'status':'succeeded','steps':[{'action':'land'}]}
             return original_request(path,payload)
@@ -132,7 +133,8 @@ class WebRecoveryTests(unittest.TestCase):
         app.active_id='owned-command'
         bridge_client.request=mock.Mock(return_value={'mission':{'id':'landing'}})
         app.interrupt('/land',{'expected_mission_id':'flight-1','expected_command_id':'owned-command'})
-        bridge_client.request.assert_called_once_with('/land',{'expected_mission_id':'flight-1'})
+        bridge_client.request.assert_called_once_with('/land',{'expected_mission_id':'flight-1',
+                                                            'reason':'Operator control: /land'})
         self.assertTrue(app.commands['owned-command']['interrupted'])
 
     def test_changed_command_or_mission_rejects_without_interrupting_other_work(self):
@@ -148,6 +150,17 @@ class WebRecoveryTests(unittest.TestCase):
                 app.interrupt('/land',payload)
         bridge_client.request.assert_not_called()
         self.assertFalse(app.commands['new-command']['interrupted'])
+
+    def test_operator_landing_keeps_original_command_when_model_finishes_during_request(self):
+        bridge_client=FakeBridge();app=application(bridge_client,lambda *args:None)
+        app.commands['owned']={'id':'owned','interrupted':False,'flight_missions':[]}
+        app.active_id='owned'
+        def request(path,payload):
+            app.active_id=None
+            return {'mission':{'id':'operator-landing','status':'running'}}
+        bridge_client.request=mock.Mock(side_effect=request)
+        app.interrupt('/land')
+        self.assertEqual(app.commands['owned']['termination_mission_id'],'operator-landing')
 
     def test_failed_model_does_not_land_a_newer_bridge_mission(self):
         bridge_client=FakeBridge()

@@ -86,6 +86,14 @@ class WorkbenchAcceptance:
         self.mark('02-submitted',command,state)
         if mission.get('action')=='takeoff' and mission.get('status')=='running':self.mark('03-takeoff',command,state)
         if wb.snapshot and len(wb._reports)>=1:self.mark('04-first-observation',command,state)
+        # Capture the actual live tab once while retaining the operator's tab.
+        # The live widget is populated only by the desktop freshness gate.
+        if (wb.snapshot and wb.live_image.original is not None and '04-live-camera' not in self.marked
+                and wb.detail_tabs.currentIndex() != 1):
+            previous=wb.detail_tabs.currentIndex()
+            wb.detail_tabs.setCurrentWidget(wb.live_image.parentWidget())
+            self.mark('04-live-camera',command,state)
+            wb.detail_tabs.setCurrentIndex(previous)
         if (wb.prediction and len(wb._candidates)>=2 and wb.selected_candidate==wb.prediction.get('selected_id')
                 and wb.map.candidate and wb.map.layers.get('predicted')):
             self.mark('05-nbv-preview',command,state)

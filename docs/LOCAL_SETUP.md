@@ -112,13 +112,15 @@ iKuuu 中 PX4 DashScope 分流组仍存在，原为 Bypass node。将仅该组�
 
 恢复后 3 次固定短文本请求通过；另以代码新建的 32×32 纯红色方块进行 2 次视觉请求，均成功返回“红色”。日志为 `logs/setup/model-recheck-20261022-text-recovered/diagnostics.json` 和 `logs/setup/model-synthetic-validation.json`。真实相机图片诊断被自动审批拒绝，因此此次未发送相机图像，也未执行任何飞行工具。若后续出现同一 TLS 错误，可先在 iKuuu 重新连接后重试，避免反复重启整个仿真。
 
-## VIO 主定位与 1～10 米变高任务（2026-10-22）
+## VIO 主定位与变高任务
+
+2026-11-04：按用户要求将本地 ENU 指令上限调整为 20 米；NBV 目标保留 0.5 米上界余量，水平范围及碰撞/坐标保护不变。20 米尚未实飞验收，果园降落速度重置待定位。以下 2026-10-22 记录仍只证明当时的 10 米飞行，不扩写为 20 米通过。
 
 用户明确选择 VIO 为主要位置/速度来源、任务中可变高度且本地 ENU 上限 10 米，并选择使用已知静态三维地图规划。桌面 `launch_desktop.sh` 现默认 `PX4_DESKTOP_EV_PROFILE=no_gps`、`UAV_NAVIGATION_MODE=static_3d`。原通用 ROS launch 的 shadow/二维默认值保留。无 GPS profile 在 EKF 启动前设置 GPS_CTRL=0、EV_CTRL=7、HGT_REF=3；保留气压计和磁罗盘。启动必须观察到实际 EV 位置、速度及高度融合，并确认 GPS 位置/高度融合关闭，不能仅凭参数或适配器 forwarding 声称完成。
 
 本机 PX4 1.15 的 aid-source 消息移除了 `fusion_enabled`，增加 `estimator_instance`；原 1.14 监测器会把实际融合误判为未融合。`aid_fusion_accepted` 现兼容两种格式，仍要求真实控制标志、fused=true、innovation_rejected=false、有效递增的 time_last_fuse、源时间年龄和正确实例。缺少旧 enabled 字段时，必须有整数类型的 selected estimator_instance，不能以缺失字段默认为已融合。监测现也保存高度 aid-source 证据。
 
-`static_navigation.py` 独立读取经过哈希核对的内置场景 SDF 碰撞体，以保守 AABB 和 1 米间隙进行三维连续线段检查、A* 与路径简化。地图几何不交给 Agent；VIO/PX4 提供飞行位置，Gazebo 机体姿态仅用于本架次地图坐标注册及原有场景许可监督，不替代 EKF 位置控制。未知碰撞形状、动态模型、未校验场景及越界端点拒绝执行。起飞和计划降落的垂直通道也做碰撞检查。固定二维雷达门限仅在旧 lidar_grid 模式保留，新模式明确标注雷达只作遥测，不声称实时三维建图或动态障碍保护。区域搜索使用注册后的本地许可范围及当前 1～10 米观察高度，保留 VIO epoch/坐标重置证据约束。
+`static_navigation.py` 独立读取经过哈希核对的内置场景 SDF 碰撞体，以保守 AABB 和 1 米间隙进行三维连续线段检查、A* 与路径简化。地图几何不交给 Agent；VIO/PX4 提供飞行位置，Gazebo 机体姿态仅用于本架次地图坐标注册及原有场景许可监督，不替代 EKF 位置控制。未知碰撞形状、动态模型、未校验场景及越界端点拒绝执行。起飞和计划降落的垂直通道也做碰撞检查。固定二维雷达门限仅在旧 lidar_grid 模式保留，新模式明确标注雷达只作遥测，不声称实时三维建图或动态障碍保护。区域搜索使用注册后的本地许可范围及当前 1～20 米观察高度，保留 VIO epoch/坐标重置证据约束。
 
 实际仿真任务 `d0d628611786`（运行 `20261022-210300-8dbkG9`）完成：5 米起飞 → 原地 10 米 → 东侧 1 米/8 米高度 → 返航 → 降落。5 步均成功，确认 landed_state=1、armed=false。完整记录 `logs/setup/vio-variable-height-flight.json`，汇总 `logs/setup/vio-variable-height-summary.json`。本地高度峰值 9.99198 米，世界坐标机体 Z 峰值 10.32468 米；因此“10米”指任务本地 ENU 高度，不是严格的离地高度上界，也不证明定位误差为零。
 

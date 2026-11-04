@@ -15,6 +15,11 @@ TOPICS = ('estimator_selector_status', 'estimator_status_flags', 'estimator_aid_
           'estimator_aid_src_ev_vel', 'estimator_aid_src_ev_hgt', 'vehicle_local_position', 'vehicle_visual_odometry',
           'vehicle_status', 'failsafe_flags')
 
+# The heading guard requires successive actual local-position source samples
+# within 0.5 simulation seconds. A 0.5-second wall poll has no scheduling
+# margin at realtime speed; faster polling never relaxes that source-time gate.
+POLL_INTERVAL_WALL_S = .2
+
 
 def aid_fusion_accepted(aid, flags, flag, instance=0):
     """Accept actual fusion evidence across PX4 1.14/1.15 message schemas.
@@ -77,6 +82,12 @@ def heading_observation_fields(local, flags):
             'heading_delta_ned_rad': local.get('delta_heading'),
             'heading_good_for_control': boolean(local.get('heading_good_for_control')),
             'local_velocity_reset_counters': {k: local.get(k+'_reset_counter') for k in ('vxy', 'vz')},
+            'mag_reference': {'heading_fusion': boolean(flags.get('cs_mag_hdg')),
+                              'three_axis_fusion': boolean(flags.get('cs_mag_3d')),
+                              'fault': boolean(flags.get('cs_mag_fault')),
+                              'field_disturbed': boolean(flags.get('cs_mag_field_disturbed')),
+                              'source_stamp_sim_s': seconds(flags.get('timestamp_sample')),
+                              'publish_stamp_sim_s': seconds(flags.get('timestamp'))},
             'mag_alignment': {'aligned_in_flight': boolean(flags.get('cs_mag_aligned_in_flight')),
                               'yaw_aligned': boolean(flags.get('cs_yaw_align')),
                               'in_air': boolean(flags.get('cs_in_air')),
@@ -158,7 +169,7 @@ def main():
             # Keep verbose raw polls in immutable evidence, not the live UI.
             payload.pop('polls', None)
             publisher.publish(String(data=json.dumps(payload, allow_nan=False)))
-            remaining = max(0, .5-(time.monotonic()-started))
+            remaining = max(0, POLL_INTERVAL_WALL_S-(time.monotonic()-started))
             if remaining:
                 time.sleep(remaining)
 

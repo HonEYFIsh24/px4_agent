@@ -174,6 +174,12 @@ class AuditedClient:
         with self.application.lock:
             command = self.application.current_command
             if command is not None:
+                if tool_name in ('model_end_request', 'search_termination'):
+                    command.setdefault('termination_events', []).append({'event': tool_name,
+                        'wall_s': time.time(), 'result': self.application.clean_perception(result)})
+                if tool_name == 'search_termination':
+                    command.setdefault('search_events', []).append({'tool': tool_name,
+                        'wall_s': time.time(), 'result': self.application.clean_perception(result)})
                 if tool_name == "inspect_scene":
                     result = self.application.clean_perception(result)
                     if command["interrupted"]:
@@ -183,6 +189,9 @@ class AuditedClient:
                         result = {"status": "error", "error": command["vision_failure"] + "；本指令后续报告不再采纳",
                                   "targets": [], "limitations": []}
                 command["tool_results"].append((tool_name, copy.deepcopy(result)))
+                if tool_name == 'photo_progress':
+                    command['photo_progress'] = self.application.clean_perception(result)
+                    command.setdefault('photo_events', []).append(copy.deepcopy(command['photo_progress']))
                 if tool_name == 'semantic_map':
                     command.setdefault('semantic_map_events', []).append(copy.deepcopy(result))
                 if tool_name == 'nbv_prediction':
@@ -232,13 +241,17 @@ class AuditedClient:
                     failure = result_error(result)
                     if failure and not command["vision_failure"]:
                         command["vision_failure"] = self.application.clean_error(failure)
-                if tool_name in ("execute_mission", "land_drone"):
-                    failure = result_error(result, require_completed=True)
+                if tool_name in ("execute_mission", "land_drone", "stop_drone"):
+                    failure = result_error(result, require_completed=tool_name != 'stop_drone')
                     if failure and not command["flight_failure"]:
                         command["flight_failure"] = self.application.clean_error(failure)
-                        if (tool_name == 'execute_mission' and isinstance(result, dict) and result.get('failure_stage') == 'search_mission_precheck'
+                        if (tool_name in ('execute_mission', 'land_drone', 'stop_drone') and isinstance(result, dict) and result.get('failure_stage') == 'search_mission_precheck'
                                 and result.get('mission_submitted') is False):
                             command['flight_failure_stage'] = 'search_mission_precheck'
+                            # The graph now aborts on a fatal precheck. Preserve
+                            # its audit even when no ToolMessage reaches invoke().
+                            command['tool_errors'].append({'tool': tool_name,
+                                'error': self.application.clean_error(failure)})
         return result
 
     def state(self):
@@ -280,27 +293,45 @@ class AuditedClient:
                     command = self.application.current_command
                     if command is not None and command.get("interrupted"):
                         raise RuntimeError("操作员已中断此指令，禁止继续提交飞行动作")
-                    if path in ("/mission", "/land", "/stop", '/navigation/execute-viewpoint') and command is not None and command["mode"] == "observe":
+                    if path in ("/mission", "/land", "/stop", '/navigation/execute-viewpoint', '/navigation/photo-action') and command is not None and command["mode"] == "observe":
                         raise RuntimeError("本次指令仅允许视觉观察，禁止提交飞行动作")
-                    if path in ("/mission", '/navigation/execute-viewpoint') and command is not None and command.get("vision_failure"):
+                    if path in ("/mission", '/navigation/execute-viewpoint', '/navigation/photo-action') and command is not None and command.get("vision_failure"):
                         raise RuntimeError("本次视觉分析已失败，禁止据此继续提交飞行任务")
-                    if path in ("/mission", '/navigation/execute-viewpoint') and command is not None and command.get('search_initialization_failure'):
+                    if path in ("/mission", '/navigation/execute-viewpoint', '/navigation/photo-action') and command is not None and command.get('search_initialization_failure'):
                         raise RuntimeError('自主搜索初始化失败，禁止继续提交飞行任务')
-                    if path in ("/mission", '/navigation/execute-viewpoint') and command is not None and command["flight_failure"]:
+                    if path in ("/mission", '/navigation/execute-viewpoint', '/navigation/photo-action') and command is not None and command["flight_failure"]:
                         raise RuntimeError("此指令的飞行任务已失败，禁止自动重试；请查看状态后发布新指令")
+                    if path == '/navigation/photo-action':
+                        owned = {e['mission']['id'] for e in (command or {}).get('flight_missions', [])
+                                 if e.get('path') == '/mission' and isinstance(e.get('mission'), dict)
+                                 and isinstance(e['mission'].get('id'), str)}
+                        if command is None or payload.get('expected_mission_id') not in owned:
+                            raise RuntimeError('相对取景和返航必须拥有当前飞行任务')
                 result = (self.application.client.request(path, payload) if timeout is None else
                           self.application.client.request(path, payload, timeout=timeout))
+                if path == '/navigation/photo-action' and result.get('status') == 'not_executed':
+                    from photo_navigation import validate_photo_rejection
+                    validate_photo_rejection(result, payload, self.application.client.state())
+                    return self.record('photo_plan_rejection', result)
         except Exception as exc:
-            if path in ("/mission", "/land", '/navigation/execute-viewpoint'):
+            if path in ("/mission", "/land", '/navigation/execute-viewpoint', '/navigation/photo-action'):
                 self.record("land_drone" if path == "/land" else "execute_mission",
                             {"status": "error", "error": str(exc)})
             raise
-        if path == '/navigation/execute-viewpoint':
+        if path in ('/navigation/execute-viewpoint', '/navigation/photo-action'):
             # Keep the existing accepted/waited mission ownership contract. The
             # transport endpoint remains explicit and no coordinates came from LLM.
             result = {**result, 'accepted_via': path}
             return self.record('/mission', result)
         return self.record(path, result)
+
+    def wait_for_photo_action(self, accepted):
+        try:
+            result = self.application.client.wait_for(accepted)
+        except Exception as exc:
+            self.record('execute_mission', {'status': 'error', 'error': str(exc)})
+            raise
+        return self.record('execute_mission', result)
 
     def execute(self, steps, description="", on_progress=None):
         accepted = self.request("/mission", {"steps": steps, "description": description})
@@ -386,6 +417,9 @@ class WebApplication:
             if not isinstance(state, dict):
                 raise RuntimeError("执行器返回了无效状态")
             state = copy.deepcopy(state)
+            with self.lock:
+                for command in self.commands.values():
+                    self.verify_search_landing(command, state)
         except Exception as exc:
             state = {"ready": False, "connected": False, "simulation_only": True,
                      "reason": "无法连接 ROS 执行器", "error": self.clean_error(exc),
@@ -442,6 +476,7 @@ class WebApplication:
 
     def run_command(self, command):
         status, error, reply, mission = "succeeded", None, "", None
+        photo_unmet_only = False
         try:
             result = self.agent.invoke({"messages": [{"role": "user", "content": command["prompt"], "id": command['id']}]},
                                        {"configurable": {"thread_id": self.agent_thread_id},
@@ -470,7 +505,7 @@ class WebApplication:
                     command["tool_errors"].append({"tool": tool_name, "error": self.clean_error(failure)})
                 # Only the middleware can create this command-owned event before
                 # any flight is submitted; model text alone cannot claim success.
-                correction = (tool_name == 'execute_mission' and isinstance(value, dict)
+                correction = (tool_name in ('execute_mission', 'land_drone', 'stop_drone') and isinstance(value, dict)
                     and value.get('status') == 'not_executed' and value.get('mission_submitted') is False
                     and any(event.get('tool_call_id') == message_value(message, 'tool_call_id')
                         and event.get('correction_id') == value.get('correction_id')
@@ -504,6 +539,14 @@ class WebApplication:
                 error = error or "采图后未保存对应的有效观察报告"
             if observed < command["min_observations"]:
                 error = error or "有效观察报告不足：需要{}份，实际{}份".format(command["min_observations"], observed)
+            photo_progress = command.get('photo_progress')
+            if photo_progress and photo_progress.get('photo_status') != 'met':
+                photo_unmet_only = (error is None and photo_progress.get('photo_status') in ('limited', 'budget_exhausted')
+                    and not photo_progress.get('activity_closed') and not command['interrupted']
+                    and not command['flight_failure'] and not command['vision_failure']
+                    and not command['tool_errors'] and not command.get('search_initialization_failure')
+                    and all(c.get('status') == 'ok' for c in command['model_calls']))
+                error = error or '拍摄构图目标未完成：' + str(photo_progress.get('photo_status'))
             if error:
                 status = "failed"
         except Exception as exc:
@@ -512,6 +555,8 @@ class WebApplication:
             # A failed model cannot be relied on to invoke the remaining landing tool.
             # Cancel this command's running worker even before it arms. Otherwise
             # a failed command could leave a delayed takeoff executing afterwards.
+            if status == 'failed' and not command['interrupted']:
+                self.close_search_activity(command['id'], 'protocol_error' if command.get('flight_failure_stage') == 'search_mission_precheck' else 'safety_fault', error or 'Task failed')
             if status == "failed" and self.agent_architecture == "single_vlm" and command["mode"] == "task" and not command["interrupted"]:
                 accepted_ids={event['mission']['id'] for event in command.get('flight_missions',[])
                     if event.get('path')=='/mission' and isinstance(event.get('mission'),dict)
@@ -524,6 +569,32 @@ class WebApplication:
                 owned_flight = bool(accepted_ids)
                 if owned_flight:
                     try:
+                        if photo_unmet_only:
+                            from photo_navigation import require_photo_navigation
+                            try:
+                                current_state = self.client.state()
+                                current_id = (current_state.get('mission') or {}).get('id')
+                                epoch = (command['photo_progress'].get('latest_observation') or {}).get('coordinate_epoch')
+                                if current_id not in accepted_ids:
+                                    raise RuntimeError('当前飞行不属于本次拍摄，不能返航其他任务')
+                                require_photo_navigation(current_state, current_id, epoch)
+                                accepted = self.audited_client.request('/navigation/photo-action', {
+                                    'operation': 'return_home', 'expected_mission_id': current_id,
+                                    'expected_epoch': epoch, 'description': 'Program-owned return after unmet framing goal'})
+                                accepted_ids.add(accepted['mission']['id'])
+                                returned = self.audited_client.wait_for_photo_action(accepted)
+                                failure = result_error(returned, require_completed=True)
+                                if not failure and (returned.get('armed') is not False or returned.get('landed_state') != 1):
+                                    failure = '返航后缺少实际落地上锁证据'
+                                command['photo_return'] = {'status': 'error' if failure else 'ok', 'error': failure,
+                                    'source': 'program_framing_completion', 'mission': copy.deepcopy(returned.get('mission'))}
+                                if returned.get('mission'):
+                                    mission = returned['mission']
+                            except Exception as exc:
+                                command['photo_return'] = {'status': 'error', 'source': 'program_framing_completion',
+                                                           'error': self.clean_error(exc)}
+                            # Return refusal/failure is never retried. The existing
+                            # owned landing path below re-reads state and fails safe.
                         current_state=self.client.state()
                         current_mission=current_state.get('mission') or {}
                         current_id=current_mission.get('id')
@@ -534,13 +605,22 @@ class WebApplication:
                                 and isinstance(steps,list) and len(steps)==1
                                 and isinstance(steps[0],dict) and steps[0].get('action')=='land')
                             accepted=({'mission':copy.deepcopy(current_mission)} if landing_running
-                                else self.audited_client.request("/land", {'expected_mission_id':current_id}))
+                                else self.audited_client.request("/land", {'expected_mission_id':current_id,
+                                    'reason': 'Independent task failure cleanup'}))
                             landing = self.audited_client.wait_for(accepted)
                             failure = result_error(landing, require_completed=True)
+                            if not failure and (landing.get('armed') is not False or landing.get('landed_state') != 1):
+                                failure = '缺少实际落地上锁证据'
+                            command['termination_mission_id'] = (accepted.get('mission') or {}).get('id')
+                            self.verify_search_landing(command, landing)
                             command["safety_landing"] = {"status": "error" if failure else "ok", "error": failure,
                                                          "mission": copy.deepcopy(landing.get("mission"))}
                             if landing.get("mission"):
                                 mission = landing["mission"]
+                        elif (current_id in accepted_ids and current_mission.get('status') == 'succeeded'
+                              and (current_mission.get('steps') or [{}])[-1].get('action') == 'land'):
+                            command['termination_mission_id'] = current_id
+                            self.verify_search_landing(command, current_state)
                     except Exception as exc:
                         command["safety_landing"] = {"status": "error", "error": self.clean_error(exc)}
             with self.lock:
@@ -581,6 +661,13 @@ class WebApplication:
                         else:
                             reply = "视觉观察报告已保存；飞行任务失败：{}。Agent 不会自动重试飞行任务，请查看任务进度和当前飞行状态。".format(
                                 self.clean_error(error))
+                    elif (command.get('photo_progress') and command['photo_progress'].get('photo_status') != 'met'
+                          and not command['flight_failure'] and not command['vision_failure']):
+                        photo = command['photo_progress']
+                        review = (photo.get('latest_observation') or {}).get('review') or {}
+                        detail = photo.get('end_reason') or review.get('stop_reason') or review.get('reason') or error
+                        reply = '拍摄构图目标未完成：{}。已保存 {} 份观察，不能据此声称完整覆盖。'.format(
+                            self.clean_error(detail), photo.get('views_used', 0))
                     elif command["mode"] == "observe" or command.get("perception"):
                         reply = "视觉观察未完成：{}。请检查视觉报告和模型配置后重新发起观察。".format(self.clean_error(error))
                         if command["perception"] is None:
@@ -593,6 +680,8 @@ class WebApplication:
                             self.clean_error(error))
                     if command.get("safety_landing"):
                         reply += "\n指令失败后，独立执行器已完成安全降落并上锁。" if command["safety_landing"]["status"] == "ok" else "\n安全降落未确认完成，请查看飞行状态并使用立即降落。"
+                    elif (command.get('photo_return') or {}).get('status') == 'ok':
+                        reply += '\n构图未达标；程序已按验证路径返航至起飞点，并确认落地上锁。'
                 if command['mode'] == 'task':
                     verified = multiview_search_result(command)
                     if verified is not None:
@@ -608,6 +697,38 @@ class WebApplication:
                     self.active_id = None
                     self.current_command = None
 
+    def close_search_activity(self, command_id, source, reason):
+        manager = getattr(self.audited_client, 'search_manager', None)
+        if manager:
+            for owner in list(manager.adaptive.sessions):
+                if owner[1] == command_id:
+                    try:
+                        manager.adaptive.close_activity(owner, source, reason)
+                    except Exception as exc:
+                        # Auditing must never delay or prevent a trusted stop/land.
+                        session = manager.adaptive.sessions[owner]
+                        session.update(activity_closed=True, status='failed', pending=None)
+                        self.commands[command_id]['termination_audit_error'] = self.clean_error(exc)
+
+    def verify_search_landing(self, command, state):
+        expected = command.get('termination_mission_id')
+        mission = state.get('mission') or {}
+        if (not expected or command.get('termination_flight_verified')
+                or mission.get('id') != expected or mission.get('status') != 'succeeded'
+                or state.get('armed') is not False or state.get('landed_state') != 1):
+            return
+        manager = getattr(self.audited_client, 'search_manager', None)
+        if manager:
+            for owner, session in list(manager.adaptive.sessions.items()):
+                if owner[1] != command['id'] or not session.get('termination'):
+                    continue
+                session['termination'].update(flight_status='grounded_disarmed', mission_id=expected)
+                event = {'tool': 'search_termination', 'wall_s': time.time(),
+                         'result': manager.adaptive.summary(owner)}
+                command.setdefault('search_events', []).append(copy.deepcopy(event))
+                command.setdefault('termination_events', []).append(copy.deepcopy(event))
+        command['termination_flight_verified'] = True
+
     def interrupt(self, path, payload=None):
         payload={} if payload is None else payload
         permitted={'expected_mission_id','expected_command_id'} if path=='/land' else set()
@@ -618,6 +739,7 @@ class WebApplication:
                 raise ValueError('回收请求的任务标识无效')
         with self.control_lock:
             with self.lock:
+                interrupted_command_id = self.active_id
                 expected_command=payload.get('expected_command_id')
                 if expected_command is not None and (expected_command not in self.commands
                         or self.active_id not in (None,expected_command)):
@@ -639,8 +761,16 @@ class WebApplication:
                             raise ValueError('当前指令不拥有指定飞行，拒绝中断')
                 if self.active_id:
                     self.commands[self.active_id]["interrupted"] = True
+                    self.close_search_activity(self.active_id, 'operator', 'Operator control: '+path)
             bridge_payload={'expected_mission_id':payload['expected_mission_id']} if 'expected_mission_id' in payload else {}
-            return self.client.request(path, bridge_payload)
+            if path == '/land':
+                bridge_payload['reason'] = 'Operator control: /land'
+            result = self.client.request(path, bridge_payload)
+            with self.lock:
+                if interrupted_command_id and path == '/land':
+                    self.commands[interrupted_command_id]['termination_mission_id'] = (result.get('mission') or {}).get('id')
+                    self.verify_search_landing(self.commands[interrupted_command_id], result)
+            return result
 
 
 def make_server(application, port=8080):

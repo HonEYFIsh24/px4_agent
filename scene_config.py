@@ -4,7 +4,7 @@ import json
 import math
 from pathlib import Path
 
-from mission import MissionError, number
+from mission import MAX_ALTITUDE, MissionError, PathUnavailable, number
 
 ROOT = Path(__file__).resolve().parent
 BUILTIN_WORLD = ROOT / "scene/worlds/logistics_yard.world"
@@ -86,6 +86,22 @@ def load_scene(world_path=None, manifest_path=None, navigation_mode="lidar_grid"
     manifest = json.loads(expected_manifest.read_text())
     if manifest.get("world_sha256") != digest:
         return unknown
+    # Imported visual assets live outside the tracked world file. A missing or
+    # changed mesh/texture must not silently produce an apparently verified scene.
+    assets = manifest.get('external_assets_sha256')
+    if assets is not None:
+        if not isinstance(assets, dict) or not assets:
+            raise MissionError('invalid imported scene asset manifest')
+        for relative, expected in assets.items():
+            if (not isinstance(relative, str) or Path(relative).is_absolute()
+                    or '..' in Path(relative).parts or not isinstance(expected, str)
+                    or len(expected) != 64):
+                raise MissionError('invalid imported scene asset identity')
+            asset = (ROOT / relative).resolve()
+            if ROOT.resolve() not in asset.parents or not asset.is_file():
+                raise MissionError('imported scene asset is missing or outside project')
+            if hashlib.sha256(asset.read_bytes()).hexdigest() != expected:
+                raise MissionError('imported scene asset hash mismatch')
     ground, region = manifest["ground_plane"], manifest["flight_region"]
     z = number(ground["z_m"], "ground z")
     bounds = [number(value, "ground bounds") for value in ground["bounds_xy_m"]]
@@ -120,16 +136,16 @@ def load_scene(world_path=None, manifest_path=None, navigation_mode="lidar_grid"
                                 "scope": "static horizontal obstacles at fixed altitude; no 3D or dynamic guarantee"}
         result["takeoff_pad"] = {"center_world_m": center,
                                  "radius_m": number(pad["radius_m"], "takeoff pad radius", .5, 2),
-                                 "vertical_clearance_m": number(pad["vertical_clearance_m"], "pad clearance", 5, 10)}
+                                 "vertical_clearance_m": number(pad["vertical_clearance_m"], "pad clearance", 5, MAX_ALTITUDE)}
     if navigation_mode == "static_3d":
         if world != Path(OBSTACLE_WORLD).resolve() and not static_test:
             raise MissionError("static 3-D navigation requires the verified obstacle yard or a registered static test environment")
         result["navigation"].update(method="static_3d", altitude_mode="variable",
-            flight_altitude_m=5., min_altitude_m=1., max_altitude_m=10.,
+            flight_altitude_m=5., min_altitude_m=1., max_altitude_m=MAX_ALTITUDE,
             source="verified_static_collision_map_3d",
             scope="known static 3-D map; no dynamic-obstacle guarantee")
-        result["flight_region"]["bounds_max_m"][2] = 10.6
-        result["takeoff_pad"]["vertical_clearance_m"] = 10.6
+        result["flight_region"]["bounds_max_m"][2] = MAX_ALTITUDE + .6
+        result["takeoff_pad"]["vertical_clearance_m"] = MAX_ALTITUDE + .6
     elif navigation_mode != "lidar_grid":
         raise MissionError("unknown navigation mode")
     return result
@@ -162,11 +178,12 @@ def validate_scene_trajectory(scene, steps, start_enu, home_enu, world_pose, loc
     offset = [world_start[0]-c*start[0]+s*start[1], world_start[1]-s*start[0]-c*start[1], world_start[2]-start[2]]
     minimum, maximum, margin = region["bounds_min_m"], region["bounds_max_m"], region["margin_m"]
 
-    def check(position):
+    def check(position, candidate=False):
         point = [c*position[0]-s*position[1]+offset[0], s*position[0]+c*position[1]+offset[1], position[2]+offset[2]]
         if (any(not minimum[i]+margin <= point[i] <= maximum[i]-margin for i in (0, 1))
                 or not minimum[2] <= point[2] <= maximum[2]-.2):
-            raise MissionError("flight path leaves this scene's permitted flight region")
+            error = PathUnavailable if candidate else MissionError
+            raise error("flight path leaves this scene's permitted flight region")
         return point
 
     point, home = list(start), list(home_enu) if home_enu is not None else None
@@ -195,4 +212,4 @@ def validate_scene_trajectory(scene, steps, start_enu, home_enu, world_pose, loc
             # Contact and disarming remain observed by the existing executor.
             check(point)
             continue
-        check(point)
+        check(point, candidate=action == 'goto')

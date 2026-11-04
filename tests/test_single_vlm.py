@@ -321,6 +321,24 @@ class StoreTests(unittest.TestCase):
 
 
 class GraphTests(unittest.TestCase):
+    def test_actual_rotation_capability_survives_tool_view_and_model_compaction(self):
+        from agent import flight_tools
+        for enabled in (True,False,None):
+            for view in ('all','flight'):
+                with self.subTest(enabled=enabled,view=view):
+                    client=CameraClient(); original=client.state
+                    def state():
+                        value=original()
+                        if enabled is not None:value['experimental_yaw_enabled']=enabled
+                        return value
+                    client.state=state
+                    graph,model,_,_=self.build([tool_call('get_drone_state',{'view':view}),AIMessage('state read')],
+                                               client=client,flight_tools=flight_tools(client))
+                    self.invoke(graph)
+                    value=tool_payload(model.calls[1],'get_drone_state')
+                    if enabled is None:self.assertNotIn('experimental_yaw_enabled',value)
+                    else:self.assertIs(value['experimental_yaw_enabled'],enabled)
+
     def build(self, script, client=None, store=None, flight_tools=None):
         client = client or CameraClient()
         model = LocalScriptModel(script=list(script))
@@ -765,7 +783,9 @@ class WebGuardTests(unittest.TestCase):
         self.assertEqual(command["tool_errors"][0]["tool"], "execute_mission")
         self.assertNotIn(description, encoded(command["model_calls"]))
         self.assertEqual(command["model_calls"][0]["called_tools"][0],
-                         {"name": "execute_mission", "argument_fields": ["steps"], "mission_actions": ["land"]})
+                         {"name": "execute_mission", "argument_fields": ["steps"], "mission_actions": ["land"],
+                          "mission_arguments": {"steps_present": True, "steps_type": "list",
+                                                "step_count": 1, "step_types": ["dict"]}})
 
     def test_unknown_tool_name_is_json_and_public_error_identifies_actual_tool(self):
         unknown = "invented_drone_tool"

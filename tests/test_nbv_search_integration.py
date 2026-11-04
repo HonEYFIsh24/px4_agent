@@ -26,12 +26,31 @@ class ScopedFixtureBridge(LocalStereoBridge):
         super().__init__()
         self.nav = navigator()
         self.telemetry['scene']['world_sha256'] = self.nav.world_sha256
+        self.telemetry['external_vision']['ekf'].update(primary_instance=0,
+            local_velocity_reset_counters={'vxy': 2, 'vz': 2})
         self.authority = ViewpointAuthority()
         self.ticket_executions, self.generic_gotos = 0, 0
         self.reject_geometry = False
 
+    def capture_stereo(self):
+        pair = super().capture_stereo()
+        pair['navigation_registration_id'] = self.nav.registration_id if self.telemetry['armed'] else None
+        self.pairs[pair['pair_id']]['navigation_registration_id'] = pair['navigation_registration_id']
+        return pair
+
+    def wait_for(self, accepted, on_progress=None):
+        result = super().wait_for(accepted, on_progress)
+        if accepted['mission']['steps'][0]['action'] == 'takeoff':
+            ev = self.telemetry['external_vision']
+            ev['heading_alignment_pending'] = False
+            ev['ekf'].update(heading_good_for_control=True,
+                             mag_alignment={'aligned_in_flight': True, 'yaw_aligned': True, 'in_air': True})
+            return self.state()
+        return result
+
     def state(self):
         state = super().state()
+        state['stamp_sim_s'] = 42. + self.counter + .02
         state['navigation'] = {**self.nav.diagnostics(), 'enabled': True, 'active': state['armed'],
             'viewpoint_execution_supported': True, 'viewpoint_prediction_supported': True,
             'observation_geometry_supported': True}
@@ -110,7 +129,7 @@ def synthetic_metric_target(bridge, pair_id, bboxes):
 
 class NBVGraphTests(unittest.TestCase):
     def run_task(self, bridge, script, mode='nbv_geometry', selector='deterministic', pool='ranked', auto_prepare=False,
-                 confirmation='single_frame', architecture='dual_model'):
+                 confirmation='single_frame', architecture='single_vlm'):
         model = LocalScriptModel(script=script)
         with mock.patch.dict(os.environ, {'UAV_SEARCH_MODE': mode, 'UAV_NBV_SELECTOR': selector,
                 'UAV_NBV_CANDIDATE_POOL': pool, 'UAV_NBV_AUTO_PREPARE': '1' if auto_prepare else '0',
@@ -132,6 +151,75 @@ class NBVGraphTests(unittest.TestCase):
                 tool_call('begin_target_search', {'query': '蓝色油桶'}, 'begin'),
                 tool_call('observe_target_search_view', {}, 'first-view'), saved_report]
 
+    def test_staged_binding_accepts_only_owned_alignment_and_keeps_ground_boundary(self):
+        from autonomous_search import AdaptiveSearch
+        bridge = ScopedFixtureBridge()
+        ev = bridge.telemetry['external_vision']
+        ev['ekf'].update(primary_instance=0, local_velocity_reset_counters={'vxy': 2, 'vz': 2})
+        search = AdaptiveSearch(bridge, search_mode='nbv_geometry')
+        owner = ('thread', 'turn')
+        search.begin(owner, '蓝色油桶')
+        session = search.sessions[owner]
+        self.assertFalse(session['epoch_bound'])
+        self.assertIsNone(session['origin'])
+        accepted = bridge.request('/mission', {'steps': [{'action': 'takeoff', 'altitude': 3.}], 'description': 'fixture'})
+        bridge.wait_for(accepted)
+        ev = bridge.telemetry['external_vision']
+        ev['ekf']['local_position_reset_counters']['heading'] = 4
+        ev['heading_alignment_event'] = {'source': 'actual_owned_px4_uorb', 'old_heading_reset_counter': 3,
+            'new_heading_reset_counter': 4, 'adapter_epoch': 0, 'xy_reset_counter': 1, 'z_reset_counter': 2,
+            'primary_instance': 0, 'velocity_reset_counters': {'vxy': 2, 'vz': 2},
+            'permitted_context': 'takeoff_before_horizontal_navigation', 'reset_source_stamp_sim_s': 43.5}
+        bridge.telemetry['position_enu_m'] = [.1, 0., 3.]
+        search.bind_after_takeoff(owner, bridge.state())
+        self.assertTrue(session['epoch_bound'])
+        self.assertEqual(session['origin'], [.1, 0., 3.])
+        self.assertEqual(session['boundary_origin'], [0., 0., 0.])
+        self.assertAlmostEqual(session['binding']['ground_offset_m'], .1)
+        with self.assertRaisesRegex(ValueError, '已经绑定'):
+            search.bind_after_takeoff(owner, bridge.state())
+
+    def test_staged_binding_rejects_invalid_evidence_without_creating_identity(self):
+        from autonomous_search import AdaptiveSearch
+        for case in ('unaccepted_heading', 'vio_reset', 'xy_reset', 'velocity_reset', 'primary_change',
+                     'not_aligned', 'pending_alignment', 'bad_heading', 'unregistered', 'old_pose',
+                     'ground_drift', 'mission_running', 'world_change', 'existing_observation', 'issued_ticket'):
+            with self.subTest(case=case):
+                bridge = ScopedFixtureBridge()
+                search = AdaptiveSearch(bridge, search_mode='nbv_geometry')
+                owner = ('thread', 'turn')
+                search.begin(owner, '蓝色油桶')
+                accepted = bridge.request('/mission', {'steps': [{'action': 'takeoff', 'altitude': 3.}], 'description': 'fixture'})
+                bridge.wait_for(accepted)
+                ev, session = bridge.telemetry['external_vision'], search.sessions[owner]
+                ekf = ev['ekf']
+                if case == 'unaccepted_heading': ekf['local_position_reset_counters']['heading'] += 1
+                elif case == 'vio_reset': ev['adapter']['epoch'] += 1
+                elif case == 'xy_reset': ekf['local_position_reset_counters']['xy'] += 1
+                elif case == 'velocity_reset': ekf['local_velocity_reset_counters']['vxy'] += 1
+                elif case == 'primary_change': ekf['primary_instance'] = 1
+                elif case == 'not_aligned': ekf['mag_alignment']['aligned_in_flight'] = False
+                elif case == 'pending_alignment': ev['heading_alignment_pending'] = True
+                elif case == 'bad_heading': ekf['heading_good_for_control'] = False
+                elif case == 'unregistered': bridge.nav.registration_id = None
+                elif case == 'ground_drift': bridge.telemetry['position_enu_m'][0] = .5
+                elif case == 'mission_running': bridge.telemetry['mission']['status'] = 'running'
+                elif case == 'world_change': bridge.telemetry['scene']['world_sha256'] = 'f'*64
+                elif case == 'existing_observation': session['observations'].append({})
+                elif case == 'issued_ticket': session['nbv_bound'] = True
+                elif case == 'old_pose':
+                    original = bridge.capture_stereo
+                    def capture():
+                        pair = original()
+                        pair['body_pose_enu']['age_seconds'] = 2.
+                        return pair
+                    bridge.capture_stereo = capture
+                with self.assertRaises(ValueError):
+                    search.bind_after_takeoff(owner, bridge.state())
+                self.assertFalse(session['epoch_bound'])
+                self.assertIsNone(session['origin'])
+                self.assertIsNone(session['binding'])
+
     def test_failed_search_initialization_prevents_fallback_takeoff(self):
         bridge = ScopedFixtureBridge()
         script = [tool_call('begin_target_search', {'query': '蓝色油桶'}, 'begin'),
@@ -142,6 +230,45 @@ class NBVGraphTests(unittest.TestCase):
         self.assertEqual(result['status'], 'failed')
         self.assertIn('航向NBV', result['search_initialization_failure'])
         self.assertFalse(any(x['path'] == '/mission' for x in bridge.flight_requests))
+        self.assertFalse(bridge.telemetry['armed'])
+
+    def test_reset_during_completed_takeoff_stops_before_capture_and_lands(self):
+        class ResetOnTakeoff(ScopedFixtureBridge):
+            def wait_for(self, accepted, on_progress=None):
+                result = super().wait_for(accepted, on_progress)
+                if accepted['mission']['steps'][0]['action'] == 'takeoff':
+                    self.telemetry['external_vision']['ekf']['local_position_reset_counters']['heading'] += 1
+                    return self.state()
+                return result
+        bridge = ResetOnTakeoff()
+        result, _, _ = self.run_task(bridge, self.prefix()[:3] + [AIMessage('完成')],
+                                     architecture='single_vlm')
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('坐标系已重置', result['error'])
+        self.assertEqual(len(bridge.camera_reads), 1)  # ground origin only; no airborne capture
+        self.assertEqual(len([x for x in bridge.flight_requests if x['path'] == '/mission']), 1)
+        self.assertEqual(len([x for x in bridge.flight_requests if x['path'] == '/land']), 1)
+        self.assertEqual(result['safety_landing']['status'], 'ok')
+        self.assertFalse(bridge.telemetry['armed'])
+
+    def test_reset_after_direct_takeoff_also_fails_and_lands(self):
+        class ResetOnTakeoff(ScopedFixtureBridge):
+            def wait_for(self, accepted, on_progress=None):
+                result = super().wait_for(accepted, on_progress)
+                if accepted['mission']['steps'][0]['action'] == 'takeoff':
+                    self.telemetry['external_vision']['ekf']['local_position_reset_counters']['heading'] += 1
+                    return self.state()
+                return result
+        bridge = ResetOnTakeoff()
+        script = [tool_call('begin_target_search', {'query': '蓝色油桶'}, 'begin'),
+                  tool_call('execute_mission', {'steps': [{'action': 'takeoff', 'altitude': 3.}],
+                            'description': 'takeoff'}, 'takeoff'), AIMessage('完成')]
+        result, _, _ = self.run_task(bridge, script, architecture='single_vlm')
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('坐标系已重置', result['error'])
+        self.assertEqual(len(bridge.camera_reads), 1)
+        self.assertEqual(len([x for x in bridge.flight_requests if x['path'] == '/land']), 1)
+        self.assertEqual(result['safety_landing']['status'], 'ok')
         self.assertFalse(bridge.telemetry['armed'])
 
     def test_invalid_report_schema_stops_graph_and_lands_once(self):
@@ -203,6 +330,8 @@ class NBVGraphTests(unittest.TestCase):
         self.assertEqual(result['status'], 'succeeded', result.get('error'))
         calls = [c for c in result['model_calls'] if c.get('image_purpose') == 'target_confirmation']
         self.assertEqual(len(calls), 2)
+        self.assertTrue(all('review_arguments' in t for c in calls for t in c['called_tools']
+                            if t['name'] == 'review_target_candidate'))
         self.assertEqual(calls[0]['capture_ids'][0], calls[1]['capture_ids'][0])
         self.assertNotEqual(calls[0]['capture_ids'][1], calls[1]['capture_ids'][1])
         self.assertEqual(bridge.ticket_executions, 2)
@@ -239,6 +368,47 @@ class NBVGraphTests(unittest.TestCase):
         self.assertEqual(result['status'], 'failed')
         self.assertFalse(result.get('search_protocol_corrections'))
         self.assertFalse(bridge.telemetry['armed'])
+
+        # Even after a genuine unconfirmed review, a running executor task or
+        # a different owner cannot be treated as a harmless rejected plan.
+        for scenario in ('running', 'wrong_owner', 'world_changed', 'map_invalid', 'interrupted', 'vision_failure', 'flight_failure', 'initialization_failure'):
+            with self.subTest(scenario=scenario):
+                bridge = ScopedFixtureBridge()
+                bridge.localize_stereo = lambda pair_id, bboxes: synthetic_metric_target(bridge, pair_id, bboxes)
+                from autonomous_search import AdaptiveSearch
+                original_validate = AdaptiveSearch.validate_state
+                invalid_map = [False]
+                def validate_with_fault(search, owner, state):
+                    if invalid_map[0]:
+                        search.sessions[owner]['spatial_map_identity']['status'] = 'invalid'
+                    return original_validate(search, owner, state)
+                def blocked_return(messages):
+                    if scenario == 'running':
+                        bridge.telemetry['mission']['status'] = 'running'
+                    elif scenario == 'wrong_owner':
+                        self.last_app.current_command['id'] = 'different-command'
+                    elif scenario == 'world_changed':
+                        bridge.telemetry['scene']['world_sha256'] = 'changed-world'
+                    elif scenario == 'map_invalid':
+                        invalid_map[0] = True
+                    elif scenario == 'interrupted':
+                        self.last_app.current_command['interrupted'] = True
+                    elif scenario == 'vision_failure':
+                        self.last_app.current_command['vision_failure'] = 'controlled failure'
+                    elif scenario == 'flight_failure':
+                        self.last_app.current_command['flight_failure'] = 'controlled failure'
+                    else:
+                        self.last_app.current_command['search_initialization_failure'] = 'controlled failure'
+                    return tool_call('execute_mission', {'steps': [{'action': 'return_home'}, {'action': 'land'}],
+                                     'description': 'blocked return'}, 'blocked-'+scenario)
+                with mock.patch.object(AdaptiveSearch, 'validate_state', validate_with_fault):
+                    result, _, _ = self.run_task(bridge, script[:7] + [blocked_return,
+                        tool_call('land_drone', {'reason': 'safe stop'}, 'land'), AIMessage('已停止。')],
+                        auto_prepare=True, confirmation='multiview', architecture='single_vlm')
+                self.assertEqual(result['status'], 'failed')
+                self.assertFalse(result.get('search_protocol_corrections'))
+                self.assertFalse(any(x['path'] == '/mission' and x['steps'][0]['action'] == 'return_home'
+                                     for x in bridge.flight_requests))
 
     def suffix(self):
         return [tool_call('observe_target_search_view', {}, 'second-view'), lambda m: saved_report(m, True),
@@ -444,6 +614,8 @@ class NBVGraphTests(unittest.TestCase):
         bridge = ScopedFixtureBridge()
         script=self.prefix()+[tool_call('execute_mission', {'steps':[{'action':'return_home'},{'action':'land'}],
             'description':'premature return in active search'}, 'premature'),
+            tool_call('execute_mission', {'steps':[{'action':'return_home'},{'action':'land'}],
+                'description':'repeat rejected plan'}, 'premature-again'),
             tool_call('land_drone', {'reason':'safe stop'}, 'land'), AIMessage('已停止。')]
         result, _, _ = self.run_task(bridge, script, auto_prepare=True, confirmation='multiview', architecture='single_vlm')
         self.assertEqual(result['status'],'failed')
@@ -452,6 +624,30 @@ class NBVGraphTests(unittest.TestCase):
         self.assertFalse(result['search_outcome']['target_confirmed'])
         self.assertFalse(any(step['action']=='return_home' for request in bridge.flight_requests for step in request['steps']))
         self.assertEqual(len([request for request in bridge.flight_requests if request['path']=='/land']),1)
+        self.assertFalse(bridge.telemetry['armed'])
+
+    def test_exploration_return_correction_preserves_ticket_and_continues_observation(self):
+        bridge = ScopedFixtureBridge()
+        def premature(messages):
+            self.tickets_before_correction = copy.deepcopy(bridge.authority.tickets)
+            return tool_call('execute_mission', {'steps': [{'action': 'return_home'}, {'action': 'land'}],
+                'description': 'controlled premature completion'}, 'premature-explore')
+        def continue_observation(messages):
+            correction = json.loads(next(m for m in reversed(messages) if getattr(m, 'name', None) == 'execute_mission').content)
+            self.assertEqual(correction['status'], 'not_executed')
+            self.assertEqual(correction['next_tool'], 'observe_target_search_view')
+            self.assertEqual(bridge.authority.tickets, self.tickets_before_correction)
+            self.assertEqual(bridge.ticket_executions, 0)
+            return tool_call(correction['next_tool'], {}, 'resume-exploring')
+        script = self.prefix() + [premature, continue_observation, saved_report,
+            tool_call('land_drone', {'reason': 'controlled test ends after second observation'}, 'land'),
+            AIMessage('受控测试结束，目标未确认。')]
+        result, _, _ = self.run_task(bridge, script, auto_prepare=True, confirmation='multiview')
+        self.assertEqual(len(result['search_protocol_corrections']), 1)
+        self.assertEqual(result['search_protocol_corrections'][0]['reason'], 'unfinished_exploration')
+        self.assertEqual(bridge.ticket_executions, 1)
+        self.assertEqual(len([p for p in result['perceptions'] if p.get('status') == 'ok']), 2)
+        self.assertFalse(any(step['action'] == 'return_home' for r in bridge.flight_requests for step in r['steps']))
         self.assertFalse(bridge.telemetry['armed'])
 
     def test_even_matching_generic_flight_call_is_routed_through_private_ticket(self):

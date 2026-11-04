@@ -1,6 +1,33 @@
 # 桌面自主搜索工作台
 
-原有桌面控制台新增“自主搜索工作台”页签，不启动网页，也不改变原有飞行、VIO、静态导航、安全控制或 Agent 选点逻辑。常规启动方法仍见 `docs/LOCAL_SETUP.md`。原“双目相机”页继续显示有新鲜度检查的实时视频；工作台使用已保存、已报告的历史截图，不把旧目标框叠加到实时视频。
+## 2026-11-03 正式闭环验收
+
+已通过一次首次换位/旋转后新双目帧与多视角确认验收，并在独立实例录制了完整实际桌面闭环。场景 `scene/test_environments/courtyard_delivery.world`，种子 17，指令为“找到前方的白色货车，调整到合适的角度拍摄并报告周围环境，完成后返航降落。”正式任务保存 8 份视觉报告、执行 7 次票据换位；三次复核为未确认、未确认、确认，最终实际返航、落地、上锁。NBV/地图回放与确认审计均通过；弱裁切框相容没有直接被提升为确认。记录只证明本次运行，不代表所有任务成功率。
+
+正式视频与关键帧保存在本机忽略目录 `logs/setup/search-acceptance-20261103/formal/`；`continuous-window.mp4` 直接采集实际 Qt 窗口的 X11 像素，非离线重绘。摘要、逐帧时间、结果、NBV 和确认审计同目录保留。首次成功换位的左右图像时间均为 83.200 s，晚于实际旋转完成 83.056 s。正式实例全部三个实际旋转后的图像也已核对为新帧，详见 `acceptance-summary.json`。
+
+播放时优先使用同目录的 `PX4_Demo_compatible.mp4`（标准 25 fps H.264 Main、YUV420p、faststart）。它由原录像保留内容转码，已通过 Chrome 原生视频播放器显示检查；原始 4 fps MP4 曾在用户端报告黑屏，仍保留作为采集原档。
+
+### 不同场景演示的已知边界
+
+后续在 `scene/worlds/obstacle_yard.world`、种子 17 做了两轮不录像的真实演示，均实际落地上锁。蓝色油桶任务完成 2 份有效报告和 1 次票据换位，因复核参数一致性检查未通过而失败；白色货车对照完成 7 份有效报告和 6 次票据换位，因搜索中提前 return_home+land 被门禁拒绝而失败。失败和截图保存在 `logs/setup/alternate-scene-20261103/`。这些结果限制了“跨场景可靠性”的交付表述，不影响此前 courtyard_delivery 的真实成功记录。不得将两轮记成找到目标或确认成功；当前默认演示仍推荐已验证的 courtyard_delivery 白色货车任务。
+
+重新演示前检查当前进程及飞行状态；使用新的日志/验收目录。标准启动配置如下，未设置验收目录时正常启动桌面，由用户输入任务：
+
+```bash
+env PX4_DIR=/home/fxxk/PX4-Autopilot UAV_NAVIGATION_MODE=static_3d \
+  UAV_ENABLE_YAW=1 UAV_ENABLE_NBV_YAW=1 \
+  UAV_SEARCH_MODE=nbv_geometry UAV_NBV_SELECTOR=deterministic \
+  UAV_NBV_HEADING_MODE=discrete UAV_NBV_AUTO_PREPARE=1 \
+  UAV_TARGET_CONFIRMATION=multiview PX4_AGENT_GAZEBO_SEED=17 GUI=false \
+  bash /home/fxxk/px4_agent/scripts/start_system.sh --control-ui desktop \
+  --env-file /home/fxxk/px4_agent/.env --ev-profile no_gps \
+  --world-file /home/fxxk/px4_agent/scene/test_environments/courtyard_delivery.world
+```
+
+两个航向开关都必须设置，缺少其中一个时初始化会被门禁拒绝；不得绕过。`GUI=false` 仅关闭独立 Gazebo 图形窗口，相机传感器和桌面实时相机仍正常运行。
+
+原有桌面控制台新增“自主搜索工作台”页签，不启动网页，也不改变原有飞行、VIO、静态导航、安全控制或 Agent 选点逻辑。常规启动方法仍见 `docs/LOCAL_SETUP.md`。右侧可手动切换“实时左相机”和“观察照片”；前者复用原双目页的相机读取及新鲜度检查，遥测断连或图像过期时清空，后者使用已保存、已报告的历史截图，不把旧目标框叠加到实时视频。出现新复核图对时仍自动切换至多视角复核页一次。
 
 工作台读取当前桌面进程已有的 command 审计记录与 `UAV_CAPTURE_EVIDENCE_DIR` 中原子保存的快照。地图必须属于当前指令，并与报告中的图片哈希、世界和架次匹配；候选还必须匹配地图修订、图片、世界、架次和坐标 epoch。原图读取时验证与视觉报告相同的 SHA256。没有快照、文件缺失、校验失败或旧版任务没有空间地图时显示等待/不可用；从未根据静态场景生成目标语义。实时飞机位置只有在遥测就绪且世界、架次与坐标 epoch 匹配地图时显示；遥测过期后隐藏实时位置与飞行状态。
 

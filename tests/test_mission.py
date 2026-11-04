@@ -27,7 +27,7 @@ class MissionValidationTests(unittest.TestCase):
                 validate_mission([{"action": "takeoff", "altitude": value}])
 
     def test_altitude_bounds(self):
-        for value in (0, 0.9, 10.1, -1):
+        for value in (0, 0.9, 20.1, -1):
             with self.subTest(value=value), self.assertRaises(MissionError):
                 validate_mission([{"action": "takeoff", "altitude": value}])
 

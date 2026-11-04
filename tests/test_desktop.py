@@ -161,7 +161,7 @@ class NativeWindowTests(unittest.TestCase):
             'navigation': {'method': 'static_3d'}}, None)
         self.assertIn('VIO 主定位', self.window.metrics['vio'].text())
         self.assertIn('GPS 融合关闭', self.window.metrics['vio'].text())
-        self.assertIn('1～10', self.window.hint.text())
+        self.assertIn('1～20', self.window.hint.text())
 
     def test_land_is_dispatched_while_the_model_is_blocked(self):
         entered = threading.Event()
@@ -209,13 +209,44 @@ class NativeWindowTests(unittest.TestCase):
             self.window.state['camera']['left']['available'] = True
             self.window.render_cameras(True)
             self.assertIn('left', self.window.images)
+            self.assertFalse(self.window.workbench.live_image.pixmap().isNull())
+            self.assertEqual(self.window.workbench.detail_tabs.tabText(3), '实时左相机')
+            os.utime(path, (time.time()-3, time.time()-3))
+            self.window.render_cameras(True)
+            self.assertTrue(self.window.workbench.live_image.pixmap().isNull())
+            self.assertIn('过期', self.window.workbench.live_image.text())
+            os.utime(path, None)
+            self.window.render_cameras(True)
+            self.assertFalse(self.window.workbench.live_image.pixmap().isNull())
             self.window.render_cameras(False)
             self.assertNotIn('left', self.window.images)
             self.assertTrue(self.window.camera_labels['left'].pixmap().isNull())
+            self.assertTrue(self.window.workbench.live_image.pixmap().isNull())
+            self.window.render_cameras(True)
+            self.window.state['connected'] = False
+            self.window.render_cameras(True)
+            self.assertTrue(self.window.workbench.live_image.pixmap().isNull())
+            self.assertIn('过期', self.window.workbench.live_image.text())
         self.window.render_state({'ready': False, 'connected': False}, None)
         self.assertEqual(self.window.trail, [])
         self.window.buttons()
         self.assertFalse(self.window.land_button.isEnabled())
+
+    def test_live_and_map_share_workbench_without_overlap_at_small_sizes(self):
+        self.window.notebook.setCurrentIndex(self.window.workbench_tab)
+        wb = self.window.workbench
+        wb.detail_tabs.setCurrentIndex(3)
+        for width, height in ((1220, 900), (960, 720)):
+            self.root.resize(width, height)
+            self.window.fit_workbench()
+            self.qt.processEvents()
+            self.assertTrue(wb.map.isVisible())
+            self.assertTrue(wb.live_image.isVisible())
+            map_rect = wb.map.rect().translated(wb.map.mapTo(self.root, wb.map.rect().topLeft()))
+            image_rect = wb.live_image.rect().translated(wb.live_image.mapTo(self.root, wb.live_image.rect().topLeft()))
+            self.assertGreater(map_rect.width(), 150)
+            self.assertGreater(image_rect.width(), 70)
+            self.assertFalse(map_rect.intersects(image_rect))
 
     def test_close_during_flight_waits_for_confirmed_landing(self):
         self.window.render_state({**self.state, 'armed': True, 'landed_state': 2}, None)

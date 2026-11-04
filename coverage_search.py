@@ -5,6 +5,7 @@ navigation followed by a fresh, clear real image marks a sample observed. Actual
 poses determine potential geometric visibility; occlusion-free coverage is never
 claimed. Measured target coordinates are report data, never generated waypoints.
 """
+from mission import MAX_ALTITUDE
 import copy
 import math
 import re
@@ -109,7 +110,7 @@ def plan_search(bounds_enu_m, spacing_m, altitude_m, camera_info, max_range_m=10
     altitude = finite(altitude_m, "search altitude")
     required = finite(required_altitude_m, "required navigation altitude")
     radius = finite(flight_radius_m, "flight radius")
-    if not 1 <= altitude <= 10 or abs(altitude-required) > 1e-6 or not 0 < radius <= 30:
+    if not 1 <= altitude <= MAX_ALTITUDE or abs(altitude-required) > 1e-6 or not 0 < radius <= 30:
         raise CoverageSearchError("Search must use the permitted fixed altitude and flight radius")
     spacing = finite(spacing_m, "observation spacing")
     ground = finite(ground_enu_z, "ground ENU z")

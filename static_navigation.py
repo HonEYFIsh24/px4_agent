@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-from mission import MissionError
+from mission import MAX_ALTITUDE, MissionError, PathUnavailable
 
 
 def transform_pose(element):
@@ -213,19 +213,21 @@ class StaticNavigator:
             if origin is None:
                 return True
             local = self.to_local(p)
-            return 1.-1e-9 <= local[2] <= 10.+1e-9 and math.dist(local[:2], origin) <= radius+1e-9
+            return 1.-1e-9 <= local[2] <= MAX_ALTITUDE+1e-9 and math.dist(local[:2], origin) <= radius+1e-9
         def segment(a, b):
             # A disk and height slab are convex: endpoint inclusion bounds every segment.
             return permitted(a) and permitted(b) and self.world_segment_safe(a, b)
         a,b = self.to_world(start),self.to_world(goal)
-        if not segment(a,a) or not segment(b,b):
+        if not segment(a,a):
             raise MissionError('3-D start/goal lacks obstacle, boundary or search-volume clearance')
+        if not segment(b,b):
+            raise PathUnavailable('3-D start/goal lacks obstacle, boundary or search-volume clearance')
         route = [a,b]
         if not segment(a,b):
             low,high = self.bounds
             def cell(p): return tuple(int(round((p[i]-low[i])/self.resolution)) for i in range(3))
             def center(k): return [low[i]+k[i]*self.resolution for i in range(3)]
-            def cruise_height(p): return 1. <= self.to_local(p)[2] <= 10.
+            def cruise_height(p): return 1. <= self.to_local(p)[2] <= MAX_ALTITUDE
             initial = cell(a)
             # Connect exact endpoints to grid centres only through checked segments.
             seeds = [tuple(initial[i]+d[i] for i in range(3)) for d in itertools.product((-1,0,1),repeat=3)]
@@ -249,7 +251,7 @@ class StaticNavigator:
                             and segment(p,q)):
                         costs[nxt],previous[nxt] = distance,k
                         heapq.heappush(queue,(distance+math.dist(q,b),distance,nxt))
-            if endpoint is None: raise MissionError('no collision-free route in known static 3-D map')
+            if endpoint is None: raise PathUnavailable('no collision-free route in known static 3-D map')
             route = [b]
             while endpoint is not None:
                 route.append(center(endpoint)); endpoint = previous[endpoint]

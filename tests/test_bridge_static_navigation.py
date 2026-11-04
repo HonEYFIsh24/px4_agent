@@ -104,6 +104,23 @@ class StaticBridgeTests(unittest.TestCase):
         self.assertAlmostEqual(self.c.yaw, .2)
         self.assertEqual(self.c.yaw_capture_barrier, 10.)
 
+    def test_ticket_rotation_preserves_goal_instead_of_accumulating_height_error(self):
+        self.prepare_rotation()
+        self.fixture.set_pose([0., 0., 2.85])
+        self.c.mission = dict(search_constraint={'fixture': True}, viewpoint_candidate_id='view_fixture', step=2,
+            steps=[{'action': 'goto', 'x': 0., 'y': 0., 'altitude': 3.}, {'action': 'rotate', 'yaw_rad': .3}])
+        self.c.check_search_constraint = mock.Mock()  # Ownership is tested separately with real tickets.
+        def exercise(policy, **callbacks):
+            self.assertEqual(self.c.target, [0., 0., 3.])
+            self.assertEqual(self.c.commanded, [0., 0., 2.85])
+            self.assertEqual(policy.position, (0., 0., 3.))
+            return {'status': 'fixture', 'stamp_s': 10.}
+        with mock.patch('yaw_control.run_rotation', side_effect=exercise):
+            self.c.rotate_heading(.3)
+        self.fixture.set_pose([0., 0., 2.5])
+        with self.assertRaisesRegex(MissionError, 'arrival'):
+            self.c.rotate_heading(.3)
+
     def test_rotation_failure_freezes_position_and_actual_heading(self):
         self.prepare_rotation()
         def fail(policy, **callbacks):
@@ -292,6 +309,69 @@ class StaticBridgeTests(unittest.TestCase):
         self.assertIsNone(self.c.worker)
         self.assertIsNone(self.c.mission)
 
+    def test_live_scene_boundary_rejects_candidate_before_ticket_but_keeps_alternative(self):
+        nav, identity = self.prepare_viewpoint_capture()
+        self.c.home = [0., 0., 0.]
+        self.c.scene['flight_region'] = {'bounds_min_m': [-1., -5., -.2],
+            'bounds_max_m': [5., 5., 20.6], 'margin_m': .6}
+        # Registration says x=-.3 is inside; live world/ENU offset says -.5.
+        # The current aircraft remains safely inside at world x=-.2.
+        self.c.gazebo_history[-1]['position_m'][0] = -.2
+        context = {'owner': ['thread','task'], 'map_revision': 'b'*64, 'batch_id': 'a'*32}
+        self.c.evaluate_viewpoints('context', 'pair', [0.,0.], identity, [], context)
+        nav.last_plan = {'preserve': True}
+        result = self.c.evaluate_viewpoints('paths', 'pair', [0.,0.], identity,
+            [{'id':'view_001','position_enu_m':[-.3,0.,3.]},
+             {'id':'view_002','position_enu_m':[1.,0.,3.]}], context)
+        refused, allowed = result['results']
+        self.assertIs(refused['reachable'], False)
+        self.assertEqual(refused['scene_precheck'], 'candidate_rejected')
+        self.assertNotIn('execution_ticket', refused)
+        self.assertIs(allowed['reachable'], True)
+        self.assertEqual(allowed['scene_precheck'], 'passed')
+        self.assertIn('execution_ticket', allowed)
+        self.assertEqual(len(self.c.search_authority().tickets), 1)
+        self.assertEqual(nav.last_plan, {'preserve': True})
+        self.assertIsNone(self.c.worker)
+        self.assertIsNone(self.c.mission)
+
+    def test_scene_precheck_checks_intermediate_path_points_not_only_goal(self):
+        from mission import PathUnavailable
+        nav, identity = self.prepare_viewpoint_capture()
+        plan = nav.preview_path(self.c.position(), [1.,0.,4.], [0.,0.])
+        plan['waypoints'] = [[-.5,0.,4.], [1.,0.,4.]]
+        def check(steps):
+            self.assertEqual(steps[0]['x'], -.5)
+            raise PathUnavailable('intermediate point outside live region')
+        with mock.patch.object(nav, 'preview_path', return_value=plan), \
+                mock.patch.object(self.c, 'validate_scene_steps', side_effect=check):
+            result = self.c.evaluate_viewpoints('paths', 'pair', [0.,0.], identity,
+                [{'id':'view_001','position_enu_m':[1.,0.,4.]}])
+        self.assertIs(result['results'][0]['reachable'], False)
+
+    def test_stale_world_pose_or_invalid_start_aborts_batch_without_tickets(self):
+        for fault in ('stale', 'invalid_start'):
+            with self.subTest(fault=fault):
+                self.c._search_authority = None
+                nav, identity = self.prepare_viewpoint_capture()
+                context = {'owner': ['thread','task'], 'map_revision': 'b'*64, 'batch_id': 'a'*32}
+                self.c.evaluate_viewpoints('context', 'pair', [0.,0.], identity, [], context)
+                if fault == 'stale': self.c.gazebo_time = 998.
+                else: self.c.gazebo_history[-1]['position_m'][0] = -100.
+                with self.assertRaises(MissionError):
+                    self.c.evaluate_viewpoints('paths', 'pair', [0.,0.], identity,
+                        [{'id':'view_001','position_enu_m':[1.,0.,4.]}], context)
+                self.assertEqual(self.c.search_authority().tickets, {})
+                self.assertIsNone(self.c.worker)
+
+    def test_scene_can_still_reject_changed_conditions_at_final_submission(self):
+        _, context, ticket = self.owned_viewpoint()
+        self.c.gazebo_history[-1]['position_m'][0] = -100.
+        with self.assertRaises(MissionError):
+            self.c.execute_viewpoint(context['owner'], context['batch_id'], context['map_revision'], 'view_001', ticket)
+        self.assertIsNone(self.c.worker)
+        self.assertIsNone(self.c.mission)
+
     def test_viewpoint_geometry_does_not_hold_publisher_lock_and_rejects_mid_query_reset(self):
         nav, identity = self.prepare_viewpoint_capture()
         original = nav.observation_visibility
@@ -352,7 +432,7 @@ class StaticBridgeTests(unittest.TestCase):
         self.c.navigation_map.plan.return_value = {'path_length_m': 3.}
         self.assertTrue(self.c.preview_navigation([2., 0., 5.])['reachable'])
         self.assertIsNone(self.c.worker)
-        for point in ([True, 0., 5.], [2., 0., float('nan')], [2., 0., 11.]):
+        for point in ([True, 0., 5.], [2., 0., float('nan')], [2., 0., 20.01]):
             with self.assertRaises((MissionError, ValueError)):
                 self.c.preview_navigation(point)
 

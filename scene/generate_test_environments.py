@@ -74,7 +74,10 @@ def generate(output=OUTPUT):
     write(output/'courtyard_delivery_layout.json', {'evaluation_only': True, 'objects': objects,
           'target_ids': ['white_delivery_van', 'traffic_cone_1', 'traffic_cone_2'],
           'changes': 'new screen height, vehicle/cargo/cone/building layout; baseline worlds untouched'})
-    write(output/'index.json', {'schema_version': 1, 'scenes': [{
+    registry = output/'index.json'
+    existing = json.loads(registry.read_text()) if registry.exists() else {'scenes': []}
+    retained = [s for s in existing['scenes'] if s['id'] != 'courtyard_delivery']
+    write(registry, {'schema_version': 1, 'scenes': retained + [{
         'id': 'courtyard_delivery', 'world': destination.name, 'manifest': manifest_path.name,
         'world_sha256': sha(destination), 'asset_sha256': {'world': sha(destination), 'manifest': sha(manifest_path)}}]})
     return destination

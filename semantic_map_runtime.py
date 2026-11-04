@@ -22,9 +22,19 @@ class SemanticMapRuntime:
             existing.invalidate('current world, sortie or epoch changed')
             if identity is not None: identity.update(status='invalid', reason=existing.invalid_reason)
             return {'status': 'invalid', 'reason': existing.invalid_reason}
+        if session is not None:
+            binding = session.get('binding')
+            if (not session.get('epoch_bound') or frame.get('owner') != owner
+                    or coordinate_epoch(state) != session.get('epoch')
+                    or frame['snapshot'].get('coordinate_epoch') != session.get('epoch')
+                    or scene.get('world_sha256') != session.get('scene') or (binding and
+                    (nav.get('registration_id') != binding['registration_id']
+                     or frame['snapshot'].get('navigation_registration_id') != binding['registration_id']
+                     or frame['snapshot'].get('stamp_sim_s', -1) <= binding['stamp_sim_s']))):
+                raise ValueError('观察与已绑定的搜索坐标或导航地图不一致')
         if nav.get('observation_geometry_supported') is not True or not nav.get('registration_id'):
             return {'status': 'unavailable', 'reason': 'no registered observation-geometry backend'}
-        origin = (session or {}).get('origin') or state.get('home_enu_m') or frame['snapshot']['body_pose_enu']['position_m']
+        origin = (session or {}).get('boundary_origin') or (session or {}).get('origin') or state.get('home_enu_m') or frame['snapshot']['body_pose_enu']['position_m']
         geometry = self.client.request('/navigation/observation-geometry',
             {'pair_id': frame['snapshot']['stereo_pair_id'], 'origin_xy_enu_m': origin[:2]})
         if existing is None:

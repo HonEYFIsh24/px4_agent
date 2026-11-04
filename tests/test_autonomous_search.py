@@ -13,7 +13,22 @@ class AdaptiveBridge(MetadataBridge):
         super().__init__()
         self.telemetry['position_enu_m'] = [0., 0., 3.]
         self.telemetry['navigation'].update(method='static_3d', source='verified_static_collision_map_3d', map_registered=True)
+        self.telemetry['navigation']['registration_id'] = 'adaptive-registration'
         self.reachable = True
+
+    def state(self):
+        result = super().state()
+        result['stamp_sim_s'] = 10.02
+        return result
+
+    def capture_stereo(self):
+        pair = super().capture_stereo()
+        pair['stamp_sim_s'] = 10.
+        pair['body_pose_enu'].update(position_m=list(self.telemetry['position_enu_m']), stamp_sim_s=10., age_seconds=.1)
+        pair['navigation_registration_id'] = self.telemetry['navigation'].get('registration_id')
+        if 'external_vision' in self.telemetry:
+            pair['external_vision'] = copy.deepcopy(self.telemetry['external_vision'])
+        return pair
 
     def request(self, path, payload=None):
         assert path == '/navigation/preview'
@@ -34,6 +49,7 @@ class AdaptiveTests(unittest.TestCase):
         identifier = 'capture-' + str(self.count)
         frame = dict(owner=OWNER, delivered=True, capture_id=identifier, snapshot=dict(
             coordinate_epoch=coordinate_epoch(self.client.telemetry),
+            stamp_sim_s=10. + self.count, navigation_registration_id='adaptive-registration',
             body_pose_enu=dict(position_m=list(self.client.telemetry['position_enu_m']))))
         frame.update(updates)
         return self.search.consume(OWNER, frame, dict(status='ok', capture_id=identifier,
@@ -51,7 +67,8 @@ class AdaptiveTests(unittest.TestCase):
         result = self.report([{'label': '油桶', 'bbox': [.2, .2, .4, .5], 'stereo_location': {'status': 'unavailable'}}])
         self.assertEqual(result['search_status'], 'target_found')
         self.assertFalse(self.search.guidance(OWNER)[1])
-        self.search.check_mission(OWNER, [{'action': 'return_home'}, {'action': 'land'}])
+        with self.assertRaises(ValueError):
+            self.search.check_mission(OWNER, [{'action': 'return_home'}, {'action': 'land'}])
         self.client.telemetry.update(armed=False, landed_state=1)
         self.assertTrue(self.search.guidance(OWNER)[1])
 
@@ -121,12 +138,82 @@ class AdaptiveTests(unittest.TestCase):
         step = self.search.next_view(OWNER, 'rise', '继续')['goto']
         self.search.fail(OWNER, 'interrupted')
         with self.assertRaises(ValueError): self.search.check_mission(OWNER, [step])
-        self.search.check_mission(OWNER, [{'action': 'land'}])
+        with self.assertRaises(ValueError): self.search.check_mission(OWNER, [{'action': 'land'}])
 
     def test_vio_reset_invalidates_old_points(self):
         self.report()
         self.client.telemetry['external_vision'] = {'adapter': {'epoch': 1}}
         with self.assertRaises(ValueError): self.search.next_view(OWNER, 'auto', '继续')
+
+    def test_first_observation_must_follow_binding_and_keep_registered_identity(self):
+        frame = {'owner': OWNER, 'delivered': True, 'capture_id': 'first', 'snapshot': {
+            'coordinate_epoch': coordinate_epoch(self.client.telemetry),
+            'stamp_sim_s': self.search.sessions[OWNER]['binding']['stamp_sim_s'],
+            'navigation_registration_id': 'adaptive-registration',
+            'body_pose_enu': {'position_m': list(self.client.telemetry['position_enu_m'])}}}
+        report = {'status': 'ok', 'capture_id': 'first', 'summary': 'frame', 'targets': []}
+        with self.assertRaises(ValueError): self.search.consume(OWNER, frame, report)
+        frame['snapshot']['stamp_sim_s'] += 1.
+        frame['snapshot']['navigation_registration_id'] = 'other-registration'
+        with self.assertRaises(ValueError): self.search.consume(OWNER, frame, report)
+        frame['snapshot']['navigation_registration_id'] = 'adaptive-registration'
+        self.client.telemetry['external_vision'] = {'adapter': {'epoch': 1}}
+        with self.assertRaises(ValueError): self.search.consume(OWNER, frame, report)
+        self.assertEqual(self.search.sessions[OWNER]['observations'], [])
+
+    def test_coordinate_reset_before_first_observation_rejects_old_search(self):
+        for changed in ('vio', 'heading'):
+            with self.subTest(changed=changed):
+                client = AdaptiveBridge()
+                client.telemetry['external_vision'] = {'required': True, 'adapter': {'mode': 'fuse', 'epoch': 1},
+                    'healthy': True, 'heading_alignment_pending': False,
+                    'ekf': {'local_position_reset_counters': {'xy': 2, 'z': 2, 'heading': 1},
+                            'heading_good_for_control': True,
+                            'mag_alignment': {'aligned_in_flight': True, 'yaw_aligned': True, 'in_air': True}}}
+                search = AdaptiveSearch(client)
+                search.begin(OWNER, '油桶')
+                if changed == 'vio':
+                    client.telemetry['external_vision']['adapter']['epoch'] += 1
+                else:
+                    client.telemetry['external_vision']['ekf']['local_position_reset_counters']['heading'] += 1
+                with self.assertRaisesRegex(ValueError, '坐标系已重置'):
+                    search.validate_state(OWNER, client.state())
+                self.assertEqual(search.sessions[OWNER]['observations'], [])
+                with self.assertRaises(ValueError): search.check_mission(OWNER, [{'action': 'land'}])
+
+    def test_reset_before_takeoff_rejects_search_takeoff(self):
+        client = AdaptiveBridge()
+        client.telemetry.update(armed=False, landed_state=1)
+        client.telemetry['external_vision'] = {'required': True, 'adapter': {'mode': 'fuse', 'epoch': 1},
+            'ekf': {'local_position_reset_counters': {'xy': 2, 'z': 2, 'heading': 1}}}
+        search = AdaptiveSearch(client)
+        search.begin(OWNER, '油桶')
+        client.telemetry['external_vision']['ekf']['local_position_reset_counters']['heading'] += 1
+        with self.assertRaisesRegex(ValueError, '坐标系已重置'):
+            search.check_mission(OWNER, [{'action': 'takeoff', 'altitude': 3.}])
+        with self.assertRaises(ValueError): search.check_mission(OWNER, [{'action': 'land'}])
+
+    def test_search_origin_capture_requires_same_coordinate_identity(self):
+        for failure in ('missing', 'pair_reset', 'state_reset'):
+            with self.subTest(failure=failure):
+                client = AdaptiveBridge()
+                client.telemetry['external_vision'] = {'required': True, 'adapter': {'mode': 'fuse', 'epoch': 1},
+                    'ekf': {'local_position_reset_counters': {'xy': 2, 'z': 2, 'heading': 1}}}
+                original_capture = client.capture_stereo
+                def capture():
+                    pair = original_capture()
+                    if failure == 'missing':
+                        del pair['external_vision']
+                    elif failure == 'pair_reset':
+                        pair['external_vision']['ekf']['local_position_reset_counters']['heading'] += 1
+                    else:
+                        client.telemetry['external_vision']['adapter']['epoch'] += 1
+                    return pair
+                client.capture_stereo = capture
+                search = AdaptiveSearch(client)
+                with self.assertRaisesRegex(ValueError, '坐标系已改变'):
+                    search.begin(OWNER, '油桶')
+                self.assertNotIn(OWNER, search.sessions)
 
     def test_explicit_hold_allows_final_report_without_forced_landing(self):
         self.search.sessions[OWNER]['end_behavior'] = 'hold'
@@ -144,9 +231,11 @@ class AdaptiveTests(unittest.TestCase):
             state={'messages': [HumanMessage('找油桶', id=OWNER[1])]},
             runtime=SimpleNamespace(config={'configurable': {'thread_id': OWNER[0]}}))
         middleware = SceneMiddleware(None, self.client, {'model': 'local-test'}, manager)
-        middleware.wrap_tool_call(request, lambda _: ToolMessage(name='execute_target_search_view',
-            content='{"status":"error","error":"mission endpoint lacks clearance"}', tool_call_id='failed-flight'))
+        with self.assertRaisesRegex(RuntimeError, 'mission endpoint lacks clearance'):
+            middleware.wrap_tool_call(request, lambda _: ToolMessage(name='execute_target_search_view',
+                content='{"status":"error","error":"mission endpoint lacks clearance"}', tool_call_id='failed-flight'))
         self.assertEqual(self.search.summary(OWNER)['search_status'], 'failed')
+        self.assertTrue(self.search.sessions[OWNER]['activity_closed'])
         self.assertFalse(self.search.guidance(OWNER)[1])
         self.client.telemetry.update(armed=False, landed_state=1)
         self.assertTrue(self.search.guidance(OWNER)[1])
@@ -202,16 +291,38 @@ class AutonomousGraphTests(unittest.TestCase):
         from single_vlm import build_single_vlm_agent
 
         class Bridge(LocalStereoBridge):
+            def __init__(self):
+                super().__init__()
+                self.telemetry['external_vision']['ekf'].update(primary_instance=0,
+                    local_velocity_reset_counters={'vxy': 2, 'vz': 2})
+
             def execute(self, steps, description='', on_progress=None):
                 return self.wait_for(self.request('/mission', dict(steps=steps, description=description)), on_progress)
 
             def state(self):
                 s = super().state()
+                s['stamp_sim_s'] = 42. + self.counter + .02
                 s['navigation'].pop('map', None)
                 s['navigation'].update(method='static_3d', source='verified_static_collision_map_3d',
                     map_registered=s['armed'], bounds_xy_enu_m=[-10., -10., 16., 16.],
-                    obstacle_inflation_m=1., visible_clearance_m=1.2)
+                    obstacle_inflation_m=1., visible_clearance_m=1.2,
+                    registration_id='fixture-registration' if s['armed'] else None)
                 return s
+
+            def wait_for(self, accepted, on_progress=None):
+                result = super().wait_for(accepted, on_progress)
+                if accepted['mission']['steps'][0]['action'] == 'takeoff':
+                    ev = self.telemetry['external_vision']
+                    ev['heading_alignment_pending'] = False
+                    ev['ekf'].update(heading_good_for_control=True,
+                        mag_alignment={'aligned_in_flight': True, 'yaw_aligned': True, 'in_air': True})
+                    return self.state()
+                return result
+
+            def capture_stereo(self):
+                pair = super().capture_stereo()
+                pair['navigation_registration_id'] = 'fixture-registration' if self.telemetry['armed'] else None
+                return pair
 
             def request(self, path, payload=None):
                 if path == '/navigation/preview': return {'reachable': True}
@@ -253,7 +364,7 @@ class AutonomousGraphTests(unittest.TestCase):
         errors = [(m.name, m.content) for m in result['messages'] if isinstance(m, ToolMessage) and json.loads(m.content).get('status') == 'error']
         self.assertEqual(errors, [])
         self.assertEqual(len(reports), 2)
-        self.assertEqual(len(model.calls), 10 if combined else 12)
+        self.assertEqual(len(model.calls), 8 if combined else 10)
         self.assertEqual(len(bridge.flight_requests), 3)
         self.assertFalse(bridge.state()['armed'])
         self.assertNotIn('要不要', result['messages'][-1].content)

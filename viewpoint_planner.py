@@ -1,4 +1,5 @@
 """Deterministic fixed-heading NBV baseline; predictions never become observations."""
+from mission import MAX_ALTITUDE
 import copy
 import hashlib
 import json
@@ -114,14 +115,18 @@ class ViewpointPlanner:
     def generate_candidates(self, pose, origin_xy, fixed_yaw=None):
         position = vector(pose['position_m'], 3, 'NBV position')
         origin = vector(origin_xy, 2, 'NBV origin')
-        if not 1. <= position[2] <= 10. or math.dist(position[:2], origin) > 12.+1e-9:
+        if not 1. <= position[2] <= MAX_ALTITUDE or math.dist(position[:2], origin) > 12.+1e-9:
             raise ViewpointError('NBV source is outside the search volume')
         if fixed_yaw is None:
             rotation = quaternion_rotation(pose['orientation_xyzw'])
             fixed_yaw = math.atan2(rotation[1][0], rotation[0][0])
         yaw = finite(fixed_yaw, 'NBV fixed yaw')
         points, seen = [], set()
-        for z in (position[2], min(10., position[2]+2), max(1., position[2]-2)):
+        # Keep observation goals inside the hard 1..20 m volume. The 0.5 m
+        # buffer exceeds the executor's 0.35 m rotation tracking allowance.
+        heights = dict.fromkeys(max(1.5, min(MAX_ALTITUDE-.5, z)) for z in
+                                (position[2], position[2]+2, position[2]-2))
+        for z in heights:
             offsets = [(distance*math.cos(i*math.pi/4), distance*math.sin(i*math.pi/4))
                        for distance in (2., 4.) for i in range(8)] + [(0., 0.)]
             for dx, dy in offsets:
@@ -140,7 +145,8 @@ class ViewpointPlanner:
                 points.append({'id': 'view_{:03d}'.format(len(points)+1),
                                'position_enu_m': point, 'fixed_yaw_enu_rad': yaw, 'direction': direction})
         if self.config.heading_mode == 'discrete':
-            base = points + [{'position_enu_m': list(position), 'direction': '原地', 'fixed_yaw_enu_rad': yaw}]
+            base = points + ([{'position_enu_m': list(position), 'direction': '原地', 'fixed_yaw_enu_rad': yaw}]
+                             if 1.5 <= position[2] <= MAX_ALTITUDE-.5 else [])
             for candidate in base:
                 for step in (-1, 1):
                     points.append({**candidate, 'id': 'view_{:03d}'.format(len(points)+1),
@@ -338,7 +344,7 @@ class ViewpointPlanner:
                         or plan.get('search_origin_xy_enu_m') != origin or plan.get('search_radius_m') != 12.
                         or math.dist(points[-1], candidate['position_enu_m']) > 1e-8
                         or math.dist(points[0], paths['start_enu_m']) > 1e-8
-                        or any(not 1.-1e-9 <= p[2] <= 10.+1e-9 or math.dist(p[:2], origin) > 12.+1e-9 for p in points)):
+                        or any(not 1.-1e-9 <= p[2] <= MAX_ALTITUDE+1e-9 or math.dist(p[:2], origin) > 12.+1e-9 for p in points)):
                     raise ViewpointError('candidate route exceeds its source, goal or full search-volume permission')
                 length = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
                 if not math.isclose(length, finite(plan['path_length_m'], 'path length'), rel_tol=1e-9, abs_tol=1e-9):

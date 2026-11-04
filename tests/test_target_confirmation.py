@@ -152,6 +152,23 @@ class ConfirmationTests(unittest.TestCase):
         return self.search.review_confirmation(OWNER, active['source_capture_id'], active['current_capture_id'],
             current_id, source, current, same, 'controlled synthetic visual review', source_uncertain, current_uncertain)
 
+    def test_review_validation_reports_exact_conflict_without_mutating_candidate(self):
+        self.observe()
+        self.next_confirmation()
+        self.observe()
+        before = copy.deepcopy(self.search.sessions[OWNER])
+        for source_uncertain, current_uncertain, code in (
+                (True, False, 'source_support_uncertainty_conflict'),
+                (False, True, 'current_support_uncertainty_conflict')):
+            with self.subTest(code=code), self.assertRaisesRegex(ValueError, code):
+                self.review(source_uncertain=source_uncertain, current_uncertain=current_uncertain)
+            self.assertEqual(self.search.sessions[OWNER], before)
+        active = before['confirmation']
+        with self.assertRaisesRegex(ValueError, 'source_capture_id_mismatch'):
+            self.search.review_confirmation(OWNER, 'wrong-source', active['current_capture_id'], '',
+                                            False, False, False, 'controlled review')
+        self.assertEqual(self.search.sessions[OWNER], before)
+
     def test_first_label_and_valid_depth_are_only_candidate_then_distinct_view_can_confirm(self):
         self.observe()
         self.assertEqual(self.search.summary(OWNER)['search_status'], 'searching')
@@ -335,7 +352,7 @@ class ConfirmationTests(unittest.TestCase):
         self.next_confirmation()
         self.observe()
         active = self.search.sessions[OWNER]['confirmation']
-        with self.assertRaisesRegex(ValueError, 'owned image pair'):
+        with self.assertRaisesRegex(ValueError, 'source_capture_id_mismatch'):
             self.search.review_confirmation(OWNER, 'foreign', active['current_capture_id'],
                 active['current_target_ids'][0], True, True, True, 'foreign source')
         self.assertEqual(self.search.summary(OWNER)['search_status'], 'searching')

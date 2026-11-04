@@ -13,6 +13,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
+from mission import MAX_ALTITUDE
 from client import BridgeClient
 from agent_config import runtime_configuration
 from vision import VisionAnalyzer, vision_configuration
@@ -27,7 +28,7 @@ goto 的 x、y 是本地坐标绝对值，altitude 是本地 z，不是相对当
 takeoff altitude 也是本地 z。取用当前 position_enu_m 来计算相对位移。
 本地 z 不是离地高度，负值不代表飞机物理上低于地面。判断落地使用 landed_state 和 armed。
 “前方”默认任务开始时的机头方向；用户明确指东/北时按指定方向。
-高度范围 1..10 米，航点距离本地原点不超过 30 米，单次最多 24 步。
+高度范围 1..20 米，航点距离本地原点不超过 30 米，单次最多 24 步。
 takeoff 仅用于地面未解锁状态；空中继续任务不得重复起飞。
 goto 必须包含 x、y、altitude；hold 必须包含 duration（0.1..60 秒）。
 return_home 返回执行器记录的起飞位置上方，保持当前高度；land 使用自动降落。
@@ -51,9 +52,10 @@ stop_drone 在 OFFBOARD 飞行时取消并悬停；若已处于自动降落，�
 若工具提示操作员已中断任务，结束本次指令，不提出自动恢复或重新执行原任务。
 不要把 takeoff 完成时的空中位置当成地面起飞点，不猜测航线形状。
 当状态 navigation.enabled=true 时，根据navigation.method区分二维雷达与已知静态三维地图规划。
-提交用户目的地或搜索工具返回的观察点goto，执行器独立生成并检查中间绕行点；不要自行编造绕障路径。
+提交用户目的地、搜索工具返回的观察点，或由当前ENU位姿计算的任务取景点goto；取景点不是检测框推测的目标坐标。
+执行器独立生成并检查中间绕行点；不要自行编造绕障路径。
 仅method=lidar_grid时，takeoff/goto的altitude必须等于scene.navigation.flight_altitude_m。
-method=static_3d时，执行器使用已校验的已知静态三维碰撞地图规划路径，支持1～10米变高飞行；
+method=static_3d时，执行器使用已校验的已知静态三维碰撞地图规划路径，支持1～20米变高飞行；
 flight_altitude_m仅为建议高度，不是固定限制。该模式不是激光雷达实时建图或动态避障，必须如实说明。
 return_home也由对应执行器规划器绕障返回。只根据navigation_plans和实际飞行事件报告绕行，
 不宣称动态障碍保证或VLM视觉避障；三维规划仅适用于已验证的静态场景。
@@ -93,7 +95,7 @@ class TelemetryRequest(BaseModel):
 
 class OperatorReason(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    reason: str = Field(default="Operator requested safety action", min_length=1, max_length=200,
+    reason: str = Field(default="Model requested safety action", min_length=1, max_length=200,
                         description="Brief reason from the user's instruction or observed flight failure")
 
 
@@ -124,7 +126,7 @@ def operator_tool(function):
 class TakeoffStep(_MissionAction):
     """Take off: exactly action and altitude. No coordinates, duration or null placeholders."""
     action: Literal["takeoff"]
-    altitude: float = Field(ge=1, le=10, description="Required absolute local ENU z in metres, not height above ground")
+    altitude: float = Field(ge=1, le=MAX_ALTITUDE, description="Required absolute local ENU z in metres, not height above ground")
 
 
 class GotoStep(_MissionAction):
@@ -132,7 +134,7 @@ class GotoStep(_MissionAction):
     action: Literal["goto"]
     x: float = Field(description="Required absolute local ENU east coordinate in metres")
     y: float = Field(description="Required absolute local ENU north coordinate in metres")
-    altitude: float = Field(ge=1, le=10, description="Required absolute local ENU z in metres, not relative altitude")
+    altitude: float = Field(ge=1, le=MAX_ALTITUDE, description="Required absolute local ENU z in metres, not relative altitude")
 
 
 class HoldStep(_MissionAction):
@@ -202,7 +204,10 @@ def flight_tools(client):
                 return state
             fields = ("ready", "armed", "mode", "landed_state", "position_enu_m", "home_enu_m", "mission", "limits", "scene", "navigation") if view == "flight" else (
                 "ready", "armed", "camera", "vio", "external_vision", "navigation")
-            return {key: state.get(key) for key in fields}
+            result = {key: state.get(key) for key in fields}
+            if view == 'flight' and 'experimental_yaw_enabled' in state:
+                result['experimental_yaw_enabled'] = state['experimental_yaw_enabled']
+            return result
         except Exception as exc:
             return error(exc)
 
@@ -223,7 +228,7 @@ def flight_tools(client):
             return error(exc)
 
     @operator_tool
-    def stop_drone(reason: str = "Operator requested safety action") -> dict:
+    def stop_drone(reason: str = "Model requested safety action") -> dict:
         """Cancel a mission and hold during OFFBOARD flight. AUTO.LAND continues if already active."""
         try:
             return client.request("/stop", {})
@@ -231,10 +236,10 @@ def flight_tools(client):
             return error(exc)
 
     @operator_tool
-    def land_drone(reason: str = "Operator requested safety action") -> dict:
+    def land_drone(reason: str = "Model requested landing") -> dict:
         """Cancel the current mission, land immediately with AUTO.LAND, and wait for disarming."""
         try:
-            return client.wait_for(client.request("/land", {}), progress)
+            return client.wait_for(client.request("/land", {"reason": reason}), progress)
         except Exception as exc:
             return error(exc)
 
@@ -295,7 +300,7 @@ def main():
         print(json.dumps(client.request("/stop", {}), ensure_ascii=False, indent=2))
         return
     if args.land:
-        print(json.dumps(client.wait_for(client.request("/land", {})), ensure_ascii=False, indent=2))
+        print(json.dumps(client.wait_for(client.request("/land", {"reason": "Operator CLI --land"})), ensure_ascii=False, indent=2))
         return
     architecture, cfg, vision_cfg = runtime_configuration(args.env_file)
     if args.check_vision:
@@ -333,7 +338,7 @@ def main():
             elif prompt == "/stop":
                 print(json.dumps(client.request("/stop", {}), ensure_ascii=False, indent=2))
             elif prompt == "/land":
-                print(json.dumps(client.wait_for(client.request("/land", {})), ensure_ascii=False, indent=2))
+                print(json.dumps(client.wait_for(client.request("/land", {"reason": "Operator CLI /land"})), ensure_ascii=False, indent=2))
             elif prompt:
                 command = application.submit(prompt, mode="observe" if args.observe else "task")
                 while command["status"] == "running":

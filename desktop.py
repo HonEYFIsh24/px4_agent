@@ -401,7 +401,7 @@ class DesktopWindow:
         self.metrics["vio"].setText(text)
         navigation = state.get("navigation") or {}
         self.hint.setText("Ctrl+Enter 发送 · 本地 ENU 坐标 · " + (
-            "已知静态三维地图 · 高度 1～10 米，可变高" if navigation.get("method") == "static_3d" else
+            "已知静态三维地图 · 高度 1～20 米，可变高" if navigation.get("method") == "static_3d" else
             "二维雷达绕障 · 使用场景指定的固定高度"))
         mission = state.get("mission") or {}
         self.metrics["mission"].setText("{} · {} · 步骤 {}".format(STATUS.get(mission.get("status"), "空闲"),
@@ -467,6 +467,7 @@ class DesktopWindow:
             self.workbench.setMaximumHeight(max(height, self.workbench.minimumSizeHint().height()))
 
     def render_cameras(self, fresh):
+        fresh = fresh and self.state.get('connected') is True
         for side, label in self.camera_labels.items():
             metadata = (self.state.get("camera") or {}).get(side) or {}
             data = camera_bytes(self.application.camera_paths[side], metadata) if fresh else None
@@ -475,6 +476,8 @@ class DesktopWindow:
                 label.setText("相机未连接 / 图像已过期")
                 self.images.pop(side, None)
                 self.frame_bytes.pop(side, None)
+                if side == 'left':
+                    self.workbench.set_live_camera(None)
                 continue
             if data != self.frame_bytes.get(side):
                 image = QPixmap()
@@ -483,9 +486,13 @@ class DesktopWindow:
                     label.setText("图像暂不可用")
                     self.images.pop(side, None)
                     self.frame_bytes.pop(side, None)
+                    if side == 'left':
+                        self.workbench.set_live_camera(None, '图像暂不可用')
                     continue
                 self.images[side] = image
                 self.frame_bytes[side] = data
+            if side == 'left':
+                self.workbench.set_live_camera(self.images[side])
             label.setPixmap(self.images[side].scaled(label.size(), Qt.AspectRatioMode.KeepAspectRatio,
                                                      Qt.TransformationMode.SmoothTransformation))
 

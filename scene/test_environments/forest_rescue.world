@@ -1,0 +1,4551 @@
+<?xml version='1.0' encoding='utf-8'?>
+<sdf version="1.5">
+  <world name="forest_rescue">
+    <include>
+      <uri>model://sun</uri>
+    </include>
+    <scene>
+      <ambient>.65 .68 .62 1</ambient>
+      <background>.55 .72 .86 1</background>
+      <shadows>true</shadows>
+      <fog>
+        <type>linear</type>
+        <color>.72 .78 .83 1</color>
+        <density>.001</density>
+        <start>70</start>
+        <end>150</end>
+      </fog>
+    </scene>
+    <physics name="default_physics" default="0" type="ode">
+      <gravity>0 0 -9.8066</gravity>
+      <ode>
+        <solver>
+          <type>quick</type>
+          <iters>10</iters>
+          <sor>1.3</sor>
+          <use_dynamic_moi_rescaling>0</use_dynamic_moi_rescaling>
+        </solver>
+        <constraints>
+          <cfm>0</cfm>
+          <erp>0.2</erp>
+          <contact_max_correcting_vel>100</contact_max_correcting_vel>
+          <contact_surface_layer>0.001</contact_surface_layer>
+        </constraints>
+      </ode>
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+      <magnetic_field>6.0e-6 2.3e-5 -4.2e-5</magnetic_field>
+    </physics>
+    <gui fullscreen="0">
+      <camera name="yard_overview">
+        <pose>-27 -36 32 0 .60 .82</pose>
+        <view_controller>orbit</view_controller>
+      </camera>
+    </gui>
+    <model name="yard_ground">
+      <static>true</static>
+      <pose>0 0 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="earth_visual">
+          <pose>0 0 -0.05 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>100 80 0.1</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/grass</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="earth_collision">
+          <pose>0 0 -0.05 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>100 80 0.1</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="trail_visual">
+          <pose>0 -5 0.008 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>75 3 0.012</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <visual name="stream_visual">
+          <pose>23 0 0.01 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>5 78 0.014</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.08 0.35 0.52 1</ambient>
+            <diffuse>0.08 0.35 0.52 1</diffuse>
+          </material>
+        </visual>
+        <visual name="pad_visual">
+          <pose>0 0 0.012 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3 3 0.012</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="pine_00">
+      <static>true</static>
+      <pose>-7 6 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.5303708271310503 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.060741654262101</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.5303708271310503 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.060741654262101</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 5.960741654262101 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 5.960741654262101 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 6.660741654262101 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 6.660741654262101 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 7.360741654262101 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 7.360741654262101 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_01">
+      <static>true</static>
+      <pose>5 7 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.92967682862666 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.85935365725332</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.92967682862666 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.85935365725332</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 6.759353657253319 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 6.759353657253319 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 7.4593536572533194 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 7.4593536572533194 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 8.15935365725332 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 8.15935365725332 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_02">
+      <static>true</static>
+      <pose>11 -6 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.282756484514435 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>6.56551296902887</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.282756484514435 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>6.56551296902887</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 5.46551296902887 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 5.46551296902887 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 6.16551296902887 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 6.16551296902887 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 6.86551296902887 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 6.86551296902887 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_03">
+      <static>true</static>
+      <pose>-8 -10 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.935254207408066 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.870508414816132</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.935254207408066 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.870508414816132</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 4.770508414816131 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 4.770508414816131 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 5.470508414816131 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 5.470508414816131 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 6.1705084148161315 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 6.1705084148161315 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_04">
+      <static>true</static>
+      <pose>15 9 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.5923842731263123 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.1847685462526245</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.5923842731263123 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.1847685462526245</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 4.084768546252624 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 4.084768546252624 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 4.784768546252624 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 4.784768546252624 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 5.484768546252624 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 5.484768546252624 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_05">
+      <static>true</static>
+      <pose>1.8906162352744147 34.24940071215366 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.689982311290299 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.379964622580598</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.689982311290299 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.379964622580598</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 4.279964622580598 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 4.279964622580598 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 4.9799646225805985 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 4.9799646225805985 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 5.679964622580599 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 5.679964622580599 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_06">
+      <static>true</static>
+      <pose>-18.092217512255967 18.093078929427023 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.513902598496842 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.027805196993684</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.513902598496842 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.027805196993684</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 3.9278051969936842 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 3.9278051969936842 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 4.627805196993684 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 4.627805196993684 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 5.327805196993684 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 5.327805196993684 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_07">
+      <static>true</static>
+      <pose>-40.683437024014694 31.48853568867973 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.4432136218094076 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>4.886427243618815</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.4432136218094076 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>4.886427243618815</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 3.786427243618815 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 3.786427243618815 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 4.486427243618815 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 4.486427243618815 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 5.186427243618815 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 5.186427243618815 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_08">
+      <static>true</static>
+      <pose>-6.917287486009279 28.169971407057552 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.621682001932701 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.243364003865402</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.621682001932701 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.243364003865402</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 4.143364003865402 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 4.143364003865402 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 4.8433640038654024 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 4.8433640038654024 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 5.543364003865403 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 5.543364003865403 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_09">
+      <static>true</static>
+      <pose>15.861388394882347 18.613286852616763 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.7235425055267726 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.447085011053545</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.7235425055267726 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.447085011053545</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 6.3470850110535455 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 6.3470850110535455 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 7.047085011053546 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 7.047085011053546 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 7.747085011053546 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 7.747085011053546 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_10">
+      <static>true</static>
+      <pose>4.401859159384514 -31.439571008390693 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.1897114368823436 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>6.379422873764687</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.1897114368823436 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>6.379422873764687</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 5.2794228737646876 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 5.2794228737646876 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 5.979422873764688 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 5.979422873764688 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 6.679422873764688 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 6.679422873764688 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_11">
+      <static>true</static>
+      <pose>32.27721918303213 -32.773296746654836 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.6586376060321912 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.3172752120643825</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.6586376060321912 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.3172752120643825</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 6.217275212064383 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 6.217275212064383 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 6.917275212064383 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 6.917275212064383 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 7.617275212064383 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 7.617275212064383 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_12">
+      <static>true</static>
+      <pose>2.8257024292998025 -22.289685519481477 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.8603250835250256 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.720650167050051</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.8603250835250256 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.720650167050051</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 6.6206501670500515 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 6.6206501670500515 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 7.320650167050052 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 7.320650167050052 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 8.020650167050052 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 8.020650167050052 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_13">
+      <static>true</static>
+      <pose>-32.37896573624593 -21.87479106920818 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.6688731987273866 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.337746397454773</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.6688731987273866 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.337746397454773</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 6.237746397454773 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 6.237746397454773 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 6.937746397454773 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 6.937746397454773 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 7.637746397454773 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 7.637746397454773 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_14">
+      <static>true</static>
+      <pose>-35.95970854441214 28.163332215921564 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.336525133122039 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>4.673050266244078</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.336525133122039 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>4.673050266244078</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 3.573050266244078 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 3.573050266244078 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 4.273050266244078 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 4.273050266244078 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 4.973050266244078 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 4.973050266244078 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_15">
+      <static>true</static>
+      <pose>8.595074133412645 31.454184313232684 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.8704283701870272 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.7408567403740545</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.8704283701870272 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.7408567403740545</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 6.640856740374055 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 6.640856740374055 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 7.340856740374055 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 7.340856740374055 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 8.040856740374055 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 8.040856740374055 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_16">
+      <static>true</static>
+      <pose>36.11785193479706 -24.22285921925056 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.412386381699358 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>4.824772763398716</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.412386381699358 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>4.824772763398716</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 3.724772763398716 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 3.724772763398716 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 4.424772763398716 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 4.424772763398716 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 5.124772763398716 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 5.124772763398716 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_17">
+      <static>true</static>
+      <pose>6.166447940793134 16.95561764561086 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.59919008832955 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.1983801766591</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.59919008832955 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.1983801766591</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 6.0983801766591 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 6.0983801766591 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 6.7983801766591005 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 6.7983801766591005 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 7.498380176659101 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 7.498380176659101 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_18">
+      <static>true</static>
+      <pose>-1.957581145798457 -32.48798483389393 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.7181511870655912 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.4363023741311824</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.7181511870655912 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.4363023741311824</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 6.336302374131183 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 6.336302374131183 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 7.036302374131183 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 7.036302374131183 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 7.736302374131183 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 7.736302374131183 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_19">
+      <static>true</static>
+      <pose>-22.450595378356404 -34.190451426229075 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.4005398954817867 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>6.801079790963573</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.4005398954817867 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>6.801079790963573</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 5.701079790963574 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 5.701079790963574 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 6.401079790963574 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 6.401079790963574 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 7.101079790963574 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 7.101079790963574 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_20">
+      <static>true</static>
+      <pose>2.314928236108365 17.104128517782737 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.956444694403152 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.912889388806304</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.956444694403152 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.912889388806304</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 4.812889388806305 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 4.812889388806305 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 5.512889388806305 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 5.512889388806305 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 6.212889388806305 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 6.212889388806305 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_21">
+      <static>true</static>
+      <pose>-37.475531759586985 19.662202531121167 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.3812798704858555 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>4.762559740971711</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.3812798704858555 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>4.762559740971711</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 3.662559740971711 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 3.662559740971711 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 4.362559740971711 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 4.362559740971711 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 5.062559740971711 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 5.062559740971711 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_22">
+      <static>true</static>
+      <pose>8.935093009944204 -20.753271993344555 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.399018562959947 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>4.798037125919894</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.399018562959947 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>4.798037125919894</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 3.698037125919894 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 3.698037125919894 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 4.398037125919894 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 4.398037125919894 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 5.098037125919894 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 5.098037125919894 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_23">
+      <static>true</static>
+      <pose>-16.545680576402596 22.05870089861615 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.3638797343803404 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>6.727759468760681</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.3638797343803404 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>6.727759468760681</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 5.627759468760681 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 5.627759468760681 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 6.327759468760681 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 6.327759468760681 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 7.0277594687606815 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 7.0277594687606815 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_24">
+      <static>true</static>
+      <pose>-14.44170565833339 22.367120461057898 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.672982528013274 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.345965056026548</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.672982528013274 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.345965056026548</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 4.245965056026549 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 4.245965056026549 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 4.945965056026549 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 4.945965056026549 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 5.645965056026549 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 5.645965056026549 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_25">
+      <static>true</static>
+      <pose>-38.64619023515901 16.365087523132704 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.181494259658085 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>6.36298851931617</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.181494259658085 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>6.36298851931617</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 5.2629885193161705 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 5.2629885193161705 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 5.962988519316171 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 5.962988519316171 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 6.662988519316171 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 6.662988519316171 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_26">
+      <static>true</static>
+      <pose>21.039621989691668 28.028937861510833 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.714147461637563 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.428294923275126</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.714147461637563 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.428294923275126</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 4.328294923275125 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 4.328294923275125 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 5.0282949232751255 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 5.0282949232751255 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 5.728294923275126 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 5.728294923275126 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_27">
+      <static>true</static>
+      <pose>19.692665629483344 20.903450611424194 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.5359658945530783 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.071931789106157</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.5359658945530783 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.071931789106157</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 3.9719317891061565 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 3.9719317891061565 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 4.671931789106156 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 4.671931789106156 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 5.371931789106156 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 5.371931789106156 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_28">
+      <static>true</static>
+      <pose>21.344776398420223 16.392566381395525 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 2.766667092860701 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.533334185721402</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 2.766667092860701 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>5.533334185721402</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 4.433334185721401 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 4.433334185721401 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 5.133334185721401 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 5.133334185721401 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 5.833334185721402 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 5.833334185721402 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="pine_29">
+      <static>true</static>
+      <pose>5.519893759275888 -23.657242225206538 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="trunk_visual">
+          <pose>0 0 3.5185168855151288 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.0370337710302575</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.24 0.13 0.07 1</ambient>
+            <diffuse>0.24 0.13 0.07 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 3.5185168855151288 0.0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.28</radius>
+              <length>7.0370337710302575</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="canopy0_visual">
+          <pose>0 0 5.937033771030258 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.1 0.25 0.11 1</ambient>
+            <diffuse>0.1 0.25 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy0_collision">
+          <pose>0 0 5.937033771030258 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.5</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy1_visual">
+          <pose>0 0 6.637033771030258 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.125 0.28 0.11 1</ambient>
+            <diffuse>0.125 0.28 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy1_collision">
+          <pose>0 0 6.637033771030258 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+        <visual name="canopy2_visual">
+          <pose>0 0 7.337033771030258 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15000000000000002 0.31 0.11 1</ambient>
+            <diffuse>0.15000000000000002 0.31 0.11 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy2_collision">
+          <pose>0 0 7.337033771030258 0.0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.9</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_00">
+      <static>true</static>
+      <pose>4 1 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 1.1 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.8 2.4 2.2</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 1.1 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.8 2.4 2.2</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 2.2 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1.9599999999999997 1.7999999999999998 0.66</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 2.2 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1.9599999999999997 1.7999999999999998 0.66</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_01">
+      <static>true</static>
+      <pose>-4 5 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 0.8 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2 3 1.6</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 0.8 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2 3 1.6</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 1.6 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1.4 2.25 0.48</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 1.6 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1.4 2.25 0.48</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_02">
+      <static>true</static>
+      <pose>12 7 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 1.6 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.7 2 3.2</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 1.6 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.7 2 3.2</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 3.2 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1.89 1.5 0.96</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 3.2 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1.89 1.5 0.96</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_03">
+      <static>true</static>
+      <pose>-1.1076461877063508 29.542268982609766 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 1.4402132940857741 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.6674213905777897 2.815774508054073 2.8804265881715483</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 1.4402132940857741 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.6674213905777897 2.815774508054073 2.8804265881715483</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 2.8804265881715483 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1.8671949734044526 2.1118308810405546 0.8641279764514644</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 2.8804265881715483 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1.8671949734044526 2.1118308810405546 0.8641279764514644</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_04">
+      <static>true</static>
+      <pose>-35.498410126116866 28.524250515258593 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 0.7831991721290235 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.6871834356250326 2.636489478046009 1.566398344258047</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 0.7831991721290235 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.6871834356250326 2.636489478046009 1.566398344258047</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 1.566398344258047 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1.8810284049375228 1.9773671085345068 0.46991950327741405</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 1.566398344258047 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1.8810284049375228 1.9773671085345068 0.46991950327741405</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_05">
+      <static>true</static>
+      <pose>-11.416261000592382 -31.461616698079133 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 0.5805302734684556 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.7340470008825286 3.0388882074159502 1.1610605469369113</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 0.5805302734684556 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.7340470008825286 3.0388882074159502 1.1610605469369113</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 1.1610605469369113 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.61383290061777 2.2791661555619624 0.34831816408107336</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 1.1610605469369113 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.61383290061777 2.2791661555619624 0.34831816408107336</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_06">
+      <static>true</static>
+      <pose>27.91122752140977 -31.016599547149305 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 1.0519309696424304 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.667579216460121 3.225950871608717 2.1038619392848608</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 1.0519309696424304 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.667579216460121 3.225950871608717 2.1038619392848608</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 2.1038619392848608 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.5673054515220843 2.4194631537065376 0.6311585817854583</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 2.1038619392848608 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.5673054515220843 2.4194631537065376 0.6311585817854583</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_07">
+      <static>true</static>
+      <pose>41.8402032680344 -22.246830806683267 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 1.2779544305672321 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.066547165417459 3.183017940721278 2.5559088611344642</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 1.2779544305672321 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.066547165417459 3.183017940721278 2.5559088611344642</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 2.5559088611344642 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.1465830157922214 2.3872634555409586 0.7667726583403393</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 2.5559088611344642 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.1465830157922214 2.3872634555409586 0.7667726583403393</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_08">
+      <static>true</static>
+      <pose>1.9577344423728462 -31.190890357344145 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 0.7681274315273037 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>4.695873700915582 3.1069405490903774 1.5362548630546073</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 0.7681274315273037 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>4.695873700915582 3.1069405490903774 1.5362548630546073</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 1.5362548630546073 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.287111590640907 2.330205411817783 0.4608764589163822</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 1.5362548630546073 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.287111590640907 2.330205411817783 0.4608764589163822</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_09">
+      <static>true</static>
+      <pose>-3.0545503986861533 -25.50754463442579 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 0.8951410001223327 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.424779000568506 2.024200071308571 1.7902820002446653</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 0.8951410001223327 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.424779000568506 2.024200071308571 1.7902820002446653</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 1.7902820002446653 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.397345300397954 1.5181500534814283 0.5370846000733995</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 1.7902820002446653 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.397345300397954 1.5181500534814283 0.5370846000733995</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_10">
+      <static>true</static>
+      <pose>40.97580287372827 22.72282272970446 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 0.6478130688998409 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.9862550767790292 2.103603799151948 1.2956261377996818</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 0.6478130688998409 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.9862550767790292 2.103603799151948 1.2956261377996818</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 1.2956261377996818 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.0903785537453206 1.5777028493639609 0.3886878413399045</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 1.2956261377996818 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.0903785537453206 1.5777028493639609 0.3886878413399045</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_11">
+      <static>true</static>
+      <pose>14.03983800665118 -18.3858984677448 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 1.4183862679159764 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4151366437279282 3.8121686920734246 2.836772535831953</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 1.4183862679159764 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4151366437279282 3.8121686920734246 2.836772535831953</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 2.836772535831953 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.3905956506095496 2.8591265190550685 0.8510317607495859</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 2.836772535831953 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.3905956506095496 2.8591265190550685 0.8510317607495859</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_12">
+      <static>true</static>
+      <pose>41.41966594398676 -28.89260681510286 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 1.1830415971940624 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>4.4600029700412875 3.9705838564955958 2.366083194388125</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 1.1830415971940624 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>4.4600029700412875 3.9705838564955958 2.366083194388125</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 2.366083194388125 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.122002079028901 2.977937892371697 0.7098249583164374</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 2.366083194388125 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.122002079028901 2.977937892371697 0.7098249583164374</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_13">
+      <static>true</static>
+      <pose>26.986340342309234 -30.142735325472295 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 0.6841087649923758 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.0897932913267048 2.7999586879305074 1.3682175299847517</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 0.6841087649923758 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.0897932913267048 2.7999586879305074 1.3682175299847517</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 1.3682175299847517 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1.4628553039286933 2.0999690159478805 0.41046525899542546</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 1.3682175299847517 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1.4628553039286933 2.0999690159478805 0.41046525899542546</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="rock_14">
+      <static>true</static>
+      <pose>38.307313925781045 -20.633118507575396 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="stone_visual">
+          <pose>0 0 1.0209708095353074 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.6161035357938367 2.538870012117889 2.0419416190706148</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/concrete</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="stone_collision">
+          <pose>0 0 1.0209708095353074 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.6161035357938367 2.538870012117889 2.0419416190706148</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="cap_visual">
+          <pose>0.1 0.1 2.0419416190706148 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.5312724750556854 1.9041525090884168 0.6125824857211845</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.36 0.38 0.35 1</ambient>
+            <diffuse>0.36 0.38 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="cap_collision">
+          <pose>0.1 0.1 2.0419416190706148 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.5312724750556854 1.9041525090884168 0.6125824857211845</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="woodland_cabin_0">
+      <static>true</static>
+      <pose>16 -12 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="walls_visual">
+          <pose>0 0 1.5 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>6 4 3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="walls_collision">
+          <pose>0 0 1.5 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>6 4 3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="roof-1_visual">
+          <pose>0 -1.05 3.65 0.5 0 0</pose>
+          <geometry>
+            <box>
+              <size>6.6 2.8 0.18</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.22 0.13 0.08 1</ambient>
+            <diffuse>0.22 0.13 0.08 1</diffuse>
+          </material>
+        </visual>
+        <collision name="roof-1_collision">
+          <pose>0 -1.05 3.65 0.5 0 0</pose>
+          <geometry>
+            <box>
+              <size>6.6 2.8 0.18</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="roof1_visual">
+          <pose>0 1.05 3.65 -0.5 0 0</pose>
+          <geometry>
+            <box>
+              <size>6.6 2.8 0.18</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.22 0.13 0.08 1</ambient>
+            <diffuse>0.22 0.13 0.08 1</diffuse>
+          </material>
+        </visual>
+        <collision name="roof1_collision">
+          <pose>0 1.05 3.65 -0.5 0 0</pose>
+          <geometry>
+            <box>
+              <size>6.6 2.8 0.18</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="door_visual">
+          <pose>0 -2.02 1 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 0.03 2</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.12 0.08 0.04 1</ambient>
+            <diffuse>0.12 0.08 0.04 1</diffuse>
+          </material>
+        </visual>
+        <visual name="window-2_visual">
+          <pose>-2 -2.03 1.8 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 0.04 1</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.17 0.4 0.48 1</ambient>
+            <diffuse>0.17 0.4 0.48 1</diffuse>
+          </material>
+        </visual>
+        <visual name="window2_visual">
+          <pose>2 -2.03 1.8 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 0.04 1</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.17 0.4 0.48 1</ambient>
+            <diffuse>0.17 0.4 0.48 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="woodland_cabin_1">
+      <static>true</static>
+      <pose>-18 14 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="walls_visual">
+          <pose>0 0 1.5 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>6 4 3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="walls_collision">
+          <pose>0 0 1.5 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>6 4 3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="roof-1_visual">
+          <pose>0 -1.05 3.65 0.5 0 0</pose>
+          <geometry>
+            <box>
+              <size>6.6 2.8 0.18</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.22 0.13 0.08 1</ambient>
+            <diffuse>0.22 0.13 0.08 1</diffuse>
+          </material>
+        </visual>
+        <collision name="roof-1_collision">
+          <pose>0 -1.05 3.65 0.5 0 0</pose>
+          <geometry>
+            <box>
+              <size>6.6 2.8 0.18</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="roof1_visual">
+          <pose>0 1.05 3.65 -0.5 0 0</pose>
+          <geometry>
+            <box>
+              <size>6.6 2.8 0.18</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.22 0.13 0.08 1</ambient>
+            <diffuse>0.22 0.13 0.08 1</diffuse>
+          </material>
+        </visual>
+        <collision name="roof1_collision">
+          <pose>0 1.05 3.65 -0.5 0 0</pose>
+          <geometry>
+            <box>
+              <size>6.6 2.8 0.18</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="door_visual">
+          <pose>0 -2.02 1 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 0.03 2</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.12 0.08 0.04 1</ambient>
+            <diffuse>0.12 0.08 0.04 1</diffuse>
+          </material>
+        </visual>
+        <visual name="window-2_visual">
+          <pose>-2 -2.03 1.8 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 0.04 1</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.17 0.4 0.48 1</ambient>
+            <diffuse>0.17 0.4 0.48 1</diffuse>
+          </material>
+        </visual>
+        <visual name="window2_visual">
+          <pose>2 -2.03 1.8 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 0.04 1</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.17 0.4 0.48 1</ambient>
+            <diffuse>0.17 0.4 0.48 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="woodland_cabin_2">
+      <static>true</static>
+      <pose>-26 -18 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="walls_visual">
+          <pose>0 0 1.5 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>6 4 3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="walls_collision">
+          <pose>0 0 1.5 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>6 4 3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="roof-1_visual">
+          <pose>0 -1.05 3.65 0.5 0 0</pose>
+          <geometry>
+            <box>
+              <size>6.6 2.8 0.18</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.22 0.13 0.08 1</ambient>
+            <diffuse>0.22 0.13 0.08 1</diffuse>
+          </material>
+        </visual>
+        <collision name="roof-1_collision">
+          <pose>0 -1.05 3.65 0.5 0 0</pose>
+          <geometry>
+            <box>
+              <size>6.6 2.8 0.18</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="roof1_visual">
+          <pose>0 1.05 3.65 -0.5 0 0</pose>
+          <geometry>
+            <box>
+              <size>6.6 2.8 0.18</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.22 0.13 0.08 1</ambient>
+            <diffuse>0.22 0.13 0.08 1</diffuse>
+          </material>
+        </visual>
+        <collision name="roof1_collision">
+          <pose>0 1.05 3.65 -0.5 0 0</pose>
+          <geometry>
+            <box>
+              <size>6.6 2.8 0.18</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="door_visual">
+          <pose>0 -2.02 1 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 0.03 2</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.12 0.08 0.04 1</ambient>
+            <diffuse>0.12 0.08 0.04 1</diffuse>
+          </material>
+        </visual>
+        <visual name="window-2_visual">
+          <pose>-2 -2.03 1.8 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 0.04 1</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.17 0.4 0.48 1</ambient>
+            <diffuse>0.17 0.4 0.48 1</diffuse>
+          </material>
+        </visual>
+        <visual name="window2_visual">
+          <pose>2 -2.03 1.8 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 0.04 1</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.17 0.4 0.48 1</ambient>
+            <diffuse>0.17 0.4 0.48 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <model name="orange_rescue_tent">
+      <static>true</static>
+      <pose>8 -2 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="canvas-1_visual">
+          <pose>0 -0.75 0.84 0.78 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 2.2 0.08</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>1 0.32 0.03 1</ambient>
+            <diffuse>1 0.32 0.03 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canvas-1_collision">
+          <pose>0 -0.75 0.84 0.78 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 2.2 0.08</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="canvas1_visual">
+          <pose>0 0.75 0.84 -0.78 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 2.2 0.08</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>1 0.32 0.03 1</ambient>
+            <diffuse>1 0.32 0.03 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canvas1_collision">
+          <pose>0 0.75 0.84 -0.78 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 2.2 0.08</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="floor_visual">
+          <pose>0 0 0.04 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 3 0.08</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.26 0.2 0.12 1</ambient>
+            <diffuse>0.26 0.2 0.12 1</diffuse>
+          </material>
+        </visual>
+        <collision name="floor_collision">
+          <pose>0 0 0.04 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 3 0.08</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="ridge_visual">
+          <pose>0 0 1.65 1.5707963267948966 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.045</radius>
+              <length>3.5</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+          </material>
+        </visual>
+        <collision name="ridge_collision">
+          <pose>0 0 1.65 1.5707963267948966 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.045</radius>
+              <length>3.5</length>
+            </cylinder>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="blue_camp_tent">
+      <static>true</static>
+      <pose>-15 -12 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="canvas-1_visual">
+          <pose>0 -0.75 0.84 0.78 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 2.2 0.08</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.08 0.22 0.65 1</ambient>
+            <diffuse>0.08 0.22 0.65 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canvas-1_collision">
+          <pose>0 -0.75 0.84 0.78 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 2.2 0.08</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="canvas1_visual">
+          <pose>0 0.75 0.84 -0.78 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 2.2 0.08</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.08 0.22 0.65 1</ambient>
+            <diffuse>0.08 0.22 0.65 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canvas1_collision">
+          <pose>0 0.75 0.84 -0.78 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 2.2 0.08</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="floor_visual">
+          <pose>0 0 0.04 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 3 0.08</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.26 0.2 0.12 1</ambient>
+            <diffuse>0.26 0.2 0.12 1</diffuse>
+          </material>
+        </visual>
+        <collision name="floor_collision">
+          <pose>0 0 0.04 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 3 0.08</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="ridge_visual">
+          <pose>0 0 1.65 1.5707963267948966 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.045</radius>
+              <length>3.5</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+          </material>
+        </visual>
+        <collision name="ridge_collision">
+          <pose>0 0 1.65 1.5707963267948966 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.045</radius>
+              <length>3.5</length>
+            </cylinder>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="green_camp_tent">
+      <static>true</static>
+      <pose>-20 -10 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="canvas-1_visual">
+          <pose>0 -0.75 0.84 0.78 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 2.2 0.08</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.15 0.35 0.18 1</ambient>
+            <diffuse>0.15 0.35 0.18 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canvas-1_collision">
+          <pose>0 -0.75 0.84 0.78 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 2.2 0.08</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="canvas1_visual">
+          <pose>0 0.75 0.84 -0.78 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 2.2 0.08</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.15 0.35 0.18 1</ambient>
+            <diffuse>0.15 0.35 0.18 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canvas1_collision">
+          <pose>0 0.75 0.84 -0.78 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 2.2 0.08</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="floor_visual">
+          <pose>0 0 0.04 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 3 0.08</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.26 0.2 0.12 1</ambient>
+            <diffuse>0.26 0.2 0.12 1</diffuse>
+          </material>
+        </visual>
+        <collision name="floor_collision">
+          <pose>0 0 0.04 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.4 3 0.08</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="ridge_visual">
+          <pose>0 0 1.65 1.5707963267948966 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.045</radius>
+              <length>3.5</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+          </material>
+        </visual>
+        <collision name="ridge_collision">
+          <pose>0 0 1.65 1.5707963267948966 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.045</radius>
+              <length>3.5</length>
+            </cylinder>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="footbridge">
+      <static>true</static>
+      <pose>23 -5 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="deck_visual">
+          <pose>0 0 0.2 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>7 3 0.35</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="deck_collision">
+          <pose>0 0 0.2 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>7 3 0.35</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="rail-1_visual">
+          <pose>0 -1.5 1.3 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>7 0.14 0.15</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="rail-1_collision">
+          <pose>0 -1.5 1.3 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>7 0.14 0.15</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="post-1_0_visual">
+          <pose>-3.0 -1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="post-1_0_collision">
+          <pose>-3.0 -1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="post-1_1_visual">
+          <pose>-1.5 -1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="post-1_1_collision">
+          <pose>-1.5 -1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="post-1_2_visual">
+          <pose>0.0 -1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="post-1_2_collision">
+          <pose>0.0 -1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="post-1_3_visual">
+          <pose>1.5 -1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="post-1_3_collision">
+          <pose>1.5 -1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="post-1_4_visual">
+          <pose>3.0 -1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="post-1_4_collision">
+          <pose>3.0 -1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="rail1_visual">
+          <pose>0 1.5 1.3 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>7 0.14 0.15</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="rail1_collision">
+          <pose>0 1.5 1.3 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>7 0.14 0.15</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="post1_0_visual">
+          <pose>-3.0 1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="post1_0_collision">
+          <pose>-3.0 1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="post1_1_visual">
+          <pose>-1.5 1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="post1_1_collision">
+          <pose>-1.5 1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="post1_2_visual">
+          <pose>0.0 1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="post1_2_collision">
+          <pose>0.0 1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="post1_3_visual">
+          <pose>1.5 1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="post1_3_collision">
+          <pose>1.5 1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="post1_4_visual">
+          <pose>3.0 1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/wood</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="post1_4_collision">
+          <pose>3.0 1.5 0.65 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.15 0.15 1.3</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="ruin_pillar_0">
+      <static>true</static>
+      <pose>-22 4 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="pillar_visual">
+          <pose>0 0 1.0 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 1 2</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/brick</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="pillar_collision">
+          <pose>0 0 1.0 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 1 2</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="ruin_pillar_1">
+      <static>true</static>
+      <pose>-19 4 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="pillar_visual">
+          <pose>0 0 1.5 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 1 3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/brick</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="pillar_collision">
+          <pose>0 0 1.5 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 1 3</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="ruin_pillar_2">
+      <static>true</static>
+      <pose>-16 4 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="pillar_visual">
+          <pose>0 0 2.0 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 1 4</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/brick</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="pillar_collision">
+          <pose>0 0 2.0 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 1 4</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="ruin_pillar_3">
+      <static>true</static>
+      <pose>-13 4 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="pillar_visual">
+          <pose>0 0 1.0 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 1 2</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/brick</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="pillar_collision">
+          <pose>0 0 1.0 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 1 2</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="ruin_pillar_4">
+      <static>true</static>
+      <pose>-10 4 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="pillar_visual">
+          <pose>0 0 1.5 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 1 3</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/brick</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="pillar_collision">
+          <pose>0 0 1.5 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 1 3</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+    <model name="ruin_pillar_5">
+      <static>true</static>
+      <pose>-7 4 .003 0 0 0</pose>
+      <link name="structure">
+        <visual name="pillar_visual">
+          <pose>0 0 2.0 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 1 4</size>
+            </box>
+          </geometry>
+          <material>
+            <script>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/scripts</uri>
+              <uri>file:///home/fxxk/px4_agent/scene/materials/textures</uri>
+              <name>Yard/brick</name>
+            </script>
+          </material>
+        </visual>
+        <collision name="pillar_collision">
+          <pose>0 0 2.0 0.0 0 0</pose>
+          <geometry>
+            <box>
+              <size>1 1 4</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+  </world>
+</sdf>

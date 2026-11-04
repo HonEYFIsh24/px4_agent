@@ -1,0 +1,60 @@
+{
+  "id": "orchard_flat_test",
+  "world_sha256": "857a9639be2c2deb829c0acadca9023533afa7f0d9b95090c16a20fbe2632e4d",
+  "ground_plane": {
+    "known": true,
+    "z_m": 0.0,
+    "bounds_xy_m": [
+      -2.249997245094486,
+      -36.18023983829853,
+      36.092378872338706,
+      12.250139016706367
+    ]
+  },
+  "flight_region": {
+    "frame": "gazebo_world",
+    "bounds_min_m": [
+      -1.949997245094486,
+      -35.880239838298536,
+      -0.2
+    ],
+    "bounds_max_m": [
+      35.79237887233871,
+      11.950139016706366,
+      20.6
+    ],
+    "margin_m": 0.6
+  },
+  "takeoff_pad": {
+    "center_world_m": [
+      0,
+      0,
+      0
+    ],
+    "radius_m": 1.0,
+    "vertical_clearance_m": 20.0
+  },
+  "navigation": {
+    "enabled": true,
+    "method": "static_3d",
+    "bounds_xy_m": [
+      -1.949997245094486,
+      -35.880239838298536,
+      35.79237887233871,
+      11.950139016706366
+    ],
+    "flight_altitude_m": 3.0,
+    "minimum_clearance_m": 1.0
+  },
+  "external_assets_sha256": {
+    "scene/external_worlds/clearpath-pinned/cpr_orchard_gazebo/meshes/orchard_world.dae": "355f544918399677f682a2514a12c4a8c8b6e93d04a3468e8d4e7f36d17619c0",
+    "scene/external_worlds/prepared/orchard_flat/flat_ground.dae": "40d89e9c2df7b5d41c6677df85284c3eadc4d9161241e7a68bde3414c9aeb0e2",
+    "scene/external_worlds/clearpath-pinned/cpr_orchard_gazebo/meshes/Ground.png": "02bb7174e9e56468f4b578d79638084b0c97be06bc4be0b8f457aac24394096f",
+    "scene/external_worlds/clearpath-pinned/cpr_orchard_gazebo/meshes/orchard_trunks.dae": "014f6f523d6735bfb354010c90df39f8a66ad00e88aa19be55cddf19f121a6c6",
+    "scene/external_worlds/clearpath-pinned/cpr_orchard_gazebo/meshes/RustPlain007_COL_VAR1_3K.jpg.001.jpg": "d0455a631e99e7b5f3742c709d15b56e52daafff3498029f59ed87119af7774c",
+    "scene/external_worlds/clearpath-pinned/cpr_orchard_gazebo/meshes/orchard_leaves.dae": "14c1b2b69eed67338a9f5144b594bbd1cc9f0b4997448cb7f51ee1721c164abe",
+    "scene/external_worlds/clearpath-pinned/cpr_orchard_gazebo/meshes/GroundForest003_COL_VAR1_3K.jpg.001.jpg": "3c7e134f31c03b6152605bd2fc9b6c38aca55e574ce2da13588231b65098fe62",
+    "scene/external_worlds/clearpath-pinned/cpr_accessories_gazebo/meshes/BaseStationWithTripod.dae": "e094b277f777e937d4f9706263538e8494c41220148023569250bc2d89545714",
+    "scene/external_worlds/clearpath-pinned/cpr_accessories_gazebo/meshes/BaseStationWithTripod.stl": "e25712405f4a3d9d58f78f3a078c7733e67a90199ccd33506d6a10cb18914cf7"
+  }
+}

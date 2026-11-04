@@ -1,9 +1,11 @@
 """Bounded, turn-owned adaptive visual search. Geometry stays in the executor."""
+from mission import MAX_ALTITUDE
 import copy
 import math
 import os
 import json
 import time
+import threading
 import uuid
 from pathlib import Path
 
@@ -11,7 +13,7 @@ from stereo_localization import quaternion_rotation, vector
 
 
 class PrematureSearchCompletion(ValueError):
-    """An unsubmitted return plan conflicts with an unfinished reviewed search."""
+    """An unsubmitted return plan conflicts with an unfinished owned search."""
 
 
 AUTONOMY_PROMPT = """
@@ -20,7 +22,7 @@ AUTONOMY_PROMPT = """
 “前方”默认任务开始时机头方向，先用begin_target_search(query=目标名称)建立任务。
 每次按工具返回的next_tool推进。地面起始观察高度由begin_target_search(initial_altitude=3)保存，
 调用observe_target_search_view即可自动起飞并采图；不需要重复填写起飞任务或向用户确认。
-地面时自主起飞，static_3d初始建议3米（可根据场景在1～10米选择）；空中不重复起飞。
+地面时自主起飞，static_3d初始建议3米（可根据场景在1～20米选择）；空中不重复起飞。
 自主搜索优先observe_target_search_view后report_scene；前者一次完成已授权飞行及新鲜采图，减少模型往返。
 纯观察使用capture_scene。未发现是正常搜索结果，不是视觉接口故障。
 未发现时调用next_target_search_view(strategy='rise'|'left'|'right'|'forward'|'auto',reason=依据)，
@@ -42,7 +44,7 @@ AUTONOMY_PROMPT = """
 最多8份有效观察，15分钟，距离任务起点12米以内；不要重复观察同一位置或无限询问。
 report_scene的目标label与query使用一致名称；看到目标即可报告视觉发现，不要求先获得精确双目位置。
 目标位置无法测定时仍可用实际照片描述，明确位置不确定，不猜坐标。找到后报告周围可见情况，
-完成或预算结束默认return_home再land；使用者明确要求悬停/不降落时begin_target_search(end_behavior='hold')。
+完成或预算结束由程序执行返航降落，模型不调用通用收尾工具；使用者明确要求悬停/不降落时begin_target_search(end_behavior='hold')。
 只有定位、图像接口或执行失败才终止新的搜索移动。无安全候选点时结束并安全降落，不反复询问路线。
 纯“看一下当前画面/描述眼前情况”仍只观察，不启动自主搜索。
 """
@@ -52,6 +54,7 @@ class AdaptiveSearch:
     def __init__(self, client, clock=time.monotonic, search_mode=None, semantic_maps=None, nbv_selector=None):
         self.client, self.clock = client, clock
         self.sessions = {}
+        self.binding_lock = threading.RLock()
         self.search_mode = search_mode or os.getenv('UAV_SEARCH_MODE', 'fixed')
         if self.search_mode not in ('fixed', 'nbv_geometry', 'nbv_semantic'):
             raise ValueError('UAV_SEARCH_MODE must be fixed, nbv_geometry or nbv_semantic')
@@ -75,7 +78,11 @@ class AdaptiveSearch:
         self.semantic_maps = semantic_maps
 
     def begin(self, owner, query, end_behavior="land", initial_altitude=3.):
-        from search_tools import _owner
+        with self.binding_lock:
+            return self._begin(owner, query, end_behavior, initial_altitude)
+
+    def _begin(self, owner, query, end_behavior="land", initial_altitude=3.):
+        from search_tools import _owner, _require_coordinate_evidence
         owner = _owner(owner)
         if owner in self.sessions:
             raise ValueError("本指令已有自主任务，请继续现有任务")
@@ -91,21 +98,88 @@ class AdaptiveSearch:
         query = query.strip()
         if not 1 <= len(query) <= 80 or end_behavior not in ("land", "hold"):
             raise ValueError("无效搜索目标或结束方式")
-        if type(initial_altitude) not in (int, float) or not math.isfinite(initial_altitude) or not 1 <= initial_altitude <= 10:
-            raise ValueError("初始观察高度必须在1～10米")
+        if type(initial_altitude) not in (int, float) or not math.isfinite(initial_altitude) or not 1 <= initial_altitude <= MAX_ALTITUDE:
+            raise ValueError("初始观察高度必须在1～20米")
+        initial_epoch = _require_coordinate_evidence(state)
         pair = self.client.capture_stereo()
         if pair.get("status") != "ok":
             raise ValueError("无法读取搜索起始相机姿态")
+        after_capture_state = self.client.state()
+        if (initial_epoch is not None and 'external_vision' not in pair
+                or 'external_vision' in pair and _require_coordinate_evidence(pair) != initial_epoch
+                or _require_coordinate_evidence(after_capture_state) != initial_epoch
+                or (after_capture_state.get('scene') or {}).get('world_sha256') != state['scene'].get('world_sha256')):
+            raise ValueError('搜索初始化期间坐标系已改变')
         body = pair["body_pose_enu"]
         if body.get("frame_id") not in ("map", "local_enu") or body.get("body_reference") != "base_link":
             raise ValueError("搜索方向需要本地ENU机身姿态")
         r = quaternion_rotation(body["orientation_xyzw"])
         yaw = math.atan2(r[1][0], r[0][0])
-        self.sessions[owner] = dict(query=query, origin=vector(state["position_enu_m"], 3, "origin"),
+        ground_position = vector(state["position_enu_m"], 3, "origin")
+        grounded = state.get('armed') is False
+        initial_binding = None
+        if not grounded:
+            from search_tools import _navigation_permission
+            _navigation_permission(state)
+            _navigation_permission(after_capture_state)
+            registration = (state.get('navigation') or {}).get('registration_id')
+            external = state.get('external_vision') or {}
+            ekf = external.get('ekf') or {}
+            mag = ekf.get('mag_alignment') or {}
+            if (not isinstance(registration, str) or not registration
+                    or pair.get('navigation_registration_id') != registration
+                    or (after_capture_state.get('navigation') or {}).get('registration_id') != registration
+                    or (state.get('mission') or {}).get('status') != 'succeeded'
+                    or (after_capture_state.get('mission') or {}).get('id') != (state.get('mission') or {}).get('id')
+                    or (after_capture_state.get('mission') or {}).get('status') != 'succeeded'
+                    or type(after_capture_state.get('stamp_sim_s')) not in (int, float)
+                    or not math.isfinite(after_capture_state['stamp_sim_s'])
+                    or after_capture_state['stamp_sim_s'] < pair.get('stamp_sim_s', float('inf'))
+                    or type(body.get('stamp_sim_s')) not in (int, float)
+                    or type(pair.get('stamp_sim_s')) not in (int, float)
+                    or not math.isfinite(body['stamp_sim_s']) or not math.isfinite(pair['stamp_sim_s'])
+                    or type(body.get('age_seconds')) not in (int, float) or not 0 <= body['age_seconds'] <= 1
+                    or (external.get('required') is True and (external.get('healthy') is not True
+                        or external.get('heading_alignment_pending') is not False
+                        or ekf.get('heading_good_for_control') is not True
+                        or mag.get('aligned_in_flight') is not True or mag.get('yaw_aligned') is not True
+                        or mag.get('in_air') is not True))):
+                raise ValueError('空中搜索需要对齐完成和已配准地图的新鲜机体位姿')
+            bind_position = vector(body.get('position_m'), 3, 'binding position')
+            if math.dist(bind_position, ground_position) > .5:
+                raise ValueError('搜索绑定位姿与实时位置不一致')
+            initial_binding = {'mission_id': (state.get('mission') or {}).get('id'),
+                'position_enu_m': bind_position, 'stamp_sim_s': after_capture_state['stamp_sim_s'],
+                'registration_id': registration, 'ground_position_enu_m': copy.deepcopy(ground_position),
+                'ground_offset_m': math.dist(bind_position[:2], ground_position[:2])}
+        self.sessions[owner] = dict(query=query, origin=None if grounded else bind_position,
+            boundary_origin=copy.deepcopy(ground_position), preflight_epoch=copy.deepcopy(initial_epoch),
+            preflight_ekf=copy.deepcopy((state.get('external_vision') or {}).get('ekf') or {}),
+            preflight_pose_stamp=body.get('stamp_sim_s'), binding=initial_binding,
             forward=[math.cos(yaw), math.sin(yaw)], started=self.clock(), status="searching",
-            observations=[], pending=({'action': 'takeoff', 'altitude': initial_altitude} if state.get('armed') is False else None),
-            arrived=False, epoch=None, epoch_bound=False, scene=state["scene"].get("world_sha256"),
+            observations=[], pending=({'action': 'takeoff', 'altitude': initial_altitude} if grounded else None),
+            arrived=False, epoch=None if grounded else copy.deepcopy(initial_epoch), epoch_bound=False, scene=state["scene"].get("world_sha256"),
             end_behavior=end_behavior, seen_captures=set())
+        if not grounded:
+            final_state = self.client.state()
+            stamp = final_state.get('stamp_sim_s')
+            final_ev = final_state.get('external_vision') or {}
+            final_ekf = final_ev.get('ekf') or {}
+            final_mag = final_ekf.get('mag_alignment') or {}
+            if (_require_coordinate_evidence(final_state) != initial_epoch
+                    or (final_state.get('navigation') or {}).get('registration_id') != registration
+                    or (final_state.get('scene') or {}).get('world_sha256') != state['scene'].get('world_sha256')
+                    or type(stamp) not in (int, float) or not math.isfinite(stamp)
+                    or stamp < initial_binding['stamp_sim_s']
+                    or (external.get('required') is True and (final_ev.get('healthy') is not True
+                        or final_ev.get('heading_alignment_pending') is not False
+                        or final_ekf.get('heading_good_for_control') is not True
+                        or final_mag.get('aligned_in_flight') is not True
+                        or final_mag.get('yaw_aligned') is not True or final_mag.get('in_air') is not True))):
+                del self.sessions[owner]
+                raise ValueError('空中搜索绑定期间坐标或地图身份已改变')
+            initial_binding['stamp_sim_s'] = stamp
+            self.sessions[owner]['epoch_bound'] = True
         self.sessions[owner]['search_mode'] = self.search_mode
         self.sessions[owner]['nbv_selector'] = self.nbv_selector
         self.sessions[owner]['candidate_pool_mode'] = self.candidate_pool_mode
@@ -138,7 +212,10 @@ class AdaptiveSearch:
                     observations=copy.deepcopy(memory), pending=pending,
                     elapsed_seconds=round(self.clock()-s["started"], 1), max_observations=8,
                     max_duration_seconds=900, radius_m=12, end_behavior=s["end_behavior"],
-                    failure_reason=s.get("failure_reason"),
+                    coordinate_binding=copy.deepcopy(s.get('binding')),
+                    coordinate_epoch=copy.deepcopy(s.get('epoch')) if s['epoch_bound'] else None,
+                    ground_reference_enu_m=copy.deepcopy(s['boundary_origin']),
+                    failure_reason=s.get("failure_reason"), termination=copy.deepcopy(s.get("termination")),
                     next_tool=("land_drone" if s['status'] == 'failed' else
                                "review_target_candidate" if s.get('search_phase') == 'awaiting_review' else
                                "return_home_then_land" if s['status'] != 'searching' and s['end_behavior'] == 'land' else
@@ -151,6 +228,8 @@ class AdaptiveSearch:
             result.update(batch_id=s['nbv_batch_id'],
                           candidates=copy.deepcopy(s['nbv_choices']),
                           selection_expires_in_seconds=max(0., round(60.-(self.clock()-s['nbv_prepared_at']), 1)))
+        if s.get('activity_closed'):
+            result['next_tool'] = 'final_report'
         return result
 
     def validate_state(self, owner, state):
@@ -158,11 +237,15 @@ class AdaptiveSearch:
         s = self.sessions[owner]
         if (s.get('spatial_map_identity') or {}).get('status') == 'invalid':
             raise ValueError('空间语义地图坐标身份失效，禁止新的搜索移动')
+        if s.get('activity_closed'):
+            raise ValueError('搜索活动已结束，禁止继续观察或飞行')
         _navigation_permission(state)
         if state["scene"].get("world_sha256") != s["scene"]:
             raise ValueError("搜索场景已改变")
         if s["epoch_bound"] and coordinate_epoch(state) != s["epoch"]:
             raise ValueError("搜索坐标系已重置")
+        if s.get('binding') and state.get('navigation', {}).get('registration_id') != s['binding']['registration_id']:
+            raise ValueError('搜索导航地图配准已改变')
 
     def next_view(self, owner, strategy, reason, preparation_source='next_target_search_view'):
         s = self.sessions[owner]
@@ -187,7 +270,7 @@ class AdaptiveSearch:
         f = s["forward"]
         right = [f[1], -f[0]]
         candidates = {
-            "rise": [[*position[:2], min(10., position[2]+d)] for d in (2., 4.)],
+            "rise": [[*position[:2], min(MAX_ALTITUDE, position[2]+d)] for d in (2., 4.)],
             "left": [[position[0]-right[0]*d, position[1]-right[1]*d, position[2]] for d in (2., 4.)],
             "right": [[position[0]+right[0]*d, position[1]+right[1]*d, position[2]] for d in (2., 4.)],
             "forward": [[position[0]+f[0]*d, position[1]+f[1]*d, position[2]] for d in (2., 4.)]}
@@ -197,7 +280,7 @@ class AdaptiveSearch:
         rejected = []
         for kind in order:
             for point in candidates[kind]:
-                if math.dist(point[:2], s["origin"][:2]) > 12 or not 1 <= point[2] <= 10:
+                if math.dist(point[:2], s["boundary_origin"][:2]) > 12 or not 1 <= point[2] <= MAX_ALTITUDE:
                     continue
                 if any(math.dist(point, o["position_enu_m"]) < .75 for o in s["observations"]):
                     continue
@@ -218,6 +301,8 @@ class AdaptiveSearch:
         return (self.sessions.get(owner) or {}).get('search_mode', 'fixed') != 'fixed'
 
     def next_nbv(self, owner, reason, preparation_source='next_target_search_view'):
+        from dataclasses import asdict
+        from search_diagnostics import stage
         from viewpoint_planner import ViewpointPlanner, ViewpointConfig, map_revision
         from viewpoint_geometry import RemoteViewpointEvaluator
         s = self.sessions[owner]
@@ -228,8 +313,10 @@ class AdaptiveSearch:
         if s.get('search_phase') == 'confirming':
             from target_confirmation import confirmation_goal
             active = s['confirmation']
-            confirmation = confirmation_goal(semantic_map, active['target_id'], active['source_capture_id'])
-            confirmation['avoid_observer_positions'] = [list(o['position_enu_m']) for o in s['observations']]
+            with stage('confirmation_goal', {'owner': owner, 'candidate': active}) as diagnostic:
+                confirmation = confirmation_goal(semantic_map, active['target_id'], active['source_capture_id'])
+                confirmation['avoid_observer_positions'] = [list(o['position_enu_m']) for o in s['observations']]
+                diagnostic['result'] = confirmation
         revision, batch = map_revision(semantic_map), uuid.uuid4().hex
         context = {'owner': list(owner), 'map_revision': revision, 'batch_id': batch}
         evaluator = RemoteViewpointEvaluator(self.client, s['last_stereo_pair_id'], context,
@@ -237,8 +324,13 @@ class AdaptiveSearch:
         planner = ViewpointPlanner(ViewpointConfig(mode=s['search_mode'][4:],
             candidate_pool_mode=s.get('candidate_pool_mode', 'ranked'), heading_mode=s.get('heading_mode', 'fixed')))
         s['nbv_bound'] = True
-        prediction = planner.evaluate(semantic_map, evaluator, confirmation)
-        selected = planner.select(semantic_map)
+        with stage('planner_evaluate', {'context': context, 'config': asdict(planner.config),
+                'semantic_map': semantic_map.snapshot(), 'confirmation_goal': confirmation}) as diagnostic:
+            prediction = planner.evaluate(semantic_map, evaluator, confirmation)
+            diagnostic['result'] = prediction
+        with stage('planner_select', {'context': context}) as diagnostic:
+            selected = planner.select(semantic_map)
+            diagnostic['result'] = selected
         public = copy.deepcopy(prediction)
         public.update(owner=list(owner), batch_id=batch,
                       source_capture_id=s['observations'][-1]['capture_id'], search_mode=s['search_mode'],
@@ -351,34 +443,191 @@ class AdaptiveSearch:
         else:
             result = self.client.execute([step], description)
         if (result.get('mission') or {}).get('status') == 'succeeded':
+            if step['action'] == 'takeoff' and not s['epoch_bound']:
+                self.bind_after_takeoff(owner, result)
+            else:
+                self.validate_completed_flight(owner, result)
             s['arrived'] = True
         return result
+
+    def bind_after_takeoff(self, owner, result):
+        """Bind once after the executor's completed, registered takeoff."""
+        try:
+            with self.binding_lock:
+                return self._bind_after_takeoff(owner, result)
+        except Exception as exc:
+            self.fail(owner, str(exc))
+            if hasattr(self.client, 'record'):
+                self.client.record('execute_mission', {'status': 'error', 'error': str(exc)})
+            raise
+
+    def _bind_after_takeoff(self, owner, result):
+        from search_tools import _navigation_permission, _require_coordinate_evidence
+        s = self.sessions[owner]
+        if (s['status'] != 'searching' or s['epoch_bound'] or s.get('binding') or s['observations'] or s.get('spatial_map_identity')
+                or s.get('nbv_bound') or (self.semantic_maps is not None and owner in self.semantic_maps.maps)):
+            raise ValueError('搜索坐标身份已经绑定或已有观察、地图或票据')
+        mission = result.get('mission') or {}
+        if (mission.get('status') != 'succeeded' or not mission.get('id')
+                or not s.get('pending') or s['pending'].get('action') != 'takeoff'
+                or not mission.get('steps') or mission['steps'] != [s['pending']]):
+            raise ValueError('搜索绑定需要本次已完成的独立起飞任务')
+        state = self.client.state()
+        _navigation_permission(state)
+        if state.get('scene', {}).get('world_sha256') != s['scene']:
+            raise ValueError('搜索场景已改变')
+        epoch = _require_coordinate_evidence(state)
+        if epoch != _require_coordinate_evidence(result):
+            raise ValueError('起飞结果与实时坐标身份不一致')
+        before = s['preflight_epoch']
+        external = state.get('external_vision') or {}
+        if external.get('required') is True:
+            ekf = external.get('ekf') or {}
+            mag = ekf.get('mag_alignment') or {}
+            preflight_ekf = s['preflight_ekf']
+            velocity = ekf.get('local_velocity_reset_counters')
+            if (external.get('healthy') is not True or external.get('used_for_flight_control') is not True
+                    or external.get('heading_alignment_pending') is not False
+                    or ekf.get('heading_good_for_control') is not True
+                    or mag.get('aligned_in_flight') is not True or mag.get('yaw_aligned') is not True
+                    or mag.get('in_air') is not True or type(ekf.get('primary_instance')) is not int
+                    or ekf.get('primary_instance') != preflight_ekf.get('primary_instance')
+                    or not isinstance(velocity, dict) or set(velocity) != {'vxy', 'vz'}
+                    or any(type(v) is not int or not 0 <= v <= 255 for v in velocity.values())
+                    or velocity != preflight_ekf.get('local_velocity_reset_counters')):
+                raise ValueError('起飞磁航向对齐尚未可靠完成')
+            if before != epoch:
+                event = external.get('heading_alignment_event') or {}
+                old, new = (before or {}).get('ekf_counters') or {}, (epoch or {}).get('ekf_counters') or {}
+                if (not before or before.get('vio_epoch') != epoch.get('vio_epoch')
+                        or old.get('xy') != new.get('xy') or old.get('z') != new.get('z')
+                        or event.get('old_heading_reset_counter') != old.get('heading')
+                        or event.get('new_heading_reset_counter') != new.get('heading')
+                        or event.get('adapter_epoch') != epoch.get('vio_epoch')
+                        or event.get('xy_reset_counter') != new.get('xy')
+                        or event.get('z_reset_counter') != new.get('z')
+                        or event.get('primary_instance') != ekf.get('primary_instance')
+                        or event.get('primary_instance') != preflight_ekf.get('primary_instance')
+                        or event.get('velocity_reset_counters') != ekf.get('local_velocity_reset_counters')
+                        or event.get('velocity_reset_counters') != preflight_ekf.get('local_velocity_reset_counters')
+                        or event.get('permitted_context') != 'takeoff_before_horizontal_navigation'
+                        or event.get('source') != 'actual_owned_px4_uorb'
+                        or type(old.get('heading')) is not int or type(new.get('heading')) is not int
+                        or (new['heading'] - old['heading']) % 256 != 1):
+                    raise ValueError('搜索坐标系已重置，起飞坐标变化缺少有效磁对齐证据')
+        registration = (state.get('navigation') or {}).get('registration_id')
+        if not isinstance(registration, str) or not registration:
+            raise ValueError('起飞后缺少已配准的导航地图身份')
+        pair = self.client.capture_stereo()
+        body = pair.get('body_pose_enu') or {}
+        if (pair.get('status') != 'ok' or _require_coordinate_evidence(pair) != epoch
+                or pair.get('navigation_registration_id') != registration
+                or body.get('frame_id') not in ('map', 'local_enu') or body.get('body_reference') != 'base_link'
+                or type(body.get('stamp_sim_s')) not in (int, float) or not math.isfinite(body['stamp_sim_s'])
+                or type(pair.get('stamp_sim_s')) not in (int, float) or not math.isfinite(pair['stamp_sim_s'])
+                or type(body.get('age_seconds')) not in (int, float) or not 0 <= body['age_seconds'] <= 1):
+            raise ValueError('搜索绑定需要同一坐标和地图身份的新鲜机体位姿')
+        position = vector(body['position_m'], 3, 'binding position')
+        if before != epoch:
+            event_time = (external.get('heading_alignment_event') or {}).get('reset_source_stamp_sim_s')
+            if (type(event_time) not in (int, float) or not math.isfinite(event_time)
+                    or event_time > body['stamp_sim_s'] or (type(s.get('preflight_pose_stamp')) in (int, float)
+                    and event_time <= s['preflight_pose_stamp'])):
+                raise ValueError('起飞磁对齐时间与绑定位姿不一致')
+        if math.dist(position, vector(state['position_enu_m'], 3, 'current position')) > .5:
+            raise ValueError('搜索绑定位姿与实时位置不一致')
+        if math.dist(position[:2], s['boundary_origin'][:2]) > .4:
+            raise ValueError('起飞位置偏离地面参考，不能保证原搜索范围')
+        current = self.client.state()
+        _navigation_permission(current)
+        current_ev = current.get('external_vision') or {}
+        current_ekf = current_ev.get('ekf') or {}
+        current_mag = current_ekf.get('mag_alignment') or {}
+        if (_require_coordinate_evidence(current) != epoch or (current.get('navigation') or {}).get('registration_id') != registration
+                or (current.get('scene') or {}).get('world_sha256') != s['scene']
+                or (current.get('mission') or {}).get('id') != mission['id']
+                or (current.get('mission') or {}).get('status') != 'succeeded'
+                or type(current.get('stamp_sim_s')) not in (int, float)
+                or not math.isfinite(current['stamp_sim_s']) or current['stamp_sim_s'] < pair['stamp_sim_s']
+                or current_ev.get('required') != external.get('required') or current_ev.get('healthy') is False
+                or (external.get('required') is True and (current_ev.get('healthy') is not True
+                    or current_ev.get('heading_alignment_pending') is not False
+                    or current_ekf.get('heading_good_for_control') is not True
+                    or current_ekf.get('primary_instance') != ekf.get('primary_instance')
+                    or current_ekf.get('local_velocity_reset_counters') != velocity
+                    or current_mag.get('aligned_in_flight') is not True or current_mag.get('yaw_aligned') is not True
+                    or current_mag.get('in_air') is not True))):
+            raise ValueError('搜索绑定期间坐标或地图身份已改变')
+        rotation = quaternion_rotation(body['orientation_xyzw'])
+        yaw = math.atan2(rotation[1][0], rotation[0][0])
+        s.update(origin=position, forward=[math.cos(yaw), math.sin(yaw)], epoch=copy.deepcopy(epoch), epoch_bound=False,
+                 binding={'mission_id': mission['id'], 'position_enu_m': position, 'stamp_sim_s': current['stamp_sim_s'],
+                          'registration_id': registration, 'ground_position_enu_m': copy.deepcopy(s['boundary_origin']),
+                          'ground_offset_m': math.dist(position[:2], s['boundary_origin'][:2])})
+        # The barrier is sampled after the provisional identity exists, while
+        # epoch_bound remains false so no observation can be committed yet.
+        confirmed = self.client.state()
+        stamp = confirmed.get('stamp_sim_s')
+        confirmed_ev = confirmed.get('external_vision') or {}
+        confirmed_ekf = confirmed_ev.get('ekf') or {}
+        confirmed_mag = confirmed_ekf.get('mag_alignment') or {}
+        if (_require_coordinate_evidence(confirmed) != epoch
+                or (confirmed.get('navigation') or {}).get('registration_id') != registration
+                or (confirmed.get('scene') or {}).get('world_sha256') != s['scene']
+                or (confirmed.get('mission') or {}).get('id') != mission['id']
+                or (confirmed.get('mission') or {}).get('status') != 'succeeded'
+                or confirmed_ev.get('required') != external.get('required')
+                or type(stamp) not in (int, float) or not math.isfinite(stamp)
+                or stamp < s['binding']['stamp_sim_s']
+                or (external.get('required') is True and (confirmed_ev.get('healthy') is not True
+                    or confirmed_ev.get('heading_alignment_pending') is not False
+                    or confirmed_ekf.get('heading_good_for_control') is not True
+                    or confirmed_ekf.get('primary_instance') != ekf.get('primary_instance')
+                    or confirmed_ekf.get('local_velocity_reset_counters') != velocity
+                    or confirmed_mag.get('aligned_in_flight') is not True
+                    or confirmed_mag.get('yaw_aligned') is not True or confirmed_mag.get('in_air') is not True))):
+            raise ValueError('搜索绑定完成时坐标或地图身份已改变')
+        _navigation_permission(confirmed)
+        s['binding']['stamp_sim_s'] = stamp
+        s['epoch_bound'] = True
+
+    def validate_completed_flight(self, owner, result):
+        """Recheck identity before treating a completed movement as a search view."""
+        from search_tools import _require_coordinate_evidence
+        try:
+            epoch = self.sessions[owner]['epoch']
+            if (_require_coordinate_evidence(result) != epoch
+                    or _require_coordinate_evidence(self.client.state()) != epoch):
+                raise ValueError('搜索坐标系已重置')
+        except Exception as exc:
+            self.fail(owner, str(exc))
+            if hasattr(self.client, 'record'):
+                self.client.record('execute_mission', {'status': 'error', 'error': str(exc)})
+            raise
 
     def check_mission(self, owner, steps):
         s = self.sessions.get(owner)
         if s is None:
             return
+        if s.get('activity_closed'):
+            raise ValueError('搜索活动已结束，禁止再次提交模型飞行')
         if not isinstance(steps, list) or not steps:
             raise ValueError("需要非空飞行步骤")
         actions = [v.get("action") for v in steps]
-        if actions == ["land"]:
-            return
         status = self.summary(owner)["search_status"]
         if status != "searching":
-            if status != "failed" and actions in (["return_home"], ["return_home", "land"]):
-                return
-            raise ValueError("搜索已结束，只允许结束飞行")
+            raise ValueError("搜索已结束，由程序收尾，禁止模型提交飞行")
         if not s["observations"] and actions == ["takeoff"]:
+            from search_tools import _require_coordinate_evidence
+            if _require_coordinate_evidence(self.client.state()) != s['preflight_epoch']:
+                raise ValueError('搜索坐标系已重置')
             if s['pending'] and s['pending'].get('action') == 'takeoff' and abs(steps[0].get('altitude', 0)-s['pending']['altitude']) <= 1e-6:
                 return
             raise ValueError('请执行已选择的初始起飞高度')
         state = self.client.state()
         self.validate_state(owner, state)
-        if (actions == ['return_home', 'land'] and len(steps) == 2
-                and all(set(step) == {'action'} for step in steps)
-                and s.get('target_confirmation_mode') == 'multiview'
-                and s.get('last_review_outcome') == 'unconfirmed'):
-            raise PrematureSearchCompletion('目标尚未确认，返航计划未提交；请按当前搜索进度继续')
+        if actions in (['land'], ['return_home'], ['return_home', 'land'], ['hold']):
+            raise PrematureSearchCompletion('搜索尚未结束，模型收尾请求未提交')
         if (len(steps) != 1 or not s["pending"] or actions != ['goto']
                 or set(steps[0]) != set(s['pending'])
                 or any(type(steps[0][k]) not in (int, float) or not math.isfinite(steps[0][k])
@@ -393,9 +642,11 @@ class AdaptiveSearch:
         state = self.client.state()
         self.validate_state(owner, state)
         snapshot = frame["snapshot"]
-        if (frame.get("owner") != owner or frame.get("delivered") is not True
+        if (not s['epoch_bound'] or frame.get("owner") != owner or frame.get("delivered") is not True
                 or report.get("status") != "ok" or report.get("capture_id") != frame.get("capture_id")
-                or snapshot.get("coordinate_epoch") != coordinate_epoch(state)):
+                or snapshot.get("coordinate_epoch") != coordinate_epoch(state)
+                or (s.get('binding') and (snapshot.get('navigation_registration_id') != s['binding']['registration_id']
+                    or snapshot.get('stamp_sim_s', -1) <= s['binding']['stamp_sim_s']))):
             raise ValueError("搜索观察需要本指令的新鲜图像、已保存报告和一致的坐标系")
         if frame["capture_id"] in s["seen_captures"]:
             raise ValueError("同一张照片不能重复推进搜索")
@@ -404,7 +655,7 @@ class AdaptiveSearch:
         if mission.get("status") == "running" or math.dist(position, state["position_enu_m"]) > .5:
             raise ValueError("等待飞行完成后在当前观察点采图")
         pending = s["pending"]
-        expected = ([*s['origin'][:2], pending['altitude']] if pending and pending['action'] == 'takeoff'
+        expected = ([*s['boundary_origin'][:2], pending['altitude']] if pending and pending['action'] == 'takeoff'
                     else [pending['x'], pending['y'], pending['altitude']] if pending else position)
         if pending and math.dist(position, expected) > .4:
             raise ValueError("照片不在本次计划的观察点")
@@ -413,8 +664,6 @@ class AdaptiveSearch:
         self.summary(owner)
         if s["status"] != "searching":
             raise ValueError("搜索预算已结束")
-        s["epoch"] = coordinate_epoch(state)
-        s["epoch_bound"] = True
         s["seen_captures"].add(frame["capture_id"])
         s["observations"].append(dict(capture_id=frame["capture_id"], position_enu_m=position,
                                       summary=report["summary"], targets=copy.deepcopy(report.get("targets", []))))
@@ -465,14 +714,25 @@ class AdaptiveSearch:
         from semantic_map import point_in_box
         s = self.sessions[owner]
         active = s.get('confirmation') or {}
-        if (s.get('search_phase') != 'awaiting_review' or s['status'] == 'failed'
-                or source_capture_id != active.get('source_capture_id')
-                or current_capture_id != active.get('current_capture_id')
-                or any(type(v) is not bool for v in (source_supported, current_supported, same_object,
-                                                       source_uncertain, current_uncertain))
-                or (source_supported and source_uncertain) or (current_supported and current_uncertain)
-                or not isinstance(reason, str) or not 0 < len(reason) <= 1000):
-            raise ValueError('Confirmation review does not match the current owned image pair')
+        errors = []
+        if s.get('search_phase') != 'awaiting_review' or s['status'] == 'failed':
+            errors.append('review_phase_invalid')
+        for field, value in (('source_capture_id', source_capture_id), ('current_capture_id', current_capture_id)):
+            if value != active.get(field):
+                errors.append(field + '_mismatch')
+        for field, value in (('source_supported', source_supported), ('current_supported', current_supported),
+                             ('same_object', same_object), ('source_uncertain', source_uncertain),
+                             ('current_uncertain', current_uncertain)):
+            if type(value) is not bool:
+                errors.append(field + '_not_boolean')
+        if source_supported is True and source_uncertain is True:
+            errors.append('source_support_uncertainty_conflict')
+        if current_supported is True and current_uncertain is True:
+            errors.append('current_support_uncertainty_conflict')
+        if not isinstance(reason, str) or not 0 < len(reason) <= 1000:
+            errors.append('reason_invalid')
+        if errors:
+            raise ValueError('Confirmation review invalid: ' + ', '.join(errors))
         self.validate_state(owner, self.client.state())
         semantic_map = self.semantic_maps.maps[owner]
         if semantic_map.status != 'valid':
@@ -537,6 +797,46 @@ class AdaptiveSearch:
                 'reviewed_source_capture_id': source_capture_id, 'reviewed_current_capture_id': current_capture_id,
                 'review_reason': reason}
 
+    def close_activity(self, owner, source, reason):
+        """Internal lifecycle entry; source is supplied by trusted application code."""
+        s = self.sessions.get(owner)
+        if s is None:
+            return
+        if not s.get('termination') or s['termination']['source'] != source:
+            s['termination'] = {'source': source, 'reason': str(reason)[:500], 'flight_status': 'pending'}
+        s['activity_closed'] = True
+        s['pending'] = None
+        s['nbv_awaiting_selection'] = False
+        if source != 'normal_completion':
+            self.fail(owner, reason)
+        if hasattr(self.client, 'record'):
+            self.client.record('search_termination', {**self.summary(owner), 'termination': copy.deepcopy(s['termination'])})
+
+    def finish_normal(self, owner):
+        s = self.sessions[owner]
+        if s.get('finish_result') is not None:
+            return copy.deepcopy(s['finish_result'])
+        progress = self.summary(owner)
+        if (progress['search_status'] not in ('target_found', 'budget_exhausted', 'coverage_exhausted', 'no_reachable_view')
+                or s.get('search_phase') == 'awaiting_review'):
+            raise ValueError('搜索尚未满足确定性收尾条件')
+        if s['end_behavior'] == 'hold':
+            self.close_activity(owner, 'normal_completion', progress['search_status'])
+            return None
+        self.validate_state(owner, self.client.state())
+        self.close_activity(owner, 'normal_completion', progress['search_status'])
+        result = self.client.execute([{'action': 'return_home'}, {'action': 'land'}], 'Search state machine: '+progress['search_status'])
+        if hasattr(self.client, 'record') and not hasattr(self.client, 'application'):
+            self.client.record('execute_mission', result)
+        mission = result.get('mission') or {}
+        if mission.get('status') != 'succeeded' or result.get('armed') is not False or result.get('landed_state') != 1:
+            raise ValueError('搜索收尾缺少成功落地上锁证据')
+        s['termination']['flight_status'] = 'grounded_disarmed'
+        s['finish_result'] = copy.deepcopy(result)
+        if hasattr(self.client, 'record'):
+            self.client.record('search_termination', {**self.summary(owner), 'termination': copy.deepcopy(s['termination'])})
+        return result
+
     def guidance(self, owner):
         if owner not in self.sessions:
             return None
@@ -553,6 +853,7 @@ class AdaptiveSearch:
 
     def fail(self, owner, reason):
         if owner in self.sessions:
+            self.sessions[owner]['activity_closed'] = True
             self.sessions[owner]["status"] = "failed"
             self.sessions[owner]["pending"] = None
             self.sessions[owner]["failure_reason"] = str(reason)[:400]

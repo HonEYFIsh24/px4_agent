@@ -3,7 +3,7 @@ import copy
 import math
 import unittest
 from ev_health import ExternalVisionFlightGuard
-from vio.ekf_monitor import heading_observation_fields
+from vio.ekf_monitor import heading_observation_fields, POLL_INTERVAL_WALL_S
 
 
 def telemetry(source=10., heading=1, aligned=False, good=False):
@@ -59,6 +59,36 @@ class HeadingGuardTests(unittest.TestCase):
         g=self.initialized()
         self.assertIsNone(g.observe_ekf(telemetry(10.2,2,True),100.5,armed=True))
         self.assertIn('reset',g.reason(100.5));self.assertFalse(g.alignment_pending)
+
+    def test_recorded_takeoff_poll_gap_does_not_silently_accept_heading_reset(self):
+        # Two real failed flights had successive PX4 source samples separated
+        # by 0.512 and 0.504 s, respectively, before a heading reset.  These
+        # simplified values preserve the timing boundary, not the sensor data.
+        for gap in (.512, .504):
+            with self.subTest(gap=gap):
+                guard = ExternalVisionFlightGuard()
+                guard.observe_adapter(adapter(), 100.)
+                guard.observe_ekf(telemetry(10., 1, False), 100.)
+                guard.observe_adapter(adapter(), 100.5, armed=True)
+                value = telemetry(10.+gap, 2, True)
+                self.assertIsNone(guard.observe_ekf(value, 100.5, armed=True,
+                                                     allow_takeoff_mag_alignment=True))
+                self.assertIn('reset', guard.reason(100.5))
+                self.assertFalse(guard.heading_alignment_history)
+
+    def test_faster_real_source_samples_allow_matching_alignment_without_widening_gate(self):
+        self.assertLess(POLL_INTERVAL_WALL_S, .5)
+        guard = self.initialized()
+        guard.observe_adapter(adapter(), 100.2, armed=True)
+        counter = telemetry(10.2, 2, False)
+        self.assertIsNone(guard.observe_ekf(counter, 100.2, armed=True,
+                                            allow_takeoff_mag_alignment=True))
+        self.assertTrue(guard.alignment_pending)
+        guard.observe_adapter(adapter(), 100.4, armed=True)
+        result = guard.observe_ekf(telemetry(10.4, 2, True), 100.4, armed=True,
+                                   allow_takeoff_mag_alignment=True)
+        self.assertIsNotNone(result)
+        self.assertEqual(result['new_heading_reset_counter'], 2)
 
     def test_counter_first_waits_for_real_fresh_false_true_then_emits_once(self):
         g=self.initialized();counter=telemetry(10.2,2,False)
@@ -250,7 +280,8 @@ class HeadingMonitorFieldsTests(unittest.TestCase):
         local={'timestamp_sample':72684000,'timestamp':72688000,'heading_good_for_control':False,
                'delta_heading':.01735,'vxy_reset_counter':2,'vz_reset_counter':2}
         flags={'timestamp_sample':72432000,'timestamp':72532000,'cs_mag_aligned_in_flight':True,
-               'cs_yaw_align':True,'cs_in_air':True}
+               'cs_yaw_align':True,'cs_in_air':True, 'cs_mag_hdg':True,'cs_mag_3d':False,
+               'cs_mag_fault':False,'cs_mag_field_disturbed':False}
         result=heading_observation_fields(local,flags)
         self.assertEqual(result['local_position_source_stamp_sim_s'],72.684)
         self.assertEqual(result['local_position_publish_stamp_sim_s'],72.688)
@@ -259,6 +290,8 @@ class HeadingMonitorFieldsTests(unittest.TestCase):
         self.assertEqual(result['heading_delta_ned_rad'],.01735)
         self.assertFalse(result['heading_good_for_control'])
         self.assertEqual(result['local_velocity_reset_counters'],{'vxy':2,'vz':2})
+        self.assertEqual(result['mag_reference'],{'heading_fusion':True,'three_axis_fusion':False,
+            'fault':False,'field_disturbed':False,'source_stamp_sim_s':72.432,'publish_stamp_sim_s':72.532})
 
     def test_missing_or_malformed_actual_times_not_substituted_with_publication_or_receipt(self):
         for malformed in (True,0,-1,None,72.,'72000000'):
@@ -269,6 +302,7 @@ class HeadingMonitorFieldsTests(unittest.TestCase):
             self.assertIsNone(result['mag_alignment']['source_stamp_sim_s'])
             self.assertIsNone(result['heading_good_for_control'])
             self.assertIsNone(result['mag_alignment']['aligned_in_flight'])
+            self.assertIsNone(result['mag_reference']['fault'])
             self.assertEqual(result['local_position_publish_stamp_sim_s'],72.)
             self.assertIsNone(result['local_velocity_reset_counters']['vxy'])
 

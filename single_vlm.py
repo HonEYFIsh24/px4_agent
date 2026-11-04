@@ -13,8 +13,9 @@ from urllib.parse import urlsplit
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware.types import ModelResponse
 from langchain.tools import ToolRuntime
-from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
@@ -24,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictFloat
 from vision import finite_number, parse_observation, safe_error, target_location, text_field
 from search_tools import coordinate_epoch
 from autonomous_search import PrematureSearchCompletion
+from photo_task import PhotoTask, PHOTO_PROMPT, PHOTO_REVIEW_PROMPT, is_overview_request
 
 
 SINGLE_VLM_PROMPT = """
@@ -53,15 +55,15 @@ position_basis默认image_only；明确地面平面图案才用flat_ground_marki
 都看似支持，也必须按返回的search_status和next_tool继续搜索或复核，不能仅凭自己的视觉结论
 提前宣布确认或开始常规返航。仅在搜索状态已结束后按任务要求收尾；紧急降落始终可用。
 复核结果若包含自动准备的next_view，以该嵌套结果中的最新search_status和next_tool为准。
-navigation.enabled=true时可以提交用户目的地或搜索工具提供的观察点；中间绕行航点由对应导航规划器产生，
+navigation.enabled=true时可以提交用户目的地、搜索工具提供的观察点或由当前ENU位姿计算的任务取景点；中间绕行航点由对应导航规划器产生，
 VLM不自行推测绕障路线。method=lidar_grid仅支持固定高度二维绕障；method=static_3d使用已知静态
-三维地图，支持1～10米变高飞行，不能称为实时三维雷达建图或动态避障。观察失败仍停止后续移动。
+三维地图，支持1～20米变高飞行，不能称为实时三维雷达建图或动态避障。观察失败仍停止后续移动。
 视觉失败后停止新的移动阶段，明确告知错误；用户已经要求的最后安全降落仍可执行。
 report_scene 返回才表示观察报告已保存。最终回答依据保存的报告和实际飞行工具结果。
 多观察点任务在每个指定点取得新的 capture_scene 并分别 report_scene 保存，再比较已保存报告。
 条件任务先完成第一阶段观察报告，再按用户指定判据选择下一阶段，不能预先串成完整路线。
 execute_mission 每次必须提供 steps 和 description 两个参数；description 为任务说明字符串。
-在观察后的最终降落阶段优先调用 land_drone，可填写 reason 说明原因，并等待 landed_state=1 且 armed=false。
+自主搜索的正常返航降落由程序按终态执行；模型只负责观察、报告和选点。reason 是请求说明，不能授予操作员或安全监控权限。非搜索飞行任务仍可按用户要求调用降落工具。
 """
 
 
@@ -90,12 +92,27 @@ class VisualTarget(BaseModel):
     position_basis: Literal["image_only", "flat_ground_marking", "visible_ground_contact"] = "image_only"
 
 
+class PhotoEdge(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    status: Literal['clear', 'cut', 'uncertain']
+    evidence: str = Field(min_length=1, max_length=400)
+
+
+class PhotoEdges(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    top: PhotoEdge
+    right: PhotoEdge
+    bottom: PhotoEdge
+    left: PhotoEdge
+
+
 class FrameStore:
     """Bounded in-memory frames, keyed by thread and genuine user turn."""
     def __init__(self, client, model_config, ttl_seconds=180, max_frames=8, clock=time.monotonic):
         self.client, self.model_config = client, model_config
         self.ttl_seconds, self.max_frames, self.clock = ttl_seconds, max_frames, clock
         self.frames = {}
+        self.photo_tasks = {}
         self.pinned_confirmation_sources = {}
         self.traces = {}
         self.trace_times = {}
@@ -117,13 +134,21 @@ class FrameStore:
                 del self.traces[owner]
                 del self.trace_times[owner]
 
-    def capture(self, owner, query, side="left"):
+    def capture(self, owner, query, side="left", minimum_stamp=None):
         query = text_field(query, 1500)
         if side not in ("left", "right"):
             raise ValueError("相机必须为 left 或 right")
         stereo = None
         if side == "left" and getattr(self.client, "supports_stereo_localization", False) is True:
-            stereo = self.client.capture_stereo()
+            deadline = time.monotonic() + 2.
+            while True:
+                stereo = self.client.capture_stereo()
+                if minimum_stamp is None or (type(stereo.get('stamp_sim_s')) in (int, float)
+                        and stereo['stamp_sim_s'] > minimum_stamp):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('未取得搜索坐标绑定之后的新鲜双目图像')
+                time.sleep(.05)
             if stereo.get("status") != "ok":
                 raise RuntimeError(stereo.get("error") or "同步双目采图失败")
             snapshot = copy.deepcopy(stereo["left"])
@@ -132,6 +157,7 @@ class FrameStore:
             snapshot["location_frame"] = "local_enu"
             snapshot["stereo_image_sha256"] = copy.deepcopy(stereo["image_sha256"])
             snapshot["coordinate_epoch"] = coordinate_epoch(stereo.get("external_vision"))
+            snapshot["navigation_registration_id"] = stereo.get("navigation_registration_id")
         else:
             snapshot = copy.deepcopy(self.client.capture_camera(side))
         if snapshot.get("status") != "ok":
@@ -324,7 +350,7 @@ def compact_flight_evidence(value):
     if not isinstance(value, dict):
         return value
     result = {k: copy.deepcopy(value[k]) for k in ('status', 'error', 'reason', 'ready', 'connected',
-        'simulation_only', 'armed', 'mode', 'landed_state', 'position_enu_m', 'home_enu_m',
+        'simulation_only', 'armed', 'mode', 'landed_state', 'position_enu_m', 'home_enu_m', 'experimental_yaw_enabled',
         'limits', 'scene') if k in value}
     if 'mission' in value:
         mission = value.get('mission')
@@ -364,13 +390,61 @@ class SceneMiddleware(AgentMiddleware):
 
     def wrap_tool_call(self, request, handler):
         name = request.tool_call["name"]
+        active_session = None
         fatal_report_schema = False
         search_gate_rejected = False
+        photo_failure = False
+        photo_task = None
         try:
-            if self.search_manager and name == "execute_mission":
+            photo_owner = turn_owner(request.state['messages'], request.runtime.config)
+            photo_task = getattr(self.store, 'photo_tasks', {}).get(photo_owner)
+            if photo_task:
+                application = getattr(self.client, 'application', None)
+                if application is not None:
+                    with application.lock:
+                        command = application.current_command or {}
+                        if (command.get('id') != photo_owner[1] or command.get('interrupted')
+                                or command.get('vision_failure') or command.get('flight_failure')):
+                            photo_failure = True
+                            raise RuntimeError('拍摄任务归属已失效、已中断或工具失败，禁止继续执行')
+                photo_task.guard_tool(name, request.tool_call.get('args', {}))
+            if self.search_manager:
+                active_owner = turn_owner(request.state['messages'], request.runtime.config)
+                active_session = self.search_manager.adaptive.sessions.get(active_owner)
+                if active_session and active_session.get('activity_closed') and name not in (
+                        'get_drone_state', 'target_search_progress', 'execute_mission', 'land_drone'):
+                    search_gate_rejected = True
+                    raise ValueError('搜索活动已结束，禁止继续调用观察或移动工具')
+            if (self.search_manager and active_session and 'offered_search_tools' in active_session
+                    and name not in ('execute_mission', 'land_drone', 'stop_drone', 'get_drone_state', 'target_search_progress')
+                    and name not in active_session.get('accepted_search_tools', active_session['offered_search_tools'])):
+                search_gate_rejected = True
+                raise ValueError('工具不属于当前搜索阶段，拒绝过期或异常调用')
+            if self.search_manager and name in ('execute_mission', 'land_drone', 'stop_drone'):
                 owner = turn_owner(request.state["messages"], request.runtime.config)
                 try:
-                    self.search_manager.check_mission(owner, request.tool_call.get("args", {}).get("steps"))
+                    steps = (request.tool_call.get('args', {}).get('steps') if name == 'execute_mission' else
+                             [{'action': 'land' if name == 'land_drone' else 'hold'}])
+                    session = self.search_manager.adaptive.sessions.get(owner)
+                    actions = [step.get('action') for step in steps if isinstance(step, dict)] if isinstance(steps, list) else []
+                    if session and any(a in ('land', 'return_home', 'hold') for a in actions) and hasattr(self.client, 'record'):
+                        self.client.record('model_end_request', {'source': 'model', 'tool': name,
+                            'reason': str(request.tool_call.get('args', {}).get('reason',
+                                request.tool_call.get('args', {}).get('description', '')))[:500],
+                            'actions': actions})
+                    if session and session.get('finish_result') and (name == 'land_drone' or
+                            name == 'execute_mission' and actions in (['land'], ['return_home', 'land'])):
+                        return ToolMessage(content=json.dumps(session['finish_result']), name=name, tool_call_id=request.tool_call['id'])
+                    if (session and not session.get('activity_closed')
+                            and actions in (['land'], ['return_home'], ['return_home', 'land'])
+                            and self.search_manager.adaptive.summary(owner)['search_status'] in (
+                                'target_found', 'budget_exhausted', 'coverage_exhausted', 'no_reachable_view')
+                            and session.get('search_phase') != 'awaiting_review'):
+                        # Authorize from state; ignore the model's supplied flight plan.
+                        value = self.search_manager.adaptive.finish_normal(owner)
+                        return ToolMessage(content=json.dumps(value or {'status': 'ok', 'flight_submitted': False}),
+                                           name=name, tool_call_id=request.tool_call['id'])
+                    self.search_manager.check_mission(owner, steps)
                 except PrematureSearchCompletion:
                     search_gate_rejected = True
                     # This is a rejected plan, not an executed or retried flight.
@@ -379,7 +453,9 @@ class SceneMiddleware(AgentMiddleware):
                     session = self.search_manager.adaptive.sessions.get(owner)
                     if application is None or session is None:
                         raise
-                    current_mission = self.client.state().get('mission') or {}
+                    current_state = self.client.state()
+                    self.search_manager.adaptive.validate_state(owner, current_state)
+                    current_mission = current_state.get('mission') or {}
                     with application.lock:
                         command = application.current_command or {}
                         accepted = {item['mission']['id'] for item in command.get('flight_missions', [])
@@ -387,6 +463,7 @@ class SceneMiddleware(AgentMiddleware):
                             and isinstance(item['mission'].get('id'), str)}
                         if (command.get('id') != owner[1] or command.get('interrupted')
                                 or command.get('flight_failure') or command.get('vision_failure')
+                                or command.get('search_initialization_failure')
                                 or current_mission.get('status') != 'succeeded'
                                 or current_mission.get('id') not in accepted
                                 or session.get('completion_corrections', 0) >= 1):
@@ -395,12 +472,13 @@ class SceneMiddleware(AgentMiddleware):
                         if progress['search_status'] != 'searching':
                             raise
                         event = {'tool_call_id': request.tool_call['id'], 'correction_id': uuid.uuid4().hex,
-                                 'mission_submitted': False, 'reason': 'unconfirmed_search',
+                                 'mission_submitted': False, 'tool': name,
+                                 'reason': 'unconfirmed_search' if session.get('last_review_outcome') == 'unconfirmed' else 'unfinished_exploration',
                                  'next_tool': progress['next_tool']}
                         command.setdefault('search_protocol_corrections', []).append(copy.deepcopy(event))
                         session['completion_corrections'] = session.get('completion_corrections', 0) + 1
                     value = {'status': 'not_executed', **event, 'search_progress': progress,
-                             'message': '返航计划未提交；目标未确认，请按最新搜索进度继续。紧急降落始终可用。'}
+                             'message': '模型收尾请求未提交；请按最新 next_tool 继续。真实操作员及独立安全监控可直接中止。'}
                     return ToolMessage(content=json.dumps(value, ensure_ascii=False), name=name,
                                        tool_call_id=request.tool_call['id'])
                 except Exception:
@@ -412,6 +490,26 @@ class SceneMiddleware(AgentMiddleware):
                 result = ToolMessage(content=json.dumps(value, ensure_ascii=False), tool_call_id=request.tool_call['id'], name=name)
             else:
                 result = handler(request)
+            if photo_task and isinstance(getattr(result, 'content', None), str):
+                try:
+                    photo_value = json.loads(result.content)
+                except (TypeError, ValueError):
+                    photo_value = {}
+                if isinstance(photo_value, dict):
+                    mission = photo_value.get('mission') or {}
+                    if (photo_value.get('status') == 'error' or mission.get('status') in ('failed', 'cancelled')
+                            or getattr(result, 'status', None) == 'error'):
+                        photo_failure = True
+                        raise RuntimeError(photo_value.get('error') or mission.get('error') or '拍摄任务工具执行失败')
+                    actions = [s.get('action') for s in request.tool_call.get('args', {}).get('steps', [])
+                               if isinstance(s, dict)]
+                    if ((name == 'land_drone' or name == 'execute_mission' and actions[-1:] == ['land'])
+                            and mission.get('status') == 'succeeded') or (
+                            name == 'stop_drone' and photo_value.get('status') != 'error'
+                            and getattr(result, 'status', None) != 'error'):
+                        photo_task.end('飞行已降落或停止，构图未达标；禁止自动恢复取景')
+                        if hasattr(self.client, 'record'):
+                            self.client.record('photo_progress', photo_task.summary())
             if self.search_manager and isinstance(getattr(result, 'content', None), str):
                 try:
                     value = json.loads(result.content)
@@ -421,13 +519,28 @@ class SceneMiddleware(AgentMiddleware):
                         or (value.get('mission') or {}).get('status') in ('failed', 'cancelled')):
                     self.search_manager.fail(turn_owner(request.state['messages'], request.runtime.config),
                                              value.get('error') or (value.get('mission') or {}).get('error') or '工具执行失败')
+                    if active_session:
+                        raise RuntimeError(value.get('error') or (value.get('mission') or {}).get('error') or '搜索工具执行失败')
                 elif name == 'execute_mission' and isinstance(value, dict) and (value.get('mission') or {}).get('status') == 'succeeded':
                     session = self.search_manager.adaptive.sessions.get(turn_owner(request.state['messages'], request.runtime.config))
-                    if session:
+                    if session and any(step.get('action') in ('takeoff', 'goto', 'rotate')
+                                       for step in request.tool_call.get('args', {}).get('steps', [])
+                                       if isinstance(step, dict)):
+                        search_owner = turn_owner(request.state['messages'], request.runtime.config)
+                        if not session['epoch_bound'] and (session.get('pending') or {}).get('action') == 'takeoff':
+                            self.search_manager.adaptive.bind_after_takeoff(search_owner, value)
+                        else:
+                            self.search_manager.adaptive.validate_completed_flight(search_owner, value)
                         session['arrived'] = True
-                if (name in ('get_drone_state', 'execute_mission', 'execute_target_search_view', 'land_drone')
+                if (name in ('get_drone_state', 'execute_mission', 'execute_target_search_view', 'adjust_photo_view', 'rotate_photo_view', 'land_drone')
                         and isinstance(value, dict) and ('mission' in value or 'ready' in value)):
                     result = result.model_copy(update={'content': json.dumps(compact_flight_evidence(value), ensure_ascii=False)})
+                elif name == 'report_scene' and photo_task is not None and isinstance(value, dict) and value.get('status') == 'ok':
+                    # The authoritative inspect_scene audit retains call traces.
+                    # Replaying cumulative traces in each photo ToolMessage adds
+                    # tokens but no new visual/flight evidence or task constraints.
+                    model_report = {key: item for key, item in value.items() if key != 'vlm_calls'}
+                    result = result.model_copy(update={'content': json.dumps(model_report, ensure_ascii=False)})
             if getattr(result, "status", None) != "error":
                 return result
             # Only abort the graph when the independent failure handler can
@@ -455,7 +568,8 @@ class SceneMiddleware(AgentMiddleware):
             if hasattr(self.client, "record"):
                 audit_name = "inspect_scene" if name in ("capture_scene", "report_scene") else name
                 failure = self.client.record(audit_name, failure)
-            if fatal_report_schema:
+            if (search_gate_rejected or fatal_report_schema or photo_failure or photo_task is not None or
+                    self.search_manager and active_session and active_session.get('status') == 'failed'):
                 # A schema-invalid call cannot safely become a saved image report.
                 # End the graph so the independent task failure handler lands once;
                 # returning another tool message can trigger an unbounded model loop.
@@ -465,10 +579,67 @@ class SceneMiddleware(AgentMiddleware):
 
     def wrap_model_call(self, request, handler):
         selection_frame = False
+        photo_review_frame = False
+        photo_selection_frame = False
         review_frames, crop_metadata, current_roi_metadata = None, None, []
         try:
             owner, frame = self.store.frame_for_request(request.messages, get_config())
             session = self.search_manager.adaptive.sessions.get(owner) if self.search_manager else None
+            if session:
+                self.store.photo_tasks.pop(owner, None)
+            elif owner not in self.store.photo_tasks:
+                query = next((message_value(m, 'content', '') for m in reversed(request.messages)
+                              if str(message_value(m, 'id', '')) == owner[1]), '')
+                if is_overview_request(query):
+                    # Commands are serialized; keep bounded per-turn state, never
+                    # infer ownership from a previous task's camera/report text.
+                    if len(self.store.photo_tasks) >= 64:
+                        self.store.photo_tasks.pop(next(iter(self.store.photo_tasks)))
+                    self.store.photo_tasks[owner] = PhotoTask(query)
+            photo_task = self.store.photo_tasks.get(owner)
+            if photo_task and photo_task.status in ('limited', 'budget_exhausted'):
+                # A framing limit is a program-owned completion condition, not
+                # permission for a model-generated emergency landing or new move.
+                review = (photo_task.observations[-1]['review'] or {}) if photo_task.observations else {}
+                return ModelResponse(result=[AIMessage(content='拍摄构图目标未完成：'+
+                    (photo_task.end_reason or review.get('stop_reason') or review.get('reason', '尚未取得照片'))+
+                    '。由程序检查实际飞行条件并收尾。')])
+            if photo_task and photo_task.status == 'awaiting_review':
+                frame = self.store.get(owner, photo_task.observations[-1]['capture_id'], require_delivered=True)
+                photo_review_frame = True
+            elif photo_task and photo_task.status == 'adjust' and not photo_task.closed:
+                observation = photo_task.observations[-1]
+                frame = self.store.get(owner, observation['capture_id'], require_delivered=True)
+                digest = hashlib.sha256(base64.b64decode(frame['image_base64'], validate=True)).hexdigest()
+                if (not observation.get('review') or digest != observation['camera']['image_sha256']
+                        or digest != frame['camera']['image_sha256']
+                        or frame.get('snapshot', {}).get('coordinate_epoch') != observation.get('coordinate_epoch')):
+                    raise ValueError('取景规划图像与当前已复核观察不一致')
+                photo_selection_frame = True
+            if session:
+                progress = self.search_manager.adaptive.summary(owner)
+                if (progress['search_status'] in ('target_found', 'budget_exhausted', 'coverage_exhausted', 'no_reachable_view')
+                        and session.get('search_phase') != 'awaiting_review' and not session.get('activity_closed')):
+                    self.search_manager.adaptive.finish_normal(owner)
+                    frame = None
+            if session and session.get('activity_closed'):
+                # Closing tools alone is insufficient: a provider can still emit
+                # stale/malformed tool calls from history. End the graph from
+                # verified state without a final provider round trip.
+                progress, _ = self.search_manager.adaptive.guidance(owner)
+                termination = session.get('termination') or {}
+                text = ('搜索状态：'+progress['search_status']+'；有效观察 '+str(len(session['observations']))+' 次。')
+                if termination.get('flight_status') == 'grounded_disarmed':
+                    text += '已核实返航降落并上锁。'
+                elif termination.get('source') == 'normal_completion' and session['end_behavior'] == 'hold':
+                    text += '按任务要求结束搜索并保持悬停。'
+                else:
+                    text += '搜索活动已中止，飞行收尾以执行器实际状态为准。'
+                if session['observations']:
+                    text += '最近观察报告：'+session['observations'][-1]['summary']
+                if hasattr(self.client, 'record'):
+                    self.client.record('search_final_report', {'source': 'state_machine', 'search_progress': progress})
+                return ModelResponse(result=[AIMessage(content=text)])
             if session and (session.get('status') != 'searching'
                             or session.get('search_phase') not in ('confirming', 'awaiting_review')):
                 self.store.unpin_confirmation_source(owner)
@@ -500,11 +671,76 @@ class SceneMiddleware(AgentMiddleware):
         completed = self.client.memory_records() if hasattr(self.client, 'memory_records') else None
         messages, context_metrics = self.context_memory.project(request.messages, owner, completed)
         selected_tools = [] if context_metrics['explicit_history_only'] else request.tools
+        if photo_task:
+            messages.append(SystemMessage(content='当前拍摄构图进度（不是飞行结果）：'+
+                json.dumps(photo_task.summary(), ensure_ascii=False)+
+                '。必须检查用户原句的取景要求；未达标时调整后再拍，不用询问代替执行。'))
+            if photo_review_frame:
+                selected_tools = [t for t in selected_tools if getattr(t, 'name', None) in
+                                  ('review_photo', 'get_drone_state', 'land_drone', 'stop_drone')]
+            elif photo_task.status == 'awaiting_report':
+                selected_tools = [t for t in selected_tools if getattr(t, 'name', None) in
+                                  ('report_scene', 'get_drone_state', 'land_drone', 'stop_drone')]
+            elif photo_task.status == 'adjust':
+                selected_tools = [t for t in selected_tools if getattr(t, 'name', None) in
+                                  ('adjust_photo_view', 'rotate_photo_view', 'get_drone_state', 'capture_scene', 'land_drone', 'stop_drone')]
+            else:
+                selected_tools = [t for t in selected_tools if getattr(t, 'name', None) not in ('adjust_photo_view', 'rotate_photo_view')]
+        else:
+            selected_tools = [t for t in selected_tools if getattr(t, 'name', None) not in ('review_photo', 'adjust_photo_view', 'rotate_photo_view')]
+        if session:
+            if session.get('activity_closed') or session.get('status') == 'failed':
+                selected_tools = []
+            else:
+                expected = self.search_manager.adaptive.summary(owner)['next_tool']
+                allowed = {'get_drone_state', 'target_search_progress', expected}
+                if frame is not None and not review_frames and not selection_frame:
+                    allowed = {'get_drone_state', 'target_search_progress', 'report_scene'}
+                selected_tools = [t for t in selected_tools if getattr(t, 'name', None) in allowed]
+            session['offered_search_tools'] = [getattr(t, 'name', None) for t in selected_tools]
+            # Advertise one complete observation step. Older callers may still
+            # split movement/capture, but only in the matching live phase; their
+            # normal ownership, identity and executor checks remain mandatory.
+            accepted = set(session['offered_search_tools'])
+            if 'observe_target_search_view' in accepted:
+                accepted.add('capture_scene' if session['arrived'] else 'execute_target_search_view')
+            session['accepted_search_tools'] = sorted(accepted)
         guidance = self.search_manager.adaptive.guidance(owner) if self.search_manager else None
         if guidance:
             messages.append(SystemMessage(content="当前自主搜索实际进度：" + json.dumps(guidance[0], ensure_ascii=False)
                                           + "。未完成时继续调用工具，不向用户索取下一步路线；结束前按end_behavior完成收尾。"))
-        if review_frames:
+        if photo_review_frame:
+            # A visual judgment must not inherit prior guesses or pressure to
+            # finish the remaining flight budget. Checkpoint/history stay intact;
+            # only this model request is restricted to its owned current image.
+            metadata = {'capture_id': frame['capture_id'], 'user_request': photo_task.query,
+                        'camera': frame['camera']}
+            request = request.override(system_message=SystemMessage(content=PHOTO_REVIEW_PROMPT))
+            messages = [HumanMessage(content=[
+                {'type': 'text', 'text': json.dumps(metadata, ensure_ascii=False)},
+                {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,'+frame['image_base64']}},
+            ])]
+            selected_tools = [t for t in selected_tools if getattr(t, 'name', None) == 'review_photo']
+            context_metrics = {**context_metrics, 'photo_review_context': 'isolated_current_image',
+                               'review_history_included': False, 'review_budget_included': False}
+        elif photo_selection_frame:
+            metadata = {'capture_id': frame['capture_id'], 'user_request': photo_task.query,
+                        'camera': frame['camera'], 'purpose': 'photo_view_selection',
+                        'is_live_image': False, 'counts_as_new_observation': False,
+                        'body_pose_enu_at_capture': frame.get('snapshot', {}).get('body_pose_enu'),
+                        'coordinate_epoch_at_capture': frame.get('snapshot', {}).get('coordinate_epoch'),
+                        'bearing_geometry': photo_task.bearing_feedback}
+            messages.append(HumanMessage(content=[
+                {'type': 'text', 'text': '这张已保存并复核的原图仅用于选择下一取景动作，不是实时画面或新观察。'
+                 '结合实际构图、复核证据和当前许可选择adjust_photo_view或rotate_photo_view，必要时先读状态。'
+                 '移动方向以执行时当前相机水平朝向为准，不能把像素方向直接当ENU坐标。'
+                 'bearing_geometry仅近似计算已观察框的视线随转向如何变化，不能预测画外主体、平移升降成像或完整覆盖；'
+                 '它不代表新照片、转向推荐或飞行授权，需结合原图判断框是否可信。'
+                 '不要重复report_scene/review_photo；动作完成后必须重新capture_scene并报告复核。元数据：'+
+                 json.dumps(metadata, ensure_ascii=False)},
+                {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,'+frame['image_base64']}},
+            ]))
+        elif review_frames:
             metadata = {**session['confirmation'], 'query': session['query'],
                         'source_bbox': source_observation['bbox'], **review_metadata}
             messages.append(HumanMessage(content=[{'type': 'text', 'text': PAIRED_REVIEW_PROMPT+
@@ -521,9 +757,42 @@ class SceneMiddleware(AgentMiddleware):
             ]))
         started = time.monotonic()
         created_at = time.time()
+        def invoke_model():
+            from photo_request_evidence import request_evidence, record_response
+            with request_evidence(photo_selection_frame, owner, frame['capture_id'] if frame else None,
+                                  self.model_config) as evidence:
+                try:
+                    answer = handler(request.override(messages=messages, tools=selected_tools,
+                        model_settings={**request.model_settings, 'parallel_tool_calls': False}))
+                except Exception:
+                    record_response(evidence, failed=True)
+                    raise
+                record_response(evidence, answer.result)
+                if evidence['status'] != 'disabled':
+                    context_metrics.setdefault('photo_request_evidence', []).append({
+                        'status': evidence['status'], 'requests': evidence['requests']})
+                return answer
         try:
-            response = handler(request.override(messages=messages, tools=selected_tools,
-                               model_settings={**request.model_settings, "parallel_tool_calls": False}))
+            response = invoke_model()
+            while (photo_task and photo_task.unfinished
+                   and not any(getattr(m, 'tool_calls', []) for m in response.result)):
+                if photo_task.corrections >= 2:
+                    raise RuntimeError('模型提前结束尚未达标的拍摄任务；构图未完成，交由已有安全流程收尾')
+                photo_task.corrections += 1
+                if hasattr(self.client, 'record'):
+                    self.client.record('photo_protocol_correction', {'count': photo_task.corrections,
+                        'flight_submitted': False, 'progress': photo_task.summary()})
+                messages.append(SystemMessage(content='请依据本张照片调用review_photo，不能以文字宣布任务完成。'
+                    if photo_review_frame else '不能以文字宣布拍摄完成。请按真实拍摄进度调用工具：'+
+                    json.dumps(photo_task.summary(), ensure_ascii=False)))
+                response = invoke_model()
+            if (photo_task and photo_task.status in ('limited', 'budget_exhausted')
+                    and not any(getattr(m, 'tool_calls', []) for m in response.result)):
+                review = (photo_task.observations[-1]['review'] or {}) if photo_task.observations else {}
+                response = ModelResponse(result=[AIMessage(content=('已保存观察，但拍摄构图目标未完成。' if photo_task.observations
+                    else '尚未取得有效照片，拍摄构图目标未完成。')+
+                    (photo_task.end_reason or review.get('stop_reason') or review.get('reason', '未取得有效照片'))+
+                    '；飞行状态以执行器记录为准。')])
             # A text-only answer must not silently end an unfinished autonomous task.
             # Bounded correction, never an automatic retry of a failed flight/tool.
             for correction in range(2):
@@ -531,9 +800,8 @@ class SceneMiddleware(AgentMiddleware):
                 if not guidance or guidance[1] or any(getattr(m, "tool_calls", []) for m in response.result):
                     break
                 messages.append(SystemMessage(content="自主任务尚未完成，不能用询问或计划代替执行。"
-                    "请根据以下实际进度调用下一工具；失败时仅执行安全降落：" + json.dumps(guidance[0], ensure_ascii=False)))
-                response = handler(request.override(messages=messages, tools=selected_tools,
-                    model_settings={**request.model_settings, "parallel_tool_calls": False}))
+                    "请根据以下实际进度调用下一工具；故障由独立安全流程收尾：" + json.dumps(guidance[0], ensure_ascii=False)))
+                response = invoke_model()
             else:
                 guidance = self.search_manager.adaptive.guidance(owner)
                 if guidance and not guidance[1] and not any(getattr(m, "tool_calls", []) for m in response.result):
@@ -542,7 +810,7 @@ class SceneMiddleware(AgentMiddleware):
             failure = {"status": "error", "model": self.model_config["model"], "architecture": "single_vlm",
                        "targets": [], "limitations": [], **safe_error(exc, self.model_config)}
             trace = {"status": "error", "model": self.model_config["model"],
-                     "image_purpose": 'target_confirmation' if review_frames else 'nbv_candidate_selection' if selection_frame else 'observation' if frame else None,
+                     "image_purpose": 'photo_framing_review' if photo_review_frame else 'photo_view_selection' if photo_selection_frame else 'target_confirmation' if review_frames else 'nbv_candidate_selection' if selection_frame else 'observation' if frame else None,
                      "context_memory": context_metrics,
                      "created_at": created_at, "completed_at": time.time(),
                      "input_modalities": ["text", "image"] if frame else ["text"],
@@ -569,8 +837,29 @@ class SceneMiddleware(AgentMiddleware):
                 called_tools.append({"name": call.get("name"), "argument_fields": list(args),
                                      "mission_actions": [step.get("action") for step in args.get("steps", []) if isinstance(step, dict)]
                                      if isinstance(args.get("steps", []), list) else []})
+                if call.get('name') == 'execute_mission':
+                    steps = args.get('steps')
+                    # Record structure, never arbitrary descriptions/credentials.
+                    called_tools[-1]['mission_arguments'] = {
+                        'steps_present': 'steps' in args, 'steps_type': type(steps).__name__,
+                        'step_count': len(steps) if isinstance(steps, list) else None,
+                        'step_types': [type(s).__name__ for s in steps[:64]] if isinstance(steps, list) else [],
+                    }
+                if call.get('name') == 'review_target_candidate':
+                    # Narrow allowlist: retain original review values before tool-schema coercion.
+                    # No credentials, arbitrary tool arguments or image payloads are logged.
+                    fields = ('source_capture_id', 'current_capture_id', 'current_target_id',
+                              'source_supported', 'current_supported', 'same_object',
+                              'source_uncertain', 'current_uncertain', 'source_description',
+                              'current_description', 'reason')
+                    called_tools[-1]['review_arguments'] = {
+                        key: (value[:1001] if isinstance(value, str) else value
+                              if value is None or type(value) in (bool, int, float) else
+                              {'invalid_type': type(value).__name__})
+                        for key in fields if key in args for value in [args[key]]}
+
         trace = {"status": "ok", "model": self.model_config["model"],
-                 "image_purpose": 'target_confirmation' if review_frames else 'nbv_candidate_selection' if selection_frame else 'observation' if frame else None,
+                 "image_purpose": 'photo_framing_review' if photo_review_frame else 'photo_view_selection' if photo_selection_frame else 'target_confirmation' if review_frames else 'nbv_candidate_selection' if selection_frame else 'observation' if frame else None,
                  "context_memory": context_metrics,
                  "created_at": created_at, "completed_at": time.time(),
                  "input_modalities": ["text", "image"] if frame else ["text"],
@@ -597,6 +886,7 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
     from semantic_map_runtime import SemanticMapRuntime
     semantic_maps = SemanticMapRuntime(client)
     search_manager.adaptive.semantic_maps = semantic_maps
+    client.search_manager = search_manager
 
     def audited(result, name="inspect_scene"):
         return client.record(name, result) if hasattr(client, "record") else result
@@ -613,7 +903,17 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
         Read-only: no flight or search outside the selected view.
         """
         try:
-            return audited(store.capture(turn_owner(runtime.state["messages"], runtime.config), query, side), "capture_scene")
+            owner = turn_owner(runtime.state["messages"], runtime.config)
+            session = search_manager.adaptive.sessions.get(owner) or {}
+            binding = session.get('binding') or {}
+            photo_task = store.photo_tasks.get(owner) if not session else None
+            if photo_task:
+                photo_task.guard_tool('capture_scene', {})
+            result = audited(store.capture(owner, query, side, binding.get('stamp_sim_s')), "capture_scene")
+            if photo_task:
+                photo_task.captured(result['capture_id'])
+                audited(photo_task.summary(), 'photo_progress')
+            return result
         except Exception as exc:
             try:
                 search_manager.fail(turn_owner(runtime.state["messages"], runtime.config), str(exc))
@@ -643,7 +943,8 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
                 if (result.get('mission') or {}).get('status') != 'succeeded':
                     raise RuntimeError((result.get('mission') or {}).get('error') or result.get('error') or '观察点飞行未成功')
                 session['arrived'] = True
-            return audited(store.capture(owner, session['query'], 'left'), 'capture_scene')
+            binding = session.get('binding') or {}
+            return audited(store.capture(owner, session['query'], 'left', binding.get('stamp_sim_s')), 'capture_scene')
         except Exception as exc:
             search_manager.fail(turn_owner(runtime.state['messages'], runtime.config), str(exc))
             return failure(exc)
@@ -683,9 +984,16 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
                 "captured_at_sim_s": frame["snapshot"]["stamp_sim_s"], "camera": frame["camera"],
                 "analysis_duration_seconds": round(store.clock()-frame["created_monotonic"], 2),
                 "vlm_calls": store.calls(owner), **observation}
+            photo_task = store.photo_tasks.get(owner)
+            if photo_task and not search_manager.adaptive.sessions.get(owner):
+                from photo_framing import photo_bearing_feedback
+                result['photo_bearing_feedback'] = photo_bearing_feedback(frame, result)
             result = audited(result)
             if result.get('status') != 'ok':
                 raise RuntimeError(result.get('error') or '观察报告保存失败')
+            if photo_task and not search_manager.adaptive.sessions.get(owner):
+                photo_task.observe(frame, result)
+                result['photo_progress'] = audited(photo_task.summary(), 'photo_progress')
             progress = search_manager.consume_report(owner, frame, result)
             if progress:
                 if progress.get("status") != "ok":
@@ -720,11 +1028,99 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
                     client.record('search_progress', prepared)
             return result
         except Exception as exc:
+            from search_diagnostics import emit, exception_detail
+            emit({'event': 'error', 'stage': 'report_scene', 'capture_id': capture_id,
+                  **exception_detail(exc)})
             try:
                 search_manager.fail(turn_owner(runtime.state["messages"], runtime.config), str(exc))
             except Exception:
                 pass
             return failure(exc)
+
+    @tool
+    def adjust_photo_view(direction: Literal['forward', 'backward', 'left', 'right', 'vertical'],
+                          distance_m: StrictFloat, altitude: StrictFloat, reason: str, runtime: ToolRuntime) -> dict:
+        """Move relative to the CURRENT calibrated camera horizontal heading, then wait.
+
+        Program converts direction to ENU at execution; never output guessed XY.
+        distance_m: horizontal distance 0..10m; vertical requires 0. altitude: absolute ENU z.
+        Only after review_photo asks for adjustment; executor checks full path and identity.
+        """
+        return perform_photo_action('adjust_photo_view', 'adjust', reason, runtime,
+                                    direction=direction, distance_m=distance_m, altitude=altitude)
+
+    @tool
+    def rotate_photo_view(direction: Literal['left', 'right'], angle_deg: StrictFloat,
+                          reason: str, runtime: ToolRuntime) -> dict:
+        """Turn the current camera horizontally left/right by 5..90 degrees and wait.
+
+        Keeps position and fixed camera pitch. Only after a saved photo review asks
+        for adjustment. Executor resolves ENU yaw and checks identity/clearance.
+        Then capture_scene must obtain fresh stereo frames and review the new view.
+        No absolute yaw or waypoints are accepted.
+        """
+        return perform_photo_action('rotate_photo_view', 'turn', reason, runtime,
+                                    direction=direction, angle_deg=angle_deg)
+
+    def perform_photo_action(tool_name, operation, reason, runtime, **arguments):
+        from photo_navigation import require_photo_navigation
+        owner = turn_owner(runtime.state['messages'], runtime.config)
+        task = store.photo_tasks.get(owner)
+        if task is None or search_manager.adaptive.sessions.get(owner):
+            raise ValueError('没有可用的普通拍摄会话')
+        task.guard_tool(tool_name, {})
+        state = client.state()
+        epoch = task.observations[-1]['coordinate_epoch']
+        mission_id = (state.get('mission') or {}).get('id')
+        require_photo_navigation(state, mission_id, epoch)
+        request = dict(operation=operation, expected_mission_id=mission_id,
+                       expected_epoch=epoch, description=reason, **arguments)
+        accepted = client.request('/navigation/photo-action', request)
+        if accepted.get('status') == 'not_executed':
+            from photo_navigation import validate_photo_rejection
+            validate_photo_rejection(accepted, request, client.state())
+            progress = task.reject_candidate(accepted)
+            audited(progress, 'photo_progress')
+            return {**accepted, 'photo_progress': progress}
+        # Do not use AuditedClient.wait_for, whose audit name denotes landing.
+        if hasattr(client, 'wait_for_photo_action'):
+            result = client.wait_for_photo_action(accepted)
+        else:
+            result = audited(client.wait_for(accepted), 'execute_mission')
+        if (result.get('mission') or {}).get('status') == 'succeeded':
+            task.status = 'awaiting_photo'
+            audited(task.summary(), 'photo_progress')
+        return result
+
+    @tool
+    def review_photo(capture_id: str, subject_complete: Literal['yes', 'no', 'uncertain'],
+                     view_suitable: Literal['yes', 'no', 'uncertain'], reason: str,
+                     edges: PhotoEdges, runtime: ToolRuntime,
+                     next_adjustment: str = '', stop_reason: str = '') -> dict:
+        """Review the latest saved photograph against the user's framing goal.
+
+        Inspect the actual image. Unknown outer boundaries mean uncertain, not yes.
+        Give top/right/bottom/left edge evidence before an overall judgment.
+        Any cut/uncertain edge prevents complete=yes; clear edges alone do not prove extent.
+        Give a next adjustment, or a concrete capability limit when not complete.
+        This is an uncalibrated model judgment, not independent coverage proof.
+        Never authorizes flight or replaces multiview target confirmation.
+        """
+        owner = turn_owner(runtime.state['messages'], runtime.config)
+        if search_manager.adaptive.sessions.get(owner):
+            raise ValueError('目标搜索必须使用原搜索复核流程')
+        store.get(owner, capture_id, require_delivered=True)
+        task = store.photo_tasks.get(owner)
+        if task is None:
+            raise ValueError('当前任务没有拍摄构图会话')
+        if not any(t.get('status') == 'ok' and t.get('image_purpose') == 'photo_framing_review'
+                   and t.get('capture_ids') == [capture_id] for t in store.calls(owner)):
+            raise ValueError('构图复核需要本次独立图像请求的实际送达证据')
+        # Read-only health access; command ownership/interruption is enforced
+        # by middleware and the application, not inferred from the photograph.
+        client.state()
+        return audited(task.review(capture_id, subject_complete, view_suitable, reason,
+                                   next_adjustment, stop_reason, edges=edges.model_dump()), 'photo_progress')
 
     @tool
     def review_target_candidate(source_capture_id: str, current_capture_id: str, current_target_id: str,
@@ -737,6 +1133,7 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
         Assess visible pixels independently of prior labels/stereo. Current ID
         must be one of the current reported candidates, or empty if not seen.
         A failed hypothesis can be rejected; not-seen alone is not absence proof.
+        For each image supported and uncertain are mutually exclusive: never set both true.
         """
         try:
             owner = turn_owner(runtime.state['messages'], runtime.config)
@@ -779,8 +1176,12 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
         options = {"temperature": 0, "timeout": 45, "max_retries": 0, "max_tokens": 2200}
         if (urlsplit(model_config.get("base_url") or "").hostname or "").endswith("aliyuncs.com"):
             options["extra_body"] = {"enable_thinking": False}
-        model = ChatOpenAI(**model_config, **options)
+        if os.getenv('UAV_PHOTO_REQUEST_EVIDENCE_DIR'):
+            from photo_request_evidence import EvidenceChatOpenAI
+            model = EvidenceChatOpenAI(**model_config, **options)
+        else:
+            model = ChatOpenAI(**model_config, **options)
     return create_agent(model, [*flight_tools, capture_scene, observe_target_search_view, report_scene,
-                               review_target_candidate, *search_tools],
-                        system_prompt=system_prompt + SINGLE_VLM_PROMPT + SEARCH_PROMPT + AUTONOMY_PROMPT,
+                               review_target_candidate, review_photo, adjust_photo_view, rotate_photo_view, *search_tools],
+                        system_prompt=system_prompt + SINGLE_VLM_PROMPT + SEARCH_PROMPT + AUTONOMY_PROMPT + PHOTO_PROMPT,
                         middleware=[SceneMiddleware(store, client, model_config, search_manager)], checkpointer=InMemorySaver())

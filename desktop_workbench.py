@@ -208,7 +208,14 @@ class SearchWorkbench(QWidget):
             cell=QVBoxLayout();cell.addWidget(QLabel(title));label=ScaledImage('暂无');label.setMinimumSize(90,50);cell.addWidget(label,1);pair_images.addLayout(cell);self.pair_images.append(label)
         self.pair_status=CompactTextEdit('暂无多视角复核');self.pair_status.setReadOnly(True);self.pair_status.setMinimumHeight(50);pair_split.addWidget(self.pair_status);pair_split.setSizes([250,130])
         self.landmark_details=CompactTextEdit();self.landmark_details.setReadOnly(True);tabs.addTab(self.landmark_details,'语义地标')
+        live_tab=QWidget();live_layout=QVBoxLayout(live_tab);tabs.addTab(live_tab,'实时左相机')
+        self.live_image=ScaledImage('等待新鲜相机画面');self.live_image.setMinimumSize(100,55)
+        live_layout.addWidget(self.live_image,1)
+        live_layout.addWidget(QLabel('实时画面 · 不叠加历史检测框'))
         self._reports=[];self._candidates=[];self._last_image=None;self._candidate_signature=None;self._pix_cache={};self.live_mission={};self._shown_review_pair=None
+
+    def set_live_camera(self, pixmap, message='相机未连接 / 图像已过期'):
+        self.live_image.set_image(pixmap, message)
 
     def sizeHint(self):
         # Let a resizable scroll area use the available viewport before scrolling.

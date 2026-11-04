@@ -56,6 +56,26 @@ class ViewpointTests(unittest.TestCase):
         self.cells = {'view_001': cells[:100], 'view_002': cells[100:200]}
         self.controlled = ControlledVisibility(self.backend, self.cells)
 
+    def test_complete_nbv_route_uses_authorized_twenty_metre_limit(self):
+        class HighCandidates(TwoCandidates):
+            def generate_candidates(self, *args, **kwargs):
+                points = super().generate_candidates(*args, **kwargs)
+                for point in points:
+                    point['position_enu_m'][2] = 19.5
+                return points
+        self.nav.bounds[1][2] = 20.4
+        result = HighCandidates().evaluate(self.map, self.controlled)
+        self.assertIsNotNone(result['selected_id'])
+        self.assertTrue(all(c['path']['goal_enu_m'][2] == 19.5 for c in result['ranked_candidates']))
+        def invalid_route(operation, result):
+            if operation == 'paths':
+                for candidate in result['results']:
+                    if candidate.get('path'):
+                        candidate['path']['waypoints'].insert(0, [0.,0.,20.5])
+        self.controlled.hook = invalid_route
+        with self.assertRaisesRegex(ViewpointError, 'route exceeds'):
+            HighCandidates().evaluate(self.map, self.controlled)
+
     def test_confirmation_can_choose_zero_new_coverage_and_requires_unoccluded_probes(self):
         from target_confirmation import confirmation_goal
         from test_semantic_map import target
@@ -87,17 +107,26 @@ class ViewpointTests(unittest.TestCase):
 
     def test_candidates_sample_three_heights_and_eight_directions_without_duplicates(self):
         p = ViewpointPlanner()
-        for height in (1., 3., 9., 10.):
+        for height in (1., 3., 19., 20.):
             items = p.generate_candidates({'position_m': [0., 0., height]}, [0., 0.], .7)
-            self.assertEqual(len(items), 33 if height in (1., 10.) else 50)
+            self.assertEqual(len(items), 34 if height in (1., 20.) else 50)
             self.assertEqual(len({tuple(round(v, 8) for v in c['position_enu_m']) for c in items}), len(items))
             for c in items:
                 self.assertEqual(c['fixed_yaw_enu_rad'], .7)
-                self.assertTrue(1 <= c['position_enu_m'][2] <= 10)
+                self.assertTrue(1.5 <= c['position_enu_m'][2] <= 19.5)
                 self.assertGreaterEqual(math.dist(c['position_enu_m'], [0., 0., height]), .5)
         items = p.generate_candidates({'position_m': [11., 0., 3.]}, [0., 0.], 0.)
         self.assertLess(len(items), 50)
         self.assertTrue(all(math.hypot(*c['position_enu_m'][:2]) <= 12.+1e-9 for c in items))
+
+    def test_boundary_heading_candidates_also_keep_observation_margin(self):
+        planner = ViewpointPlanner(ViewpointConfig(heading_mode='discrete'))
+        for height in (1., 1.3, 1.5, 19.5, 19.8, 20.):
+            candidates = planner.generate_candidates({'position_m': [0., 0., height]}, [0., 0.], 0.)
+            self.assertTrue(candidates)
+            self.assertTrue(all(1.5 <= c['position_enu_m'][2] <= 19.5 for c in candidates))
+            if height < 1.5 or height > 19.5:
+                self.assertFalse(any(c['position_enu_m'] == [0., 0., height] for c in candidates))
 
     def test_discrete_heading_candidates_include_rotation_in_place_and_batch_visibility(self):
         planner = ViewpointPlanner(ViewpointConfig(heading_mode='discrete', max_path_evaluations=1))

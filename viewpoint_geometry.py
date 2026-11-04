@@ -5,7 +5,7 @@ import json
 import math
 import re
 
-from mission import MissionError
+from mission import MAX_ALTITUDE, MissionError
 from semantic_map import epoch_identity
 from stereo_localization import vector, finite, quaternion_rotation
 
@@ -95,7 +95,7 @@ class StaticViewpointEvaluator:
                 candidate_yaw = math.atan2(math.sin(self.yaw + heading_step*math.pi/4),
                                            math.cos(self.yaw + heading_step*math.pi/4))
                 result.update(heading_step=heading_step, target_yaw_enu_rad=candidate_yaw)
-            if (not 1. <= point[2] <= 10. or math.dist(point[:2], origin) > 12.+1e-9
+            if (not 1. <= point[2] <= MAX_ALTITUDE or math.dist(point[:2], origin) > 12.+1e-9
                     or not self.navigator.segment_safe(point, point)):
                 result['reason'] = 'candidate lacks search-volume or inflated flight clearance'
             elif operation == 'visibility':
@@ -139,4 +139,8 @@ class RemoteViewpointEvaluator:
             payload['search_context'] = self.search_context
         if self.probes is not None:
             payload['probe_points_enu_m'] = self.probes
-        return self.client.request('/navigation/viewpoints', payload, timeout=30)
+        from search_diagnostics import stage
+        with stage('remote_viewpoints', payload) as diagnostic:
+            response = self.client.request('/navigation/viewpoints', payload, timeout=30)
+            diagnostic['result'] = response
+            return response
