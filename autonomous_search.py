@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from stereo_localization import quaternion_rotation, vector
+from search_limits import MAX_OBSERVATIONS, SEARCH_RADIUS_M
 
 
 class PrematureSearchCompletion(ValueError):
@@ -19,6 +20,7 @@ class PrematureSearchCompletion(ValueError):
 AUTONOMY_PROMPT = """
 自主搜索任务：使用者说“找到前方的油桶，报告周围情况”等，已经授权完成目标所需的仿真起飞、
 变高、横移、推进、绕障与采图，不需要逐步确认，不要求使用者提供坐标或路线。
+“去目标附近拍摄/靠近目标拍照”也先建立目标搜索，再按工具完成定位和目标观察。
 “前方”默认任务开始时机头方向，先用begin_target_search(query=目标名称)建立任务。
 每次按工具返回的next_tool推进。地面起始观察高度由begin_target_search(initial_altitude=3)保存，
 调用observe_target_search_view即可自动起飞并采图；不需要重复填写起飞任务或向用户确认。
@@ -40,14 +42,19 @@ AUTONOMY_PROMPT = """
 若target_confirmation_mode=multiview，首次匹配目标仅是候选，按next_tool换位采图，
 随后调用review_target_candidate复核实际两张图及源框裁图。不能用标签匹配或双目成功代替确认。
 复核可否定旧候选或说明未确认，再继续搜索；未检出不能证明目标不存在，不向用户索取路线。
+发现候选后围绕该目标继续定位、复核和取得合适距离的观察；暂时看不到不代表目标已否定。
+目标引导候选仍需票据和完整路径验证。只有方位时先换视角定位，不把假设距离当作目标坐标。
+当前照片看到目标而双目深度不足时，优先按工具的小步接近候选再次观察，不连续升高来代替接近。
+复核时省略source_capture_id/current_capture_id，由程序绑定当前真实图对；只提交视觉判断及候选目标ID。
+若原要求包含靠近拍照，目标确认只是中间步骤；按工具返回继续观察，直到实际近距离照片满足条件。
 根据遮挡和视野选择策略，例如高墙挡住视线可升高或横移，不把像素/粗略投影直接当航点。
-最多8份有效观察，15分钟，距离任务起点12米以内；不要重复观察同一位置或无限询问。
+最多{observation_budget}份有效观察，15分钟，距离任务起点{search_radius}米以内；不要重复观察同一位置或无限询问。
 report_scene的目标label与query使用一致名称；看到目标即可报告视觉发现，不要求先获得精确双目位置。
 目标位置无法测定时仍可用实际照片描述，明确位置不确定，不猜坐标。找到后报告周围可见情况，
 完成或预算结束由程序执行返航降落，模型不调用通用收尾工具；使用者明确要求悬停/不降落时begin_target_search(end_behavior='hold')。
 只有定位、图像接口或执行失败才终止新的搜索移动。无安全候选点时结束并安全降落，不反复询问路线。
 纯“看一下当前画面/描述眼前情况”仍只观察，不启动自主搜索。
-"""
+""".replace('{observation_budget}', str(MAX_OBSERVATIONS)).replace('{search_radius}', str(SEARCH_RADIUS_M))
 
 
 class AdaptiveSearch:
@@ -77,15 +84,20 @@ class AdaptiveSearch:
             raise ValueError('UAV_TARGET_CONFIRMATION must be single_frame, or multiview with an NBV search mode')
         self.semantic_maps = semantic_maps
 
-    def begin(self, owner, query, end_behavior="land", initial_altitude=3., *, original_request=None):
+    def begin(self, owner, query, end_behavior="land", initial_altitude=3., *, original_request=None,
+              execution_mode='standalone'):
         with self.binding_lock:
-            return self._begin(owner, query, end_behavior, initial_altitude, original_request=original_request)
+            return self._begin(owner, query, end_behavior, initial_altitude, original_request=original_request,
+                               execution_mode=execution_mode)
 
-    def _begin(self, owner, query, end_behavior="land", initial_altitude=3., *, original_request=None):
+    def _begin(self, owner, query, end_behavior="land", initial_altitude=3., *, original_request=None,
+               execution_mode='standalone'):
         from search_tools import _owner, _require_coordinate_evidence
         owner = _owner(owner)
         if owner in self.sessions:
             raise ValueError("本指令已有自主任务，请继续现有任务")
+        if execution_mode not in ('standalone', 'orchestrated'):
+            raise ValueError('invalid search execution mode')
         if end_behavior not in ('land', 'hold'):
             raise ValueError('无效搜索结束方式')
         from task_contract import assess_task
@@ -94,6 +106,11 @@ class AdaptiveSearch:
                     assess_task(original_request if original_request is not None else query))
         if contract['admission'] != 'accepted':
             raise ValueError(contract['reason'])
+        # The user's observation goal selects the existing geometry planner for
+        # this session when the default is the old fixed-action search. Backend
+        # capability is still checked below; no global/yaw setting is changed.
+        effective_mode = ('nbv_geometry' if (contract.get('target_observation_required') or execution_mode == 'orchestrated')
+                          and self.search_mode == 'fixed' else self.search_mode)
         # Model end_behavior is retained in the schema for compatibility, but
         # cannot rewrite the user's completion request or the failure policy.
         end_behavior = 'hold' if contract['search_success_end'] == 'hold' else 'land'
@@ -102,7 +119,7 @@ class AdaptiveSearch:
                 or state.get("scene", {}).get("verified") is not True
                 or state.get("navigation", {}).get("method") != "static_3d"):
             raise ValueError("自主目标搜索需要就绪的已验证静态三维仿真场景")
-        if self.search_mode != 'fixed' and state.get('navigation', {}).get('viewpoint_execution_supported') is not True:
+        if effective_mode != 'fixed' and state.get('navigation', {}).get('viewpoint_execution_supported') is not True:
             raise ValueError('NBV搜索需要支持候选票据执行的新版后端，请先重启系统')
         if self.heading_mode == 'discrete' and state.get('navigation', {}).get('viewpoint_yaw_supported') is not True:
             raise ValueError('航向NBV需要后端明确启用实验性航向和航向候选')
@@ -191,13 +208,16 @@ class AdaptiveSearch:
                 raise ValueError('空中搜索绑定期间坐标或地图身份已改变')
             initial_binding['stamp_sim_s'] = stamp
             self.sessions[owner]['epoch_bound'] = True
-        self.sessions[owner]['search_mode'] = self.search_mode
+        self.sessions[owner]['search_mode'] = effective_mode
+        self.sessions[owner]['execution_mode'] = execution_mode
         self.sessions[owner]['nbv_selector'] = self.nbv_selector
         self.sessions[owner]['candidate_pool_mode'] = self.candidate_pool_mode
         self.sessions[owner]['heading_mode'] = self.heading_mode
         self.sessions[owner]['nbv_auto_prepare'] = self.auto_prepare
-        self.sessions[owner].update(target_confirmation_mode=self.target_confirmation_mode,
-                                    search_phase='exploring', confirmation=None)
+        self.sessions[owner].update(target_confirmation_mode=(
+            'multiview' if contract.get('target_observation_required') else self.target_confirmation_mode),
+            search_phase='exploring', confirmation=None, target_visual_confirmed=False,
+            target_observation=None, target_focus_state=None)
         # Old completed turns are not needed by the live search.
         if len(self.sessions) > 100:
             del self.sessions[next(iter(self.sessions))]
@@ -205,13 +225,13 @@ class AdaptiveSearch:
 
     def summary(self, owner):
         s = self.sessions[owner]
-        if s["status"] == "searching" and (self.clock()-s["started"] >= 900 or len(s["observations"]) >= 8):
+        if s["status"] == "searching" and (self.clock()-s["started"] >= 900 or len(s["observations"]) >= s.get('observation_ceiling', MAX_OBSERVATIONS)):
             s["status"] = "budget_exhausted"
         memory = [dict(capture_id=o['capture_id'], position_enu_m=o['position_enu_m'], summary=o['summary'],
                        targets=[{'label': t.get('label'), 'surroundings': t.get('surroundings')} for t in o['targets']])
                   for o in s['observations']]
         pending = copy.deepcopy(s['pending'])
-        if self.is_nbv(owner) and pending and pending['action'] == 'goto':
+        if self.is_nbv(owner) and s.get('purpose') != 'photo_framing' and pending and pending['action'] == 'goto':
             pending = {'action': 'goto', 'candidate_id': s['nbv_selected']['id']}
         result = dict(status="ok", search_status=s["status"], query=s["query"], search_mode=s['search_mode'],
                     nbv_selector=s.get('nbv_selector', 'deterministic'),
@@ -220,9 +240,12 @@ class AdaptiveSearch:
                     nbv_auto_prepare=s.get('nbv_auto_prepare', False),
                     target_confirmation_mode=s.get('target_confirmation_mode', 'single_frame'),
                     search_phase=s.get('search_phase', 'exploring'), confirmation=copy.deepcopy(s.get('confirmation')),
+                    target_visual_confirmed=s.get('target_visual_confirmed', False),
+                    target_focus_state=s.get('target_focus_state'),
+                    target_observation=copy.deepcopy(s.get('target_observation')),
                     observations=copy.deepcopy(memory), pending=pending,
-                    elapsed_seconds=round(self.clock()-s["started"], 1), max_observations=8,
-                    max_duration_seconds=900, radius_m=12, end_behavior=s["end_behavior"],
+                    elapsed_seconds=round(self.clock()-s["started"], 1), max_observations=s.get('observation_ceiling', MAX_OBSERVATIONS),
+                    max_duration_seconds=900, radius_m=SEARCH_RADIUS_M, end_behavior=s["end_behavior"],
                     task_contract=copy.deepcopy(s.get('task_contract')),
                     coordinate_binding=copy.deepcopy(s.get('binding')),
                     coordinate_epoch=copy.deepcopy(s.get('epoch')) if s['epoch_bound'] else None,
@@ -244,12 +267,14 @@ class AdaptiveSearch:
             result['next_tool'] = 'final_report'
         return result
 
-    def validate_state(self, owner, state):
+    def validate_state(self, owner, state, *, allow_skill_handoff=False):
         from search_tools import _navigation_permission, coordinate_epoch
         s = self.sessions[owner]
         if (s.get('spatial_map_identity') or {}).get('status') == 'invalid':
             raise ValueError('空间语义地图坐标身份失效，禁止新的搜索移动')
-        if s.get('activity_closed'):
+        handed_off = (allow_skill_handoff and s.get('execution_mode') == 'orchestrated'
+            and s.get('skill_handoff') and s.get('status') in ('target_found', 'candidate_acquired', 'route_completed') and not s.get('termination'))
+        if s.get('activity_closed') and not handed_off:
             raise ValueError('搜索活动已结束，禁止继续观察或飞行')
         _navigation_permission(state)
         if state["scene"].get("world_sha256") != s["scene"]:
@@ -292,7 +317,7 @@ class AdaptiveSearch:
         rejected = []
         for kind in order:
             for point in candidates[kind]:
-                if math.dist(point[:2], s["boundary_origin"][:2]) > 12 or not 1 <= point[2] <= MAX_ALTITUDE:
+                if math.dist(point[:2], s["boundary_origin"][:2]) > SEARCH_RADIUS_M or not 1 <= point[2] <= MAX_ALTITUDE:
                     continue
                 if any(math.dist(point, o["position_enu_m"]) < .75 for o in s["observations"]):
                     continue
@@ -328,8 +353,15 @@ class AdaptiveSearch:
             with stage('confirmation_goal', {'owner': owner, 'candidate': active}) as diagnostic:
                 confirmation = confirmation_goal(semantic_map, active['target_id'], active['source_capture_id'])
                 confirmation['avoid_observer_positions'] = [list(o['position_enu_m']) for o in s['observations']]
+                confirmation['purpose'] = active.get('purpose', 'confirmation')
+                if (confirmation.get('surface_reference') is None
+                        and not (confirmation.get('purpose') == 'reveal_front'
+                                 and confirmation.get('probe_basis') == 'actual_stereo_surface_with_bounded_uncertainty_probe')
+                        and s['observations'][-1]['capture_id'] == active['source_capture_id']):
+                    confirmation['purpose'] = 'depth_acquisition'
+                    s['target_focus_state'] = 'acquiring_depth'
                 diagnostic['result'] = confirmation
-        revision, batch = map_revision(semantic_map), uuid.uuid4().hex
+        revision, batch = self.semantic_maps.checkpoint(owner), uuid.uuid4().hex
         context = {'owner': list(owner), 'map_revision': revision, 'batch_id': batch}
         evaluator = RemoteViewpointEvaluator(self.client, s['last_stereo_pair_id'], context,
             confirmation['probe_points_enu_m'] if confirmation else None)
@@ -355,8 +387,13 @@ class AdaptiveSearch:
             self.publish_nbv(s, 'nbv_prediction')
             if confirmation is not None:
                 self.confirmation_event(owner, 'view_unavailable', reason='no safe distinct confirmation view with predicted target visibility')
-                s.update(search_phase='exploring', confirmation=None)
-                return self.next_nbv(owner, reason, preparation_source)
+                # A real candidate is not disproved by a failed view prediction.
+                # Retain its evidence and end with an honest unmet result rather
+                # than silently exploring unrelated regions.
+                s['status'] = 'no_reachable_view'
+                s['target_focus_state'] = 'no_safe_target_view'
+                return {**self.summary(owner), 'nbv_status': prediction['status'],
+                        'note': '保留目标线索，但没有可验证的目标观察路径，按程序安全收尾'}
             s['status'] = 'coverage_exhausted' if prediction['status'] == 'no_useful_view' else 'no_reachable_view'
             return {**self.summary(owner), 'nbv_status': prediction['status']}
         s['nbv_batch_id'], s['nbv_revision'] = batch, revision
@@ -368,7 +405,8 @@ class AdaptiveSearch:
             s['nbv_planner'], s['nbv_prepared_at'] = planner, self.clock()
             s['nbv_choices'] = sorted([{**{k: copy.deepcopy(c[k]) for k in
                 ('id', 'direction', 'coverage_gain_m2', 'semantic_gain_m2', 'motion_seconds',
-                 'target_visibility_score', 'parallax_score')},
+                 'target_visibility_score', 'parallax_score', 'observation_range_score', 'predicted_target_range_m',
+                 'bearing_advance_score')},
                 'altitude_enu_m': c['position_enu_m'][2], 'path_length_m': c['path']['path_length_m']}
                 for c in offered], key=lambda c: c['id'])
             public.update(selected_id=None, selection_status='awaiting_vlm',
@@ -681,8 +719,11 @@ class AdaptiveSearch:
                                       summary=report["summary"], targets=copy.deepcopy(report.get("targets", []))))
         s["pending"] = None
         s['arrived'] = False
-        if (s.get('target_confirmation_mode', 'single_frame') == 'single_frame'
-                and any(t.get("label") == s["query"] for t in report.get("targets", []))):
+        from task_runtime.association import labels_compatible
+        if (s.get('purpose') != 'photo_framing' and s.get('handoff_evidence_profile') != 'visual_candidate'
+                and s.get('target_confirmation_mode', 'single_frame') == 'single_frame'
+                and any((labels_compatible(t.get('label'), s['query']) if s.get('execution_mode') == 'orchestrated'
+                         else t.get('label') == s['query']) for t in report.get('targets', []))):
             s["status"] = "target_found"
         return self.summary(owner)
 
@@ -698,6 +739,12 @@ class AdaptiveSearch:
         """Lifecycle only; all boxes, rays and measurements stay in SemanticMap."""
         from target_confirmation import observations_for
         s = self.sessions[owner]
+        if (s.get('execution_mode') == 'orchestrated' and s.get('handoff_evidence_profile') == 'visual_candidate'
+                and s['status'] == 'searching'):
+            candidates = observations_for(semantic_map, s['query'], frame['capture_id'])
+            if len(candidates) == 1:
+                s.update(status='candidate_acquired', search_phase='candidate_acquired')
+                return  # A typed intermediate handoff, never target_found/confirmed.
         if s.get('target_confirmation_mode') != 'multiview':
             return
         if semantic_map.owner != owner or semantic_map.status != 'valid':
@@ -716,6 +763,7 @@ class AdaptiveSearch:
             if candidates and s['status'] == 'searching':
                 s['confirmation'] = {'target_id': candidates[0][0].id, 'source_capture_id': identifier}
                 s['search_phase'] = 'confirming'
+                s['target_focus_state'] = 'localizing_and_confirming'
                 self.confirmation_event(owner, 'candidate')
 
     def review_confirmation(self, owner, source_capture_id, current_capture_id, current_target_id,
@@ -782,29 +830,80 @@ class AdaptiveSearch:
             source_uncertain=source_uncertain, current_uncertain=current_uncertain,
             geometry=geometry, reason=reason)
         if outcome == 'confirmed':
-            s.update(status='target_found', search_phase='confirmed')
+            if getattr(semantic_map, 'association', None) is not None and current_target_id != active['target_id']:
+                previous_id = current_target_id
+                current_target_id = semantic_map.link_reviewed_instance(active['target_id'], current_target_id,
+                    source_capture_id, current_capture_id, geometry,
+                    {'source_supported': source_supported, 'current_supported': current_supported, 'same_object': same_object})
+                self.confirmation_event(owner, 'instance_linked', source_target_id=active['target_id'],
+                    retired_target_id=previous_id, canonical_target_id=current_target_id,
+                    geometry=geometry, new_metric_samples_created=0)
+            s['target_visual_confirmed'] = True
+            if s.get('task_contract', {}).get('target_observation_required'):
+                from target_observation import observation_quality
+                landmark, observation = observation_for(semantic_map, current_target_id, current_capture_id)
+                s['target_observation'] = observation_quality(landmark, observation)
+                if not s['target_observation']['completed']:
+                    self.summary(owner)  # Keep the original time/photo budget.
+                    if s['status'] == 'searching':
+                        metric_current = observation.get('position_enu_m') is not None
+                        s['confirmation'] = {'target_id': landmark.id if metric_current else active['target_id'],
+                            'source_capture_id': current_capture_id if metric_current else source_capture_id,
+                            'purpose': 'approach', 'review_attempts': active.get('review_attempts', 0)+1}
+                        s.update(search_phase='confirming', target_focus_state='approaching')
+                        self.confirmation_event(owner, 'observation_required',
+                            observation=s['target_observation'], reason='visual identity confirmed; close observation still required')
+                    else:
+                        s.update(search_phase='confirmed', confirmation=None)
+                    return {**self.summary(owner), 'confirmation_outcome': outcome, 'geometry': geometry,
+                            'reviewed_source_capture_id': source_capture_id, 'reviewed_current_capture_id': current_capture_id,
+                            'review_reason': reason}
+            s.update(status='target_found', search_phase='confirmed', target_focus_state='completed')
         else:
             # Refutes/unconfirms this hypothesis, not the existence of all targets
             # in a geometrically observed region. Raw reports are retained.
-            s.update(search_phase='exploring', confirmation=None)
+            s.update(search_phase='exploring', confirmation=None, target_focus_state=None)
             # A failed old hypothesis must not discard a stronger observation
             # just saved in the current frame. Start a new candidate from that
             # existing evidence, still requiring a later distinct view.
             self.summary(owner)  # Enforce observation/time budget before retaining any candidate.
             attempts = active.get('review_attempts', 0) + 1
+            rejected_source = not source_supported and not source_uncertain
+            # A unique, visibly supported *current* object can guide a short
+            # observation step even when bearing-only cross-view association
+            # failed. Start a new hypothesis, retaining both raw clues; do not
+            # assert identity, fuse landmarks or upgrade confirmation.
+            fresh_bearing_hypothesis = (source_supported and current_supported and same_object
+                and source.get('position_enu_m') is None and len(current_observations) == 1
+                and len(observations_for(semantic_map,s['query'],source_capture_id)) == 1
+                and current_observations[0][1].get('position_enu_m') is None)
+            if rejected_source:
+                s['target_visual_confirmed'] = False
+                if s.get('execution_mode') == 'orchestrated':
+                    refuted = {'target_id': active['target_id'], 'capture_id': source_capture_id, 'query': s['query']}
+                    if refuted not in s.setdefault('refuted_search_observations', []):
+                        s['refuted_search_observations'].append(refuted)
+                    source_landmark.attributes.setdefault('refuted_visual_observations', []).append(refuted)
             if (s['status'] == 'searching' and current_supported
                     and current_target_id in active['current_target_ids']
-                    and (not source_supported and not source_uncertain or attempts < 2)):
+                    and (rejected_source or same_object and geometry['compatible'] or fresh_bearing_hypothesis)):
                 s['confirmation'] = {'target_id': current_target_id, 'source_capture_id': current_capture_id,
-                                     'review_attempts': 0 if not source_supported and not source_uncertain else attempts}
+                                     'purpose': 'confirmation' if rejected_source else active.get('purpose', 'confirmation'),
+                                     'review_attempts': 0 if rejected_source else attempts}
+                if fresh_bearing_hypothesis and not geometry['compatible']:
+                    s['confirmation'].update(identity_with_previous_unresolved=True,
+                        previous_source_capture_id=source_capture_id,previous_target_id=active['target_id'])
                 s['search_phase'] = 'confirming'
-                self.confirmation_event(owner, 'candidate', reason='current supported observation becomes a new candidate; not confirmation')
-            elif (s['status'] == 'searching' and (source_supported or source_uncertain)
-                  and not current_supported and attempts < 2):
+                s['target_focus_state'] = ('approaching' if s['confirmation']['purpose'] == 'approach'
+                                           else 'localizing_and_confirming')
+                self.confirmation_event(owner, 'candidate', reason='current supported observation becomes a new candidate; not confirmation',
+                    identity_with_previous_unresolved=s['confirmation'].get('identity_with_previous_unresolved',False))
+            elif s['status'] == 'searching' and (source_supported or source_uncertain):
                 s['confirmation'] = {'target_id': active['target_id'], 'source_capture_id': source_capture_id,
-                                     'review_attempts': attempts}
+                                     'purpose': active.get('purpose', 'confirmation'), 'review_attempts': attempts}
                 s['search_phase'] = 'confirming'
-                self.confirmation_event(owner, 'candidate', reason='source supported or visually uncertain; one more distinct view before resuming exploration')
+                s['target_focus_state'] = 'reacquiring' if not current_supported else 'association_unresolved'
+                self.confirmation_event(owner, 'candidate', reason='retain unrefuted source; seek another target view within the original budget')
         return {**self.summary(owner), 'confirmation_outcome': outcome, 'geometry': geometry,
                 'reviewed_source_capture_id': source_capture_id, 'reviewed_current_capture_id': current_capture_id,
                 'review_reason': reason}
@@ -824,15 +923,117 @@ class AdaptiveSearch:
         if hasattr(self.client, 'record'):
             self.client.record('search_termination', {**self.summary(owner), 'termination': copy.deepcopy(s['termination'])})
 
-    def finish_normal(self, owner):
+    def handoff(self, owner, stage_id, revision):
+        """Return real search evidence to a parent; never land or release scope."""
+        from dataclasses import asdict
+        from target_confirmation import observations_for
+        from task_runtime.contracts import SearchOutcome
         s = self.sessions[owner]
+        if (s.get('execution_mode') != 'orchestrated' or s.get('activity_closed')
+                or self.summary(owner)['search_status'] not in ('target_found', 'candidate_acquired')):
+            raise ValueError('Only an owned completed search can hand off')
+        self.validate_state(owner, self.client.state())
+        capture_id = s['observations'][-1]['capture_id']
+        matches = observations_for(self.semantic_maps.maps[owner], s['query'], capture_id)
+        if len(matches) != 1:
+            raise ValueError('Search handoff needs one actual target reference')
+        if s.get('nbv_bound'):
+            sequence = s.get('authority_stage_revision', 0)+1
+            self.client.request('/navigation/stage-transition',
+                {'owner': list(owner), 'stage_id': stage_id, 'revision': sequence})
+            s['authority_stage_revision'] = sequence
+        outcome = asdict(SearchOutcome(matches[0][0].id, capture_id, s['query'],
+            'multiview' if s.get('target_visual_confirmed') else 'visual_candidate' if s['status'] == 'candidate_acquired'
+            else 'single_frame', copy.deepcopy(s['epoch']), stage_id))
+        outcome['status'] = 'candidate_acquired' if s['status'] == 'candidate_acquired' else 'evidence_ready'
+        s.update(activity_closed=True, pending=None, nbv_awaiting_selection=False,
+                 skill_handoff=outcome, parent_stage_revision=revision, nbv_private=None, nbv_public=None)
+        return copy.deepcopy(outcome)
+
+    def resume_observation_skill(self, owner, stage_id, revision, target_id, *, purpose='approach', require_close=True):
+        """Continue with existing binding/map/counters; no second initialization."""
+        from target_confirmation import observation_for
+        s = self.sessions[owner]
+        if (s.get('execution_mode') != 'orchestrated' or not s.get('skill_handoff')
+                or s.get('status') not in ('target_found', 'candidate_acquired', 'route_completed') or revision <= s.get('parent_stage_revision', 0)):
+            raise ValueError('Observation skill needs a live previous handoff')
+        self.validate_state(owner, self.client.state(), allow_skill_handoff=True)
+        previous = s['skill_handoff']
+        if target_id != previous['target_id']:
+            raise ValueError('Observation stage cannot change the handed-off instance')
+        observation_for(self.semantic_maps.maps[owner], target_id, previous['capture_id'])
+        if s.get('nbv_bound'):
+            sequence = s.get('authority_stage_revision', 0)+1
+            self.client.request('/navigation/stage-transition',
+                {'owner': list(owner), 'stage_id': stage_id, 'revision': sequence})
+            s['authority_stage_revision'] = sequence
+        s.update(status='searching', activity_closed=False, arrived=False, search_phase='confirming',
+                 target_focus_state='approaching', parent_stage_revision=revision,
+                 confirmation={'target_id': target_id, 'source_capture_id': previous['capture_id'],
+                               'purpose': purpose, 'review_attempts': 0})
+        s['task_contract'] = {**s['task_contract'], 'target_observation_required': require_close}
+        s['handoff_evidence_profile'] = 'strict_multiview'
+        s['target_confirmation_mode'] = 'multiview'
+
+    def resume_search_stage(self, owner, stage_id, revision, query, evidence_profile):
+        """A new target under the same parent permission and cumulative map/budget."""
+        s = self.sessions[owner]
+        if (s.get('execution_mode') != 'orchestrated' or not s.get('activity_closed')
+                or not s.get('skill_handoff') or revision <= s.get('parent_stage_revision', 0)):
+            raise ValueError('Next target requires an actual prior skill handoff')
+        self.validate_state(owner, self.client.state(), allow_skill_handoff=True)
+        semantic = self.semantic_maps.maps[owner]
+        semantic.set_query(query)
+        if s.get('nbv_bound'):
+            sequence = s.get('authority_stage_revision', 0)+1
+            self.client.request('/navigation/stage-transition',
+                {'owner': list(owner), 'stage_id': stage_id, 'revision': sequence})
+            s['authority_stage_revision'] = sequence
+        s.update(query=query, status='searching', activity_closed=False, arrived=False,
+                 parent_stage_revision=revision, pending=None, confirmation=None,
+                 search_phase='exploring', target_visual_confirmed=False, target_observation=None,
+                 target_focus_state=None, handoff_evidence_profile=evidence_profile)
+        s['task_contract'] = {**s['task_contract'], 'target_observation_required': False}
+
+    def apply_reasoning_strategy(self, owner, stage_id, strategy, target_id=None):
+        """Replan only unsubmitted observations. Never retry an accepted failed flight."""
+        from target_confirmation import observation_for
+        s = self.sessions[owner]
+        self.validate_state(owner, self.client.state())
+        if s.get('status') not in ('searching', 'no_reachable_view') or s.get('search_phase') == 'awaiting_review':
+            raise ValueError('Reasoning cannot replace pending review or a failed flight')
+        if s.get('nbv_bound'):
+            sequence = s.get('authority_stage_revision', 0)+1
+            self.client.request('/navigation/stage-transition',
+                {'owner': list(owner), 'stage_id': stage_id, 'revision': sequence})
+            s['authority_stage_revision'] = sequence
+        s.update(status='searching', pending=None, nbv_awaiting_selection=False, nbv_private=None, nbv_public=None)
+        if target_id is not None:
+            semantic = self.semantic_maps.maps[owner]
+            last = semantic.landmarks[target_id].observations[-1]
+            observation_for(semantic, target_id, last['capture_id'])
+            s.update(search_phase='confirming', target_focus_state='reacquiring',
+                confirmation={'target_id': target_id, 'source_capture_id': last['capture_id'],
+                              'purpose': 'recovery' if strategy == 'reacquire_target' else 'confirmation'})
+        elif strategy == 'continue_search':
+            s.update(search_phase='exploring', confirmation=None)
+        else:
+            raise ValueError('Target recovery requires a real retained target')
+        return self.next_view(owner, 'auto', '父任务有界重规划：'+strategy, preparation_source='task_global_replan')
+
+    def finish_normal(self, owner, *, parent_goal_complete=None):
+        s = self.sessions[owner]
+        if s.get('execution_mode') == 'orchestrated' and parent_goal_complete is None:
+            raise ValueError('Orchestrated search must hand off; the parent alone can finish')
         if s.get('finish_result') is not None:
             return copy.deepcopy(s['finish_result'])
         progress = self.summary(owner)
-        if (progress['search_status'] not in ('target_found', 'budget_exhausted', 'coverage_exhausted', 'no_reachable_view')
+        candidate_recovery = (s.get('execution_mode') == 'orchestrated' and parent_goal_complete is False
+                              and s.get('skill_handoff') and progress['search_status'] == 'candidate_acquired')
+        if (not candidate_recovery and progress['search_status'] not in ('target_found', 'photo_completed', 'photo_incomplete', 'route_completed', 'budget_exhausted', 'coverage_exhausted', 'no_reachable_view')
                 or s.get('search_phase') == 'awaiting_review'):
             raise ValueError('搜索尚未满足确定性收尾条件')
-        goal_met = progress['search_status'] == 'target_found'
+        goal_met = progress['search_status'] in ('target_found', 'photo_completed', 'route_completed') and parent_goal_complete is not False
         if goal_met and s['end_behavior'] == 'hold':
             self.close_activity(owner, 'normal_completion', progress['search_status'])
             s['termination'].update(policy_source='program_task_contract', purpose='goal_completion')
@@ -843,7 +1044,7 @@ class AdaptiveSearch:
         # choosing hold during initialization cannot leave an unmet task aloft.
         s['end_behavior'] = 'land'
         state = self.client.state()
-        self.validate_state(owner, state)
+        self.validate_state(owner, state, allow_skill_handoff=parent_goal_complete is not None)
         if getattr(type(self.client), 'require_search_finish', None):
             self.client.require_search_finish(owner, state)
         s['finishing_mission_id'] = (state.get('mission') or {}).get('id')
@@ -871,6 +1072,8 @@ class AdaptiveSearch:
         complete = finished and (summary["end_behavior"] == "hold" or
                                  (state.get("armed") is False and state.get("landed_state") == 1))
         s = self.sessions[owner]
+        if s.get('execution_mode') == 'orchestrated' and not s.get('finish_result'):
+            complete = False
         if complete and self.is_nbv(owner) and s.get('nbv_bound') and not s.get('nbv_released'):
             self.client.request('/navigation/search-release', {'owner': list(owner)})
             s['nbv_released'] = True

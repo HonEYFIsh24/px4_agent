@@ -13,6 +13,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from mission import MAX_ALTITUDE, MissionError, PathUnavailable
+from search_limits import SEARCH_RADIUS_M, grid_dimensions
 
 
 def transform_pose(element):
@@ -131,8 +132,10 @@ class StaticNavigator:
         from stereo_localization import quaternion_rotation, matvec, iris_left_optical_to_body, vector
         if self.origin is None or self.registration_id is None:
             raise MissionError('visibility requires an actual sortie registration')
-        if radius != 12. or resolution != .5:
-            raise MissionError('MVP visibility grid requires radius 12m and resolution 0.5m')
+        try:
+            rows,cols = grid_dimensions(radius,resolution)
+        except ValueError as exc:
+            raise MissionError(str(exc))
         centre = vector(grid_origin_xy, 2, 'grid origin ENU')
         rotation = quaternion_rotation(pose['orientation_xyzw'])
         offset = matvec(rotation, iris_left_optical_to_body()['translation_m'])
@@ -140,15 +143,15 @@ class StaticNavigator:
         camera_world = self.to_world(camera)
         ground = self.ground_world_z-self.origin[2]
         eligible, visible, in_fov = [], [], 0
-        for row in range(48):
-            for col in range(48):
-                point = [centre[0]-12+(col+.5)*.5, centre[1]-12+(row+.5)*.5, ground]
+        for row in range(rows):
+            for col in range(cols):
+                point = [centre[0]-radius+(col+.5)*resolution, centre[1]-radius+(row+.5)*resolution, ground]
                 world = self.to_world([*point[:2], ground+.01])
-                if (math.dist(point[:2], centre) > 12 or
+                if (math.dist(point[:2], centre) > radius or
                     any(not self.bounds[0][i] <= world[i] <= self.bounds[1][i] for i in (0,1)) or
                     any(intersects(world, world, low, high) for low,high in self.raw_boxes)):
                     continue
-                index = row*48+col
+                index = row*cols+col
                 eligible.append(index)
                 if not project_ground_point(camera_info, pose, point, 10.)['inside_fov_and_range']:
                     continue
@@ -160,7 +163,7 @@ class StaticNavigator:
             'registration': {'world_from_enu_origin_m': list(self.origin), 'world_from_enu_yaw_rad': self.yaw,
                              'ground_world_z_m': self.ground_world_z},
             'grid': {'origin_xy_enu_m': centre, 'radius_m': radius, 'resolution_m': resolution,
-                     'rows': 48, 'cols': 48, 'ground_enu_z_m': ground},
+                     'rows': rows, 'cols': cols, 'ground_enu_z_m': ground},
             'eligible_cell_ids': eligible, 'visible_cell_ids': visible,
             'in_fov_cell_count': in_fov, 'occluded_cell_count': in_fov-len(visible),
             'camera_origin_enu_m': camera,
@@ -207,8 +210,8 @@ class StaticNavigator:
         from stereo_localization import vector, finite
         origin = None if search_origin_xy is None else vector(search_origin_xy, 2, 'search origin')
         radius = finite(search_radius_m, 'search radius')
-        if not 0 < radius <= 12:
-            raise MissionError('search radius must be in (0,12] metres')
+        if not 0 < radius <= SEARCH_RADIUS_M:
+            raise MissionError('search radius must be in (0,30] metres')
         def permitted(p):
             if origin is None:
                 return True

@@ -8,7 +8,7 @@ CONTROL_UI="${PX4_AGENT_CONTROL_UI:-web}"
 READY_TIMEOUT=150
 LAND_TIMEOUT=90
 ENV_FILE=''
-WORLD_FILE="${PX4_AGENT_WORLD:-$PROJECT_DIR/scene/worlds/obstacle_yard.world}"
+WORLD_FILE="${PX4_AGENT_WORLD:-$PROJECT_DIR/scene/test_environments/courtyard_spacious.world}"
 USE_EXISTING_MASTER=0
 EV_PROFILE="${PX4_AGENT_EV_PROFILE:-shadow}"
 EV_TEST_FAULTS=0
@@ -21,7 +21,7 @@ usage() {
 
 启动本机 PX4 + Gazebo + MAVROS、ROS 执行器、独立 VINS-Fusion 和中文页面。
   --env-file FILE       将模型配置文件交给页面；默认复用项目/已有 ROS Agent 配置
-  --world-file FILE     Gazebo 世界；默认使用包含障碍墙的复杂物流园区
+  --world-file FILE     Gazebo 世界；默认使用扩大后的宽敞庭院
   --port PORT           页面端口（默认 8080）；执行器固定为 127.0.0.1:8765
   --control-ui MODE     web（默认）或 desktop（原生桌面窗口）
   --ready-timeout SEC   等待飞控就绪的总时间（默认 150 秒）

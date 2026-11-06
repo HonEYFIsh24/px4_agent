@@ -60,11 +60,14 @@ class StereoReports:
         return {'status': 'ok', 'pair_id': identifier, 'targets': results,
                 'historical_observation': True, 'report_delay_wall_s': elapsed}
 
-    def observation_metadata(self, identifier):
+    def observation_metadata(self, identifier, max_age_wall_s=None):
         """Immutable capture provenance for geometric visibility; never recapture or relabel."""
         with self.lock:
+            if max_age_wall_s is not None and (type(max_age_wall_s) not in (int, float)
+                    or not 0 < max_age_wall_s <= self.ttl):
+                raise ValueError('invalid stricter observation age bound')
             frame = self.frames.get(identifier)
-            if not frame or self.clock()-frame['created'] > self.ttl:
+            if not frame or self.clock()-frame['created'] > (self.ttl if max_age_wall_s is None else max_age_wall_s):
                 raise ValueError('stereo observation is absent or expired')
             pair = frame['pair']
             return {key: copy.deepcopy(pair[key]) for key in ('stamp_sim_s', 'body_pose_enu',

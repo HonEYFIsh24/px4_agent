@@ -1,3 +1,4 @@
+import threading
 import unittest
 from unittest import mock
 from scene_config import load_scene, OBSTACLE_WORLD
@@ -31,7 +32,10 @@ class StaticBridgeTests(unittest.TestCase):
         self.c.ev_guard.snapshot.return_value = {'adapter': {'epoch': 0},
             'ekf': {'local_position_reset_counters': EPOCH['ekf_counters']}}
         result = self.c.observation_geometry(snapshot['stereo_pair_id'], [0., 0.])
-        self.assertEqual(result['visible_cell_ids'], geometry['visible_cell_ids'])
+        current_geometry = nav.observation_visibility(snapshot['body_pose_enu'],snapshot['camera_intrinsics'],
+            [0.,0.],radius=30.,resolution=1.)
+        self.assertEqual(result['visible_cell_ids'], current_geometry['visible_cell_ids'])
+        self.assertEqual(result['grid']['rows'],60)
         self.assertEqual(result['body_pose_enu'], snapshot['body_pose_enu'])
         self.assertIsNone(self.c.worker)
         nav.registration_id = 'another-registration'
@@ -271,7 +275,7 @@ class StaticBridgeTests(unittest.TestCase):
         with mock.patch.object(nav, 'plan', wraps=nav.plan) as planner:
             self.c.move_static([1., 0., 4.])
         self.assertEqual(planner.call_args.kwargs['search_origin_xy'], [0., 0.])
-        self.assertEqual(planner.call_args.kwargs['search_radius_m'], 12.)
+        self.assertEqual(planner.call_args.kwargs['search_radius_m'], 30.)
         self.assertTrue(self.c.mission['navigation_plans'][0]['plan']['full_route_within_search_volume'])
 
     def test_active_nbv_search_cannot_bypass_ticket_with_generic_goto(self):
@@ -363,6 +367,91 @@ class StaticBridgeTests(unittest.TestCase):
                         [{'id':'view_001','position_enu_m':[1.,0.,4.]}], context)
                 self.assertEqual(self.c.search_authority().tickets, {})
                 self.assertIsNone(self.c.worker)
+
+    def test_path_precheck_acquires_next_actual_aligned_callback_without_flight(self):
+        nav, identity = self.prepare_viewpoint_capture()
+        self.c.home = [0., 0., 0.]
+        context = {'owner': ['thread','task'], 'map_revision': 'b'*64, 'batch_id': 'a'*32}
+        self.c.evaluate_viewpoints('context', 'pair', [0.,0.], identity, [], context)
+        self.c.gazebo_history[-1]['stamp_sim_s'] = 9.92  # Actual failure: 80 ms offset.
+        nav.last_plan = {'executing': 'preserve'}
+        acquired = threading.Event()
+        def next_callback():
+            with self.c.lock:
+                self.c.gazebo_history.append({**self.c.gazebo_history[-1], 'stamp_sim_s': 10.})
+                self.c.gazebo_time = self.fixture.fixture.wall_time
+                acquired.set()
+        callback = threading.Thread(target=next_callback, daemon=True)
+        # Nested ownership verifies Condition releases the whole RLock, so ROS
+        # callbacks and operator actions can still run during acquisition.
+        with self.c.lock:
+            callback.start()
+            result = self.c.evaluate_viewpoints('paths', 'pair', [0.,0.], identity,
+                [{'id':'view_001','position_enu_m':[1.,0.,4.]}], context)
+        callback.join(timeout=1)
+        self.assertTrue(acquired.is_set())
+        self.assertIn('execution_ticket', result['results'][0])
+        self.assertEqual(nav.last_plan, {'executing': 'preserve'})
+        self.assertIsNone(self.c.worker)
+        self.assertIsNone(self.c.mission)
+
+    def test_alignment_timeout_and_stale_source_issue_no_tickets(self):
+        for fault in ('offset', 'stale', 'missing'):
+            with self.subTest(fault=fault):
+                self.c._search_authority = None
+                _, identity = self.prepare_viewpoint_capture()
+                context = {'owner': ['thread','task'], 'map_revision': 'b'*64, 'batch_id': 'a'*32}
+                self.c.evaluate_viewpoints('context', 'pair', [0.,0.], identity, [], context)
+                self.c.gazebo_history[-1]['stamp_sim_s'] = 9.92
+                if fault == 'stale': self.c.gazebo_time = self.fixture.fixture.wall_time-2
+                if fault == 'missing': self.c.gazebo_history.clear()
+                began = self.fixture.fixture.wall_time
+                def elapsed(seconds): self.fixture.fixture.wall_time += seconds
+                with mock.patch.object(nav_fixture.bridge.threading, 'Condition') as condition:
+                    condition.return_value.wait.side_effect = elapsed
+                    with self.assertRaises(MissionError):
+                        self.c.evaluate_viewpoints('paths', 'pair', [0.,0.], identity,
+                            [{'id':'view_001','position_enu_m':[1.,0.,4.]}], context)
+                    if fault == 'offset':
+                        self.assertGreaterEqual(self.fixture.fixture.wall_time-began, .25)
+                        self.assertLessEqual(self.fixture.fixture.wall_time-began, .251)
+                    else:
+                        condition.return_value.wait.assert_not_called()
+                self.assertEqual(self.c.search_authority().tickets, {})
+                self.assertIsNone(self.c.worker)
+                self.assertIsNone(self.c.mission)
+
+    def test_alignment_wait_rechecks_epoch_owner_mission_registration_and_drift(self):
+        for fault in ('epoch', 'operator_stop', 'mission_running', 'registration', 'drift'):
+            with self.subTest(fault=fault):
+                self.c.mission = None
+                self.c._search_authority = None
+                nav, identity = self.prepare_viewpoint_capture()
+                context = {'owner': ['thread','task'], 'map_revision': 'b'*64, 'batch_id': 'a'*32}
+                self.c.evaluate_viewpoints('context', 'pair', [0.,0.], identity, [], context)
+                self.c.gazebo_history[-1]['stamp_sim_s'] = 9.92
+                def changed(_):
+                    if fault == 'epoch': self.c.ev_guard.snapshot.return_value['adapter']['epoch'] = 1
+                    elif fault == 'operator_stop': self.c.search_authority().revoke()
+                    elif fault == 'mission_running': self.c.mission = {'status': 'running'}
+                    elif fault == 'registration': nav.registration_id = 'changed'
+                    else: self.fixture.set_pose([.5,0.,3.])
+                with mock.patch.object(nav_fixture.bridge.threading, 'Condition') as condition:
+                    condition.return_value.wait.side_effect = changed
+                    with self.assertRaises(MissionError):
+                        self.c.evaluate_viewpoints('paths', 'pair', [0.,0.], identity,
+                            [{'id':'view_001','position_enu_m':[1.,0.,4.]}], context)
+                    condition.return_value.wait.assert_called_once()
+                self.assertEqual(self.c.search_authority().tickets, {})
+                self.assertIsNone(self.c.worker)
+
+    def test_final_execution_still_rejects_time_offset_after_valid_ticket(self):
+        _, context, ticket = self.owned_viewpoint()
+        self.c.gazebo_history[-1]['stamp_sim_s'] -= .08
+        with self.assertRaisesRegex(MissionError, 'time aligned'):
+            self.c.execute_viewpoint(context['owner'], context['batch_id'], context['map_revision'], 'view_001', ticket)
+        self.assertIsNone(self.c.worker)
+        self.assertIsNone(self.c.mission)
 
     def test_scene_can_still_reject_changed_conditions_at_final_submission(self):
         _, context, ticket = self.owned_viewpoint()

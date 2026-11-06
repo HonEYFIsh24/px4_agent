@@ -425,9 +425,9 @@ class DesktopWindow:
                     labels = {"searching": "自主搜索中", "target_found": "已发现目标",
                               "budget_exhausted": "搜索预算已结束", "no_reachable_view": "没有可到达的新观察点",
                               "failed": "搜索已终止"}
-                    text += "\n\n{} · 目标：{} · 已观察 {}/8 次 · 已用 {:.0f} 秒".format(
+                    text += "\n\n{} · 目标：{} · 已观察 {}/{} 次 · 已用 {:.0f} 秒".format(
                         labels.get(progress["search_status"], progress["search_status"]), progress.get("query", "—"),
-                        len(progress.get("observations", [])), progress.get("elapsed_seconds", 0))
+                        len(progress.get("observations", [])), progress.get('max_observations', '—'), progress.get("elapsed_seconds", 0))
                     if command['status'] == 'running':
                         phase = {'capture_scene_then_report_scene': '正在采图、分析',
                                  'observe_target_search_view': '正在换位、采图与分析',

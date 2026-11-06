@@ -57,15 +57,21 @@ def multiview_search_result(command):
     last = progress[-1]
     reviews = [e for e in command.get('target_confirmation_events', [])
                if e.get('outcome') in ('confirmed', 'rejected', 'unconfirmed')]
-    confirmed = last.get('search_status') == 'target_found' and any(e['outcome'] == 'confirmed' for e in reviews)
+    confirmed = (last.get('target_visual_confirmed', last.get('search_status') == 'target_found')
+                 and any(e['outcome'] == 'confirmed' for e in reviews))
     outcome = {'target_confirmed': confirmed, 'query': last.get('query'),
                'search_status': last.get('search_status'), 'review_count': len(reviews),
-               'observation_count': len(command.get('perceptions', [])),
+               'observation_count': sum(p.get('status') == 'ok' for p in command.get('perceptions', [])),
                'basis': 'structured_search_and_confirmation_tools'}
     reply = ('本次多视角确认流程已确认目标：'+str(last.get('query'))+'。' if confirmed else
              '本次搜索尚未完成目标的多视角确认。')
     if last.get('search_status') == 'budget_exhausted':
         reply += '搜索预算已用尽。'
+    if (last.get('task_contract') or {}).get('target_observation_required'):
+        observation = last.get('target_observation') or {}
+        outcome['target_observation_completed'] = observation.get('completed') is True
+        reply += ('已取得满足距离与构图要求的目标观察照片。' if outcome['target_observation_completed'] else
+                  '尚未取得满足距离与构图要求的目标观察照片。')
     reply += '已保存{}次观察报告，完成{}次候选复核。'.format(outcome['observation_count'], len(reviews))
     if not confirmed and reviews:
         reply += '候选复核未满足确认条件，不能把模型的目标描述当成已确认结果。'
@@ -142,6 +148,9 @@ class AuditedClient:
             if (not command or owner != (self.application.agent_thread_id, command['id'])
                     or command['interrupted']):
                 raise ValueError('任务契约不属于当前活动指令')
+            parent = getattr(self, 'task_runtime', None)
+            if parent and owner in parent.sessions:
+                return parent.stage_contract(owner)
             return assess_task(command.get('task_contract', {}).get('original_request', command['prompt']))
 
     def require_search_finish(self, owner, state):
@@ -191,6 +200,15 @@ class AuditedClient:
         with self.application.lock:
             command = self.application.current_command
             if command is not None:
+                if tool_name == 'task_runtime':
+                    state = self.application.clean_perception(result)
+                    state['original_instruction'] = command['prompt']
+                    if state.get('plan'):
+                        state['plan']['original_instruction'] = command['prompt']
+                    command['task_runtime'] = state
+                    command.setdefault('task_runtime_events',[]).append(copy.deepcopy(state))
+                    if state.get('result'):
+                        command['task_runtime_result'] = copy.deepcopy(state['result'])
                 if tool_name in ('model_end_request', 'search_termination'):
                     command.setdefault('termination_events', []).append({'event': tool_name,
                         'wall_s': time.time(), 'result': self.application.clean_perception(result)})
@@ -308,18 +326,38 @@ class AuditedClient:
             with self.application.control_lock:
                 with self.application.lock:
                     command = self.application.current_command
-                    if command and assess_task(command['prompt'])['admission'] == 'rejected':
+                    if command and (command.get('task_contract') or assess_task(command['prompt']))['admission'] == 'rejected':
                         raise RuntimeError('完整任务能力匹配未通过，禁止执行模型请求')
                     if command is not None and command.get("interrupted"):
                         raise RuntimeError("操作员已中断此指令，禁止继续提交飞行动作")
-                    if path in ("/mission", "/land", "/stop", '/navigation/execute-viewpoint', '/navigation/photo-action') and command is not None and command["mode"] == "observe":
+                    if path in ("/mission", "/land", "/stop", '/navigation/execute-viewpoint', '/navigation/photo-action', '/navigation/execute-goal-pose', '/navigation/execute-goal-land') and command is not None and command["mode"] == "observe":
                         raise RuntimeError("本次指令仅允许视觉观察，禁止提交飞行动作")
-                    if path in ("/mission", '/navigation/execute-viewpoint', '/navigation/photo-action') and command is not None and command.get("vision_failure"):
+                    if path in ("/mission", '/navigation/execute-viewpoint', '/navigation/photo-action', '/navigation/execute-goal-pose', '/navigation/execute-goal-land') and command is not None and command.get("vision_failure"):
                         raise RuntimeError("本次视觉分析已失败，禁止据此继续提交飞行任务")
-                    if path in ("/mission", '/navigation/execute-viewpoint', '/navigation/photo-action') and command is not None and command.get('search_initialization_failure'):
+                    if path in ("/mission", '/navigation/execute-viewpoint', '/navigation/photo-action', '/navigation/execute-goal-pose', '/navigation/execute-goal-land') and command is not None and command.get('search_initialization_failure'):
                         raise RuntimeError('自主搜索初始化失败，禁止继续提交飞行任务')
-                    if path in ("/mission", '/navigation/execute-viewpoint', '/navigation/photo-action') and command is not None and command["flight_failure"]:
+                    if path in ("/mission", '/navigation/execute-viewpoint', '/navigation/photo-action', '/navigation/execute-goal-pose', '/navigation/execute-goal-land') and command is not None and command["flight_failure"]:
                         raise RuntimeError("此指令的飞行任务已失败，禁止自动重试；请查看状态后发布新指令")
+                    if path in ('/navigation/goal-poses', '/navigation/execute-goal-pose', '/navigation/execute-goal-land', '/navigation/authorize-goal-land'):
+                        parent = getattr(self, 'task_runtime', None)
+                        owner = (self.application.agent_thread_id, command['id']) if command else None
+                        if parent is None or owner not in parent.sessions or parent.sessions[owner].get('result'):
+                            raise RuntimeError('目标位姿请求需要活动父任务及当前阶段')
+                        context = payload.get('goal_context') or {}
+                        stage = parent.stage(owner)
+                        if (stage is None or stage.kind not in parent.goal_stage_types
+                                or context.get('stage_id') != stage.stage_id
+                                or context.get('terminal_action') != stage.kind
+                                or context.get('plan_revision') != parent.sessions[owner]['plan'].plan_revision):
+                            raise RuntimeError('目标位姿请求阶段或计划版本已失效')
+                        from task_runtime.memory import SharedTargetMemory
+                        semantic = parent.skills.search.semantic_maps.maps[owner]
+                        target = parent.sessions[owner]['targets'].get(stage.target_ref) or {}
+                        if (context.get('target_id') != target.get('target_id')
+                                or context.get('target_revision') != SharedTargetMemory(semantic).view(target['target_id'])['target_revision']):
+                            raise RuntimeError('目标位姿请求实例或目标版本已失效')
+                        if path in ('/navigation/authorize-goal-land', '/navigation/execute-goal-land') and stage.kind != 'relative_land':
+                            raise RuntimeError('当前用户阶段没有目标相对降落授权')
                     if path == '/navigation/photo-action':
                         owned = {e['mission']['id'] for e in (command or {}).get('flight_missions', [])
                                  if e.get('path') == '/mission' and isinstance(e.get('mission'), dict)
@@ -350,11 +388,11 @@ class AuditedClient:
                     validate_photo_rejection(result, payload, self.application.client.state())
                     return self.record('photo_plan_rejection', result)
         except Exception as exc:
-            if path in ("/mission", "/land", '/navigation/execute-viewpoint', '/navigation/photo-action'):
+            if path in ("/mission", "/land", '/navigation/execute-viewpoint', '/navigation/photo-action', '/navigation/execute-goal-pose', '/navigation/execute-goal-land'):
                 self.record("land_drone" if path == "/land" else "execute_mission",
                             {"status": "error", "error": str(exc)})
             raise
-        if path in ('/navigation/execute-viewpoint', '/navigation/photo-action'):
+        if path in ('/navigation/execute-viewpoint', '/navigation/photo-action', '/navigation/execute-goal-pose', '/navigation/execute-goal-land'):
             # Keep the existing accepted/waited mission ownership contract. The
             # transport endpoint remains explicit and no coordinates came from LLM.
             result = {**result, 'accepted_via': path}
@@ -424,6 +462,9 @@ class WebApplication:
         self.commands = {}
         self.active_id = None
         self.current_command = None
+        self.task_runtime_mode = os.getenv('UAV_TASK_RUNTIME','legacy')
+        if self.task_runtime_mode not in ('legacy','staged'):
+            raise ValueError('UAV_TASK_RUNTIME must be legacy or staged')
         self.audited_client = AuditedClient(self)
         self.agent = agent_factory(self.audited_client, model_config) if agent_factory and model_config else None
         self.agent_thread_id = "web-operator-" + uuid.uuid4().hex
@@ -495,6 +536,9 @@ class WebApplication:
                        "vision_failure": None, "model_calls": [], "safety_landing": None, "tool_errors": [],
                        "perceptions": [], "min_observations": min_observations, "flight_missions": []}
             command['task_contract'] = assess_task(prompt)
+            if self.task_runtime_mode == 'staged' and self.agent_architecture == 'single_vlm' and mode == 'task':
+                command['task_contract'].update(admission='accepted', reason=None,
+                    capability_mode='staged_decomposition', runtime_schema_version=1)
             if command['task_contract']['admission'] == 'rejected':
                 command.update(status='failed', error=command['task_contract']['reason'],
                                reply=command['task_contract']['reason'], finished_at=time.time(),
@@ -523,6 +567,7 @@ class WebApplication:
 
     def run_command(self, command):
         status, error, reply, mission = "succeeded", None, "", None
+        termination_source = 'safety_fault'
         photo_unmet_only = False
         search_unmet_only = False
         try:
@@ -588,7 +633,7 @@ class WebApplication:
             if observed < command["min_observations"]:
                 error = error or "有效观察报告不足：需要{}份，实际{}份".format(command["min_observations"], observed)
             photo_progress = command.get('photo_progress')
-            if photo_progress and photo_progress.get('photo_status') != 'met':
+            if photo_progress and photo_progress.get('photo_status') != 'met' and not command.get('task_runtime_result'):
                 photo_unmet_only = (error is None and photo_progress.get('photo_status') in ('limited', 'budget_exhausted')
                     and not photo_progress.get('activity_closed') and not command['interrupted']
                     and not command['flight_failure'] and not command['vision_failure']
@@ -609,13 +654,18 @@ class WebApplication:
             if error:
                 status = "failed"
         except Exception as exc:
+            if getattr(self.audited_client, 'task_runtime', None):
+                from task_runtime.contracts import TaskProtocolError
+                if isinstance(exc, TaskProtocolError):
+                    termination_source = 'protocol_error'
             status, error = "failed", self.clean_error(exc)
         finally:
             # A failed model cannot be relied on to invoke the remaining landing tool.
             # Cancel this command's running worker even before it arms. Otherwise
             # a failed command could leave a delayed takeoff executing afterwards.
             if status == 'failed' and not command['interrupted'] and not search_unmet_only:
-                self.close_search_activity(command['id'], 'protocol_error' if command.get('flight_failure_stage') == 'search_mission_precheck' else 'safety_fault', error or 'Task failed')
+                self.close_search_activity(command['id'], 'protocol_error' if command.get('flight_failure_stage') == 'search_mission_precheck'
+                    else termination_source, error or 'Task failed')
             if status == "failed" and self.agent_architecture == "single_vlm" and command["mode"] == "task" and not command["interrupted"]:
                 accepted_ids={event['mission']['id'] for event in command.get('flight_missions',[])
                     if event.get('path')=='/mission' and isinstance(event.get('mission'),dict)
@@ -741,6 +791,14 @@ class WebApplication:
                         reply += "\n指令失败后，独立执行器已完成安全降落并上锁。" if command["safety_landing"]["status"] == "ok" else "\n安全降落未确认完成，请查看飞行状态并使用立即降落。"
                     elif (command.get('photo_return') or {}).get('status') == 'ok':
                         reply += '\n构图未达标；程序已按验证路径返航至起飞点，并确认落地上锁。'
+                parent = getattr(self.audited_client, 'task_runtime', None)
+                owner = (self.agent_thread_id, command['id'])
+                if parent and owner in parent.sessions:
+                    if not parent.sessions[owner].get('result'):
+                        parent.abort(owner, error or 'Parent graph ended without verified completion',
+                            'operator' if command['interrupted'] else
+                            termination_source,
+                            'grounded_disarmed' if (command.get('safety_landing') or {}).get('status') == 'ok' else 'not_verified')
                 if command['mode'] == 'task':
                     verified = multiview_search_result(command)
                     if verified is not None:
@@ -759,7 +817,9 @@ class WebApplication:
                         if search_unmet_only:
                             prefix = search_reply + '\n' if verified is not None else ''
                             reply = (prefix + '用户目标未完成；搜索流程已结束，状态为 ' + str(outcome['search_status'])
-                                     + '。已核实落地上锁；收尾完成不代表已找到目标。')
+                                     + '。已核实落地上锁；收尾完成不代表用户要求已全部完成。')
+                if command.get('task_runtime_result'):
+                    reply = parent.final_text(command['task_runtime'])
                 command.update(status=status, reply=reply, error=self.clean_error(error) if error else None,
                                finished_at=time.time())
                 if mission:

@@ -324,7 +324,14 @@ class ProductionSearchGraphTests(unittest.TestCase):
                 self.assertEqual(summary["observed_views"], 0)
                 self.assertEqual(summary["targets"], [])
                 self.assertFalse(any(event["tool"] == "search_progress" for event in command.get("search_events", [])))
-                self.assertTrue(any(item["tool"] == "execute_mission" for item in command["tool_errors"]))
+                if failure == "bbox":
+                    # Schema rejection ends this owned legacy flight before
+                    # the scripted stale goto is even offered to the model.
+                    self.assertEqual(command["perception"]["status"], "error")
+                    self.assertEqual(len(model.calls), len(prefix())+1)
+                    self.assertEqual(command["safety_landing"]["status"], "ok")
+                else:
+                    self.assertTrue(any(item["tool"] == "execute_mission" for item in command["tool_errors"]))
                 self.assertFalse(fake.state()["armed"])
                 self.assertEqual(fake.state()["landed_state"], 1)
                 self.assert_private(command)

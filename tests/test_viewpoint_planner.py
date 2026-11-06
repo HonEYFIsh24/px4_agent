@@ -105,6 +105,22 @@ class ViewpointTests(unittest.TestCase):
         self.assertIsNone(blocked['selected_id'])
         self.assertEqual(blocked['ranked_candidates'], [])
 
+    def test_confirmation_history_accepts_twelve_observers_and_rejects_over_budget(self):
+        from target_confirmation import confirmation_goal
+        from test_semantic_map import target
+        frame, report, geometry = observation(self.nav, targets=[target(self.frame, [5.,0.,1.], label='蓝色油桶')])
+        semantic_map = SemanticMap(OWNER, geometry, query='蓝色油桶')
+        semantic_map.update_observation(frame, report, geometry)
+        goal = confirmation_goal(semantic_map, next(iter(semantic_map.landmarks)), frame['capture_id'])
+        goal['avoid_observer_positions'] = [[-2., i*.25, 3.] for i in range(12)]
+        snapshot = frame['snapshot']
+        backend = StaticViewpointEvaluator(self.nav, snapshot['body_pose_enu'], snapshot['camera_intrinsics'],
+            snapshot['coordinate_epoch'], probe_points_enu_m=goal['probe_points_enu_m'])
+        self.assertTrue(ViewpointPlanner().evaluate(semantic_map, backend, goal)['ranked_candidates'])
+        goal['avoid_observer_positions'].append([0.,0.,3.])
+        with self.assertRaisesRegex(ViewpointError, 'bounded list'):
+            ViewpointPlanner().evaluate(semantic_map, backend, goal)
+
     def test_candidates_sample_three_heights_and_eight_directions_without_duplicates(self):
         p = ViewpointPlanner()
         for height in (1., 3., 19., 20.):
@@ -115,9 +131,9 @@ class ViewpointTests(unittest.TestCase):
                 self.assertEqual(c['fixed_yaw_enu_rad'], .7)
                 self.assertTrue(1.5 <= c['position_enu_m'][2] <= 19.5)
                 self.assertGreaterEqual(math.dist(c['position_enu_m'], [0., 0., height]), .5)
-        items = p.generate_candidates({'position_m': [11., 0., 3.]}, [0., 0.], 0.)
+        items = p.generate_candidates({'position_m': [29., 0., 3.]}, [0., 0.], 0.)
         self.assertLess(len(items), 50)
-        self.assertTrue(all(math.hypot(*c['position_enu_m'][:2]) <= 12.+1e-9 for c in items))
+        self.assertTrue(all(math.hypot(*c['position_enu_m'][:2]) <= 30.+1e-9 for c in items))
 
     def test_boundary_heading_candidates_also_keep_observation_margin(self):
         planner = ViewpointPlanner(ViewpointConfig(heading_mode='discrete'))

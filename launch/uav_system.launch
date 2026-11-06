@@ -9,7 +9,7 @@
   <arg name="web_port" default="8080"/>
   <arg name="control_ui" default="web"/>
   <arg name="env_file" default=""/>
-  <arg name="world" default="$(find px4_agent)/scene/worlds/obstacle_yard.world"/>
+  <arg name="world" default="$(find px4_agent)/scene/test_environments/courtyard_spacious.world"/>
   <arg name="ready_timeout" default="150"/>
   <arg name="land_timeout" default="90"/>
   <arg name="ev_profile" default="shadow"/>

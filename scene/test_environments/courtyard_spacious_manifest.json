@@ -1,0 +1,49 @@
+{
+  "id": "courtyard_spacious",
+  "world_sha256": "b624fb8ceabc2d56b8979b3a792678271bbc5165f9bcfb5ce627079b1d324f6a",
+  "ground_plane": {
+    "known": true,
+    "z_m": 0.003,
+    "bounds_xy_m": [
+      -38.0,
+      -38.0,
+      38.0,
+      38.0
+    ]
+  },
+  "flight_region": {
+    "frame": "gazebo_world",
+    "bounds_min_m": [
+      -34.0,
+      -34.0,
+      -0.2
+    ],
+    "bounds_max_m": [
+      34.0,
+      34.0,
+      20.6
+    ],
+    "margin_m": 0.6
+  },
+  "takeoff_pad": {
+    "center_world_m": [
+      0,
+      0,
+      0.003
+    ],
+    "radius_m": 1.0,
+    "vertical_clearance_m": 20.0
+  },
+  "navigation": {
+    "enabled": true,
+    "method": "static_3d",
+    "bounds_xy_m": [
+      -34.0,
+      -34.0,
+      34.0,
+      34.0
+    ],
+    "flight_altitude_m": 3.0,
+    "minimum_clearance_m": 1.0
+  }
+}

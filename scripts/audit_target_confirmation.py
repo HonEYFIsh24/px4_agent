@@ -135,16 +135,65 @@ def audit(result_file, output, require_confirmed=False, require_rejected=False):
     found = any((e.get('result') or {}).get('search_status') == 'target_found'
                 for e in command.get('search_events', []))
     checks['found_requires_confirmed_review'] = not found or any(r['outcome'] == 'confirmed' for r in reviews)
+    progress = [e['result'] for e in command.get('search_events', [])
+                if isinstance(e.get('result'), dict) and e['result'].get('target_confirmation_mode') == 'multiview']
+    last = progress[-1] if progress else {}
+    visual_confirmed = last.get('target_visual_confirmed', found)
+    confirmed_evidence = any(r['outcome'] == 'confirmed' for r in reviews)
+    checks['visual_confirmation_has_review'] = not visual_confirmed or confirmed_evidence
     if any(e.get('geometry_policy') in ('clipped_regions_v2', 'clipped_regions_v3', 'bearing_hypothesis_v4', CONFIRMATION_GEOMETRY_POLICY) for e in command.get('target_confirmation_events', [])):
         outcome = command.get('search_outcome') or {}
         checks['structured_final_outcome_consistent'] = (
             type(outcome.get('target_confirmed')) is bool
-            and outcome['target_confirmed'] == (found and any(r['outcome'] == 'confirmed' for r in reviews))
+            and outcome['target_confirmed'] == (visual_confirmed and confirmed_evidence)
             and outcome.get('review_count') == len(reviews)
             and outcome.get('observation_count') == len(captures)
             and outcome.get('basis') == 'structured_search_and_confirmation_tools')
+    if (command.get('task_contract') or {}).get('target_observation_required'):
+        close = last.get('target_observation') or {}
+        completed = close.get('completed') is True
+        checks['found_requires_close_observation'] = not found or completed
+        checks['close_observation_evidence'] = True
+        if completed:
+            try:
+                from target_observation import observation_quality, RANGE_POLICY, LEGACY_RANGE_POLICY
+                identifier = close['capture_id']
+                if (not isinstance(identifier, str) or Path(identifier).name != identifier
+                        or identifier in ('.', '..') or identifier not in captures or not any(
+                        e.get('outcome') == 'confirmed' and e.get('current_target_id') == close.get('target_id')
+                        and (e.get('candidate') or {}).get('current_capture_id') == identifier
+                        for e in command.get('target_confirmation_events', []))):
+                    raise ValueError('Close observation has no confirmed current-frame association')
+                snapshot = json.loads((directory/(identifier+'.semantic-map.json')).read_text())
+                if snapshot['owner'][1] != command['id']:
+                    raise ValueError('Close observation belongs to another task')
+                semantic_map = SimpleNamespace(landmarks={l['id']: SimpleNamespace(**l) for l in snapshot['landmarks']})
+                landmark, observation = observation_for(semantic_map, close['target_id'], identifier)
+                policy = close.get('range_policy', LEGACY_RANGE_POLICY)
+                if policy == LEGACY_RANGE_POLICY and 'relative_stereo' in observation:
+                    raise ValueError('New relative-stereo evidence cannot downgrade to the legacy range policy')
+                if policy == RANGE_POLICY:
+                    archive = json.loads((directory/(identifier+'.json')).read_text())['snapshot']
+                    if any(observation[k] != archive[v] for k, v in (
+                            ('image_sha256', 'stereo_image_sha256'), ('coordinate_epoch', 'coordinate_epoch'),
+                            ('stereo_pair_id', 'stereo_pair_id'), ('body_pose_enu', 'body_pose_enu'),
+                            ('camera_info', 'camera_intrinsics'), ('stamp_sim_s', 'stamp_sim_s'))):
+                        raise ValueError('Relative range observation differs from the original capture')
+                    for side, suffix in (('left', '.jpg'), ('right', '.right.jpg')):
+                        if hashlib.sha256((directory/(identifier+suffix)).read_bytes()).hexdigest() != observation['image_sha256'][side]:
+                            raise ValueError('Relative range stereo JPEG hash differs from capture')
+                    report = next(p for p in command['perceptions'] if p.get('status') == 'ok' and p['capture_id'] == identifier)
+                    metrics = [t.get('stereo_location') for t in report['targets']
+                               if t['label'] == landmark.label and t['bbox'] == observation['bbox']]
+                    if len(metrics) != 1 or metrics[0] != observation['relative_stereo']['measurement']:
+                        raise ValueError('Relative range measurement differs from the actual saved report')
+                if close != observation_quality(landmark, observation, policy=policy) or not close['completed']:
+                    raise ValueError('Close observation differs from saved depth/framing evidence')
+            except Exception as exc:
+                checks['close_observation_evidence'] = False
+                problems.append({'stage': 'target_observation', 'reason': str(exc)})
     if require_confirmed:
-        checks['confirmed_target_required'] = any(r['outcome'] == 'confirmed' for r in reviews) and found
+        checks['confirmed_target_required'] = visual_confirmed and confirmed_evidence
     if require_rejected:
         checks['rejected_candidate_required'] = any(r['outcome'] == 'rejected' for r in reviews)
     result = {'passed': all(checks.values()), 'checks': checks, 'reviews': reviews, 'problems': problems,

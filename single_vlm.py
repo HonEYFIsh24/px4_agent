@@ -7,7 +7,7 @@ import os
 import threading
 import time
 import uuid
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -20,7 +20,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.config import get_config
-from pydantic import BaseModel, ConfigDict, Field, StrictFloat
+from pydantic import BaseModel, ConfigDict, Field, StrictFloat, model_validator
 
 from vision import finite_number, parse_observation, safe_error, target_location, text_field
 from search_tools import coordinate_epoch
@@ -36,7 +36,7 @@ SINGLE_VLM_PROMPT = """
 描述场景、寻找物体或解释目标周围环境时，先调用 get_drone_state，再调用 capture_scene，
 随后直接检查请求附带的实际图像，并必须调用 report_scene 保存已校验的结构化观察。
 capture_scene 只采图，不完成观察。没有图像或报告工具失败时，不得声称看到了目标。
-report_scene 的 capture_id 必须来自本次指令成功取得的快照，不能使用上一轮快照。
+report_scene 省略 capture_id，由程序绑定当前实际交付且尚未报告的快照；显式ID仍必须正确，不能使用上一轮快照。
 只根据该帧可见证据判断，未发现只表示当前视野未确认；不要猜测视野外或被遮挡物体。
 targets 最多8项，bbox为归一化[左,上,右,下]，0≤左<右≤1、0≤上<下≤1。
 targets必须是JSON数组，不是字符串；没有可辨认目标时使用空数组[]，不要用全零bbox占位。
@@ -87,9 +87,17 @@ class VisualTarget(BaseModel):
     model_config = ConfigDict(extra="forbid")
     label: str = Field(description="Visible target category; no invented identities")
     confidence: Optional[float] = Field(default=None, ge=0, le=1, strict=True)
-    bbox: list[StrictFloat] = Field(min_length=4, max_length=4, description="Normalized left, top, right, bottom")
+    bbox: list[Annotated[StrictFloat, Field(ge=0, le=1)]] = Field(
+        min_length=4, max_length=4,
+        description="Normalized [left, top, right, bottom]; 0 <= left < right <= 1, 0 <= top < bottom <= 1")
     surroundings: list[str] = Field(default_factory=list, max_length=12)
     position_basis: Literal["image_only", "flat_ground_marking", "visible_ground_contact"] = "image_only"
+
+    @model_validator(mode="after")
+    def ordered_bbox(self):
+        if not (self.bbox[0] < self.bbox[2] and self.bbox[1] < self.bbox[3]):
+            raise ValueError('bbox must satisfy left < right and top < bottom')
+        return self
 
 
 class PhotoEdge(BaseModel):
@@ -108,9 +116,13 @@ class PhotoEdges(BaseModel):
 
 class FrameStore:
     """Bounded in-memory frames, keyed by thread and genuine user turn."""
-    def __init__(self, client, model_config, ttl_seconds=180, max_frames=8, clock=time.monotonic):
+    def __init__(self, client, model_config, ttl_seconds=180, max_frames=8, clock=time.monotonic,
+                 frames_per_turn=2):
         self.client, self.model_config = client, model_config
         self.ttl_seconds, self.max_frames, self.clock = ttl_seconds, max_frames, clock
+        if type(frames_per_turn) is not int or frames_per_turn < 1:
+            raise ValueError('Image retention per turn must be a positive integer')
+        self.frames_per_turn = frames_per_turn
         self.frames = {}
         self.photo_tasks = {}
         self.pinned_confirmation_sources = {}
@@ -255,10 +267,11 @@ class FrameStore:
                 handle.write(encoded_record)
         with self.lock:
             self.prune()
-            # Keep only the two most recent views per turn, and bound all threads together.
+            # Legacy retains two recent views. A staged task retains its bounded
+            # observation budget so an original handoff can be reviewed later.
             pins = set(self.pinned_confirmation_sources.values())
             same = [key for key, item in self.frames.items() if item["owner"] == owner and key not in pins]
-            for key in same[:-1]:
+            for key in same[:max(0, len(same)-(self.frames_per_turn-1))]:
                 del self.frames[key]
             while len(self.frames) >= self.max_frames:
                 removable = next((key for key in self.frames if key not in pins), None)
@@ -307,7 +320,7 @@ class FrameStore:
                 after_user = True
                 continue
             name = message_value(message, "name")
-            if (not after_user or role != "tool" or name not in ("capture_scene", "observe_target_search_view", "report_scene")
+            if (not after_user or role != "tool" or name not in ("capture_scene", "observe_target_search_view", "execute_task_goal", "observe_task_photo", "report_scene")
                     or message_value(message, "status") == "error"):
                 continue
             try:
@@ -316,7 +329,7 @@ class FrameStore:
                 continue
             if not isinstance(result, dict) or result.get("status") != "ok":
                 continue
-            if name in ("capture_scene", "observe_target_search_view"):
+            if name in ("capture_scene", "observe_target_search_view", "execute_task_goal", "observe_task_photo"):
                 latest = result.get("capture_id")
                 reported = False
             elif latest and result.get("capture_id") == latest:
@@ -388,10 +401,24 @@ class SceneMiddleware(AgentMiddleware):
         from task_memory import TaskContextMemory
         self.context_memory = TaskContextMemory()
 
+    def parent_runtime(self):
+        parent = getattr(self.search_manager, 'task_runtime', None)
+        application = getattr(self.client, 'application', None)
+        if application and (application.current_command or {}).get('mode') != 'task':
+            return None
+        return parent
+
     def wrap_tool_call(self, request, handler):
         from task_contract import contract_from_messages
         contract = contract_from_messages(request.state.get('messages', []))
-        if contract and contract['admission'] == 'rejected':
+        parent = self.parent_runtime()
+        if parent:
+            parent_owner = turn_owner(request.state['messages'], request.runtime.config)
+            correction = parent.guard_tool(parent_owner, request.tool_call)
+            if correction is not None:
+                return ToolMessage(content=json.dumps(correction,ensure_ascii=False),
+                                   name=request.tool_call['name'], tool_call_id=request.tool_call['id'])
+        if not parent and contract and contract['admission'] == 'rejected':
             raise ValueError(contract['reason'])
         name = request.tool_call["name"]
         active_session = None
@@ -415,11 +442,11 @@ class SceneMiddleware(AgentMiddleware):
             if self.search_manager:
                 active_owner = turn_owner(request.state['messages'], request.runtime.config)
                 active_session = self.search_manager.adaptive.sessions.get(active_owner)
-                if active_session and active_session.get('activity_closed') and name not in (
+                if not parent and active_session and active_session.get('activity_closed') and name not in (
                         'get_drone_state', 'target_search_progress', 'execute_mission', 'land_drone'):
                     search_gate_rejected = True
                     raise ValueError('搜索活动已结束，禁止继续调用观察或移动工具')
-            if (self.search_manager and active_session and 'offered_search_tools' in active_session
+            if (not parent and self.search_manager and active_session and 'offered_search_tools' in active_session
                     and name not in ('execute_mission', 'land_drone', 'stop_drone', 'get_drone_state', 'target_search_progress')
                     and name not in active_session.get('accepted_search_tools', active_session['offered_search_tools'])):
                 search_gate_rejected = True
@@ -584,21 +611,32 @@ class SceneMiddleware(AgentMiddleware):
     def wrap_model_call(self, request, handler):
         from task_contract import contract_from_messages
         contract = contract_from_messages(request.messages)
-        if contract and contract['admission'] == 'rejected':
+        if not self.parent_runtime() and contract and contract['admission'] == 'rejected':
             return ModelResponse(result=[AIMessage(content=contract['reason'])])
         selection_frame = False
         photo_review_frame = False
         photo_selection_frame = False
+        global_reasoning_frame = False
+        object_frame_image = False
+        relation_review_image = False
         review_frames, crop_metadata, current_roi_metadata = None, None, []
         try:
             owner, frame = self.store.frame_for_request(request.messages, get_config())
+            parent = self.parent_runtime()
+            if parent:
+                original = next(message_value(m,'content','') for m in reversed(request.messages)
+                                if str(message_value(m,'id','')) == owner[1])
+                parent.ensure(owner, original)
+                parent_state = parent.advance(owner)
+                if parent_state['result']:
+                    return ModelResponse(result=[AIMessage(content=parent.final_text(parent_state))])
             session = self.search_manager.adaptive.sessions.get(owner) if self.search_manager else None
-            if session:
+            if session and not (parent and parent.is_photo_stage(owner)):
                 self.store.photo_tasks.pop(owner, None)
             elif owner not in self.store.photo_tasks:
                 query = next((message_value(m, 'content', '') for m in reversed(request.messages)
                               if str(message_value(m, 'id', '')) == owner[1]), '')
-                if is_overview_request(query):
+                if not parent and is_overview_request(query):
                     # Commands are serialized; keep bounded per-turn state, never
                     # infer ownership from a previous task's camera/report text.
                     if len(self.store.photo_tasks) >= 64:
@@ -624,13 +662,13 @@ class SceneMiddleware(AgentMiddleware):
                         or frame.get('snapshot', {}).get('coordinate_epoch') != observation.get('coordinate_epoch')):
                     raise ValueError('取景规划图像与当前已复核观察不一致')
                 photo_selection_frame = True
-            if session:
+            if session and not parent:
                 progress = self.search_manager.adaptive.summary(owner)
                 if (progress['search_status'] in ('target_found', 'budget_exhausted', 'coverage_exhausted', 'no_reachable_view')
                         and session.get('search_phase') != 'awaiting_review' and not session.get('activity_closed')):
                     self.search_manager.adaptive.finish_normal(owner)
                     frame = None
-            if session and session.get('activity_closed'):
+            if session and session.get('activity_closed') and not parent:
                 # Closing tools alone is insufficient: a provider can still emit
                 # stale/malformed tool calls from history. End the graph from
                 # verified state without a final provider round trip.
@@ -676,9 +714,35 @@ class SceneMiddleware(AgentMiddleware):
             if hasattr(self.client, "record"):
                 self.client.record("inspect_scene", failure)
             raise RuntimeError(failure["error"]) from None
+        if parent and not frame and not review_frames and not selection_frame:
+            parent.sessions[owner]['awaiting_report_capture_id'] = None
+            if (parent.sessions[owner].get('goal_state') or {}).get('phase') in ('need_object_frame', 'need_relation_review'):
+                object_frame_image = (parent.sessions[owner]['goal_state']['phase'] == 'need_object_frame')
+                relation_review_image = not object_frame_image
+                stage = parent.stage(owner)
+                reference = parent.sessions[owner]['targets'][stage.target_ref]
+                frame = self.store.get(owner, reference['capture_id'], require_delivered=True)
+            elif parent.sessions[owner]['reasoning']['mode'] == 'GLOBAL_REASONING':
+                global_reasoning_frame = True
+                if session and session['observations']:
+                    frame = self.store.get(owner, session['observations'][-1]['capture_id'], require_delivered=True)
+            else:
+                call = parent.program_call(owner)
+                if call:
+                    return ModelResponse(result=[AIMessage(content='程序依据当前任务阶段执行下一步，未调用模型。', tool_calls=[call])])
         completed = self.client.memory_records() if hasattr(self.client, 'memory_records') else None
         messages, context_metrics = self.context_memory.project(request.messages, owner, completed)
         selected_tools = [] if context_metrics['explicit_history_only'] else request.tools
+        if not parent:
+            selected_tools = [t for t in selected_tools if getattr(t,'name',None) != 'define_task_plan']
+        if parent:
+            parent.sessions[owner]['awaiting_report_capture_id'] = (
+                frame['capture_id'] if frame is not None and not review_frames and not selection_frame
+                and not global_reasoning_frame and not object_frame_image and not relation_review_image
+                and not photo_review_frame and not photo_selection_frame else None)
+            allowed = parent.allowed_tools(owner)
+            selected_tools = [t for t in selected_tools if getattr(t,'name',None) in allowed]
+            messages.append(SystemMessage(content='父任务实际状态：'+json.dumps(parent.model_context(owner),ensure_ascii=False)))
         if photo_task:
             messages.append(SystemMessage(content='当前拍摄构图进度（不是飞行结果）：'+
                 json.dumps(photo_task.summary(), ensure_ascii=False)+
@@ -696,7 +760,7 @@ class SceneMiddleware(AgentMiddleware):
                 selected_tools = [t for t in selected_tools if getattr(t, 'name', None) not in ('adjust_photo_view', 'rotate_photo_view')]
         else:
             selected_tools = [t for t in selected_tools if getattr(t, 'name', None) not in ('review_photo', 'adjust_photo_view', 'rotate_photo_view')]
-        if session:
+        if session and not parent:
             if session.get('activity_closed') or session.get('status') == 'failed':
                 selected_tools = []
             else:
@@ -714,7 +778,7 @@ class SceneMiddleware(AgentMiddleware):
                 accepted.add('capture_scene' if session['arrived'] else 'execute_target_search_view')
             session['accepted_search_tools'] = sorted(accepted)
         guidance = self.search_manager.adaptive.guidance(owner) if self.search_manager else None
-        if guidance:
+        if guidance and not parent:
             messages.append(SystemMessage(content="当前自主搜索实际进度：" + json.dumps(guidance[0], ensure_ascii=False)
                                           + "。未完成时继续调用工具，不向用户索取下一步路线；结束前按end_behavior完成收尾。"))
         if photo_review_frame:
@@ -755,18 +819,49 @@ class SceneMiddleware(AgentMiddleware):
                 '调用review_target_candidate。元数据：'+json.dumps(metadata, ensure_ascii=False)}, *review_content]))
         elif frame:
             metadata = {"capture_id": frame["capture_id"], "query": frame["query"], "camera": frame["camera"]}
-            instruction = ('此照片已有保存报告，此处重用同一张实际图像选择本批NBV候选。'
-                           '调用select_target_search_view，只返回本批batch_id、candidate_id和理由，'
-                           '不要重复report_scene或将候选预测当成新观察。' if selection_frame else
-                           '本次指令的真实相机快照。按其采集时刻观察，随后调用report_scene。')
+            if object_frame_image or relation_review_image:
+                from target_confirmation import observation_for
+                stage = parent.stage(owner)
+                reference = parent.sessions[owner]['targets'][stage.target_ref]
+                _, observed = observation_for(self.search_manager.adaptive.semantic_maps.maps[owner],
+                                              reference['target_id'], frame['capture_id'])
+                metadata.update(target_id=reference['target_id'], target_bbox=observed['bbox'])
+                instruction = (('此图是在程序终点位姿实际到达后取得的新鲜照片，已做同一目标复核。'
+                    '现在调用review_goal_region，客观判断是否实际可见车辆前脸/车头结构（front_visible），'
+                    '给出目标框内的front_box和description；若此前使用车头横向结构取证，还须标出'
+                    '同一前脸内、相近高度、图像左/右两侧分离可见表面的front_left_box/front_right_box。'
+                    '不确定则false/null，不能为了降落说已通过。'
+                    '是否到位、落区支持面和下降通道由程序核实；画面看不到地面不代表地面已安全。')
+                    if relation_review_image else
+                    ('此原图已有真实报告，此处只判断同一目标自身车头/前脸和车尾/后端。'
+                    '调用report_target_frame，分别描述可见结构，并给出归一化front_box和rear_box，'
+                    '两个框须是目标框内分离的实际前后部表面，不是图像左/右、不读取场景坐标。'
+                    '车尾不可见时rear_box为null，不必为了方向计算编造车尾。若车头正面明确可见，'
+                    '可给出front_box内相近高度、横向尽量分离且有实际纹理的front_left_box/front_right_box，'
+                    '分别对应图像左/右侧的同一前脸结构。不要用侧面或背景代替；证据不足则null。'
+                    '不要用车身中心猜前向，不声称已到车前或已降落。'))
+            elif global_reasoning_frame:
+                instruction = ('此照片已有报告，仅作有界全局重规划的关键原图，不是新观察。'
+                               '调用revise_task_plan，保留全部未完成阶段及原授权。')
+            elif selection_frame:
+                instruction = ('此照片已有保存报告，此处选择本批NBV候选。调用select_target_search_view，'
+                               '只返回batch_id、candidate_id和理由，不重复report_scene。')
+            else:
+                instruction = '本次指令的真实相机快照。按其采集时刻观察，随后调用report_scene。'
             messages.append(HumanMessage(content=[
                 {"type": "text", "text": instruction+"元数据：" + json.dumps(metadata, ensure_ascii=False)},
                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,"+frame["image_base64"]}},
             ]))
         started = time.monotonic()
         created_at = time.time()
+        parent_request_revision = parent.sessions[owner]['revision'] if parent else None
+        model_request_count = 0
         def invoke_model():
+            nonlocal model_request_count
             from photo_request_evidence import request_evidence, record_response
+            if parent:
+                parent.before_model_call(owner,parent_request_revision)
+            model_request_count += 1
             with request_evidence(photo_selection_frame, owner, frame['capture_id'] if frame else None,
                                   self.model_config) as evidence:
                 try:
@@ -784,7 +879,9 @@ class SceneMiddleware(AgentMiddleware):
             response = invoke_model()
             while (photo_task and photo_task.unfinished
                    and not any(getattr(m, 'tool_calls', []) for m in response.result)):
-                if photo_task.corrections >= 2:
+                if parent:
+                    parent.correct_unsubmitted_text(owner)
+                elif photo_task.corrections >= 2:
                     raise RuntimeError('模型提前结束尚未达标的拍摄任务；构图未完成，交由已有安全流程收尾')
                 photo_task.corrections += 1
                 if hasattr(self.client, 'record'):
@@ -804,9 +901,12 @@ class SceneMiddleware(AgentMiddleware):
             # A text-only answer must not silently end an unfinished autonomous task.
             # Bounded correction, never an automatic retry of a failed flight/tool.
             for correction in range(2):
-                guidance = self.search_manager.adaptive.guidance(owner) if self.search_manager else None
+                guidance = ((parent.snapshot(owner),False) if parent else
+                            self.search_manager.adaptive.guidance(owner) if self.search_manager else None)
                 if not guidance or guidance[1] or any(getattr(m, "tool_calls", []) for m in response.result):
                     break
+                if parent:
+                    parent.correct_unsubmitted_text(owner)
                 messages.append(SystemMessage(content="自主任务尚未完成，不能用询问或计划代替执行。"
                     "请根据以下实际进度调用下一工具；故障由独立安全流程收尾：" + json.dumps(guidance[0], ensure_ascii=False)))
                 response = invoke_model()
@@ -818,7 +918,8 @@ class SceneMiddleware(AgentMiddleware):
             failure = {"status": "error", "model": self.model_config["model"], "architecture": "single_vlm",
                        "targets": [], "limitations": [], **safe_error(exc, self.model_config)}
             trace = {"status": "error", "model": self.model_config["model"],
-                     "image_purpose": 'photo_framing_review' if photo_review_frame else 'photo_view_selection' if photo_selection_frame else 'target_confirmation' if review_frames else 'nbv_candidate_selection' if selection_frame else 'observation' if frame else None,
+                     'model_request_count': model_request_count,
+                     "image_purpose": 'goal_relation_review' if relation_review_image else 'object_frame_grounding' if object_frame_image else 'global_task_replanning' if global_reasoning_frame else 'photo_framing_review' if photo_review_frame else 'photo_view_selection' if photo_selection_frame else 'target_confirmation' if review_frames else 'nbv_candidate_selection' if selection_frame else 'observation' if frame else None,
                      "context_memory": context_metrics,
                      "created_at": created_at, "completed_at": time.time(),
                      "input_modalities": ["text", "image"] if frame else ["text"],
@@ -867,7 +968,8 @@ class SceneMiddleware(AgentMiddleware):
                         for key in fields if key in args for value in [args[key]]}
 
         trace = {"status": "ok", "model": self.model_config["model"],
-                 "image_purpose": 'photo_framing_review' if photo_review_frame else 'photo_view_selection' if photo_selection_frame else 'target_confirmation' if review_frames else 'nbv_candidate_selection' if selection_frame else 'observation' if frame else None,
+                 'model_request_count': model_request_count,
+                 "image_purpose": 'goal_relation_review' if relation_review_image else 'object_frame_grounding' if object_frame_image else 'global_task_replanning' if global_reasoning_frame else 'photo_framing_review' if photo_review_frame else 'photo_view_selection' if photo_selection_frame else 'target_confirmation' if review_frames else 'nbv_candidate_selection' if selection_frame else 'observation' if frame else None,
                  "context_memory": context_metrics,
                  "created_at": created_at, "completed_at": time.time(),
                  "input_modalities": ["text", "image"] if frame else ["text"],
@@ -881,13 +983,23 @@ class SceneMiddleware(AgentMiddleware):
                 self.store.mark_delivered(owner, item['capture_id'], trace)
         elif frame:
             self.store.mark_delivered(owner, frame["capture_id"], trace)
+        if parent:
+            parent.register_response(owner, [call for message in response.result
+                                            for call in getattr(message,'tool_calls',[])],parent_request_revision)
         if hasattr(self.client, "record"):
             self.client.record("vlm_call", trace)
         return response
 
 
 def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, model=None, store=None):
-    store = store if store is not None else FrameStore(client, model_config)
+    runtime_mode = getattr(getattr(client,'application',None), 'task_runtime_mode', os.getenv('UAV_TASK_RUNTIME','legacy'))
+    if runtime_mode not in ('legacy','staged'):
+        raise ValueError('UAV_TASK_RUNTIME must be legacy or staged')
+    if store is None:
+        from search_limits import MAX_OBSERVATIONS
+        store = (FrameStore(client, model_config, ttl_seconds=900, max_frames=MAX_OBSERVATIONS+2,
+                            frames_per_turn=MAX_OBSERVATIONS) if runtime_mode == 'staged'
+                 else FrameStore(client, model_config))
     from search_tools import build_search_tools, SEARCH_PROMPT
     from autonomous_search import AUTONOMY_PROMPT
     search_tools, search_manager = build_search_tools(client)
@@ -895,6 +1007,12 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
     semantic_maps = SemanticMapRuntime(client)
     search_manager.adaptive.semantic_maps = semantic_maps
     client.search_manager = search_manager
+    parent_runtime = None
+    if runtime_mode == 'staged':
+        from task_runtime import TaskOrchestrator
+        parent_runtime = TaskOrchestrator(client, search_manager, frame_store=store)
+        search_manager.task_runtime = parent_runtime
+        client.task_runtime = parent_runtime
 
     def audited(result, name="inspect_scene"):
         return client.record(name, result) if hasattr(client, "record") else result
@@ -958,17 +1076,24 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
             return failure(exc)
 
     @tool
-    def report_scene(capture_id: str, summary: str, targets: list[VisualTarget],
-                     limitations: list[str], runtime: ToolRuntime) -> dict:
+    def report_scene(summary: str, targets: list[VisualTarget], limitations: list[str],
+                     runtime: ToolRuntime, capture_id: str | None = None) -> dict:
         """Save structured findings from an image actually shown to this SAME VLM this turn.
 
         Normalized bbox; visible surroundings; no invented depth or world coordinates.
         Include the target and visible landmarks relevant to explicit task relations.
+        Omit capture_id: the program binds the current owned, actually delivered,
+        unreported image from the tool history. Explicit IDs remain strict checks.
         Synchronized stereo computes historical ENU surface estimates with uncertainty.
         Unavailable stereo has no invented depth; estimates are never flight points.
         """
         try:
             owner = turn_owner(runtime.state["messages"], runtime.config)
+            if capture_id is None:
+                pending_owner, pending = store.frame_for_request(runtime.state['messages'], runtime.config)
+                if pending_owner != owner or pending is None:
+                    raise RuntimeError('当前指令没有已交付且尚未报告的快照')
+                capture_id = pending['capture_id']
             frame = store.get(owner, capture_id, require_delivered=True)
             observation = parse_observation(json.dumps({"summary": summary,
                 "targets": [item.model_dump() for item in targets], "limitations": limitations}, ensure_ascii=False))
@@ -993,13 +1118,14 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
                 "analysis_duration_seconds": round(store.clock()-frame["created_monotonic"], 2),
                 "vlm_calls": store.calls(owner), **observation}
             photo_task = store.photo_tasks.get(owner)
-            if photo_task and not search_manager.adaptive.sessions.get(owner):
+            parent_photo = bool(parent_runtime and parent_runtime.is_photo_stage(owner))
+            if photo_task and (parent_photo or not search_manager.adaptive.sessions.get(owner)):
                 from photo_framing import photo_bearing_feedback
                 result['photo_bearing_feedback'] = photo_bearing_feedback(frame, result)
             result = audited(result)
             if result.get('status') != 'ok':
                 raise RuntimeError(result.get('error') or '观察报告保存失败')
-            if photo_task and not search_manager.adaptive.sessions.get(owner):
+            if photo_task and (parent_photo or not search_manager.adaptive.sessions.get(owner)):
                 photo_task.observe(frame, result)
                 result['photo_progress'] = audited(photo_task.summary(), 'photo_progress')
             progress = search_manager.consume_report(owner, frame, result)
@@ -1016,7 +1142,8 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
                                   if message_value(m, 'id') == owner[1]), '')
                 session = search_manager.adaptive.sessions.get(owner)
                 callback = ((lambda semantic_map: search_manager.adaptive.after_map_observation(owner, semantic_map, frame, result))
-                            if session and session.get('target_confirmation_mode') == 'multiview' else None)
+                            if session and (session.get('target_confirmation_mode') == 'multiview'
+                                            or session.get('handoff_evidence_profile') == 'visual_candidate') else None)
                 context = semantic_maps.observe(owner, frame, result, session, user_text, after_update=callback)
             except Exception as exc:
                 context = {'status': 'rejected', **safe_error(exc, model_config), 'passive_only': True}
@@ -1027,7 +1154,9 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
             session = search_manager.adaptive.sessions.get(owner)
             if session and session.get('target_confirmation_mode') == 'multiview':
                 result['search_progress'] = search_manager.adaptive.summary(owner)
-            if (session and session.get('nbv_auto_prepare')
+                if session.get('search_phase') == 'confirming' and session['status'] == 'searching':
+                    store.pin_confirmation_source(owner, session['confirmation']['source_capture_id'])
+            if (session and session.get('purpose') != 'photo_framing' and not session.get('program_route_verification') and session.get('nbv_auto_prepare')
                     and search_manager.adaptive.summary(owner)['search_status'] == 'searching'):
                 prepared = search_manager.adaptive.next_view(owner, 'auto', '有效报告与空间地图已保存，准备下一观察点',
                                                              preparation_source='report_scene')
@@ -1074,13 +1203,18 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
         from photo_navigation import require_photo_navigation
         owner = turn_owner(runtime.state['messages'], runtime.config)
         task = store.photo_tasks.get(owner)
-        if task is None or search_manager.adaptive.sessions.get(owner):
+        if task is None or (search_manager.adaptive.sessions.get(owner) and not (parent_runtime and parent_runtime.is_photo_stage(owner))):
             raise ValueError('没有可用的普通拍摄会话')
         task.guard_tool(tool_name, {})
         state = client.state()
         epoch = task.observations[-1]['coordinate_epoch']
         mission_id = (state.get('mission') or {}).get('id')
         require_photo_navigation(state, mission_id, epoch)
+        framing_candidate = None
+        if parent_runtime and parent_runtime.is_photo_stage(owner):
+            framing_candidate = parent_runtime.photography.plan_adjustment(owner, operation, arguments,
+                                                                          state.get('body_pose_enu') or {})
+            parent_runtime.sessions[owner]['photo_state']['framing_candidate'] = framing_candidate
         request = dict(operation=operation, expected_mission_id=mission_id,
                        expected_epoch=epoch, description=reason, **arguments)
         accepted = client.request('/navigation/photo-action', request)
@@ -1096,7 +1230,16 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
         else:
             result = audited(client.wait_for(accepted), 'execute_mission')
         if (result.get('mission') or {}).get('status') == 'succeeded':
+            if framing_candidate is not None:
+                from task_runtime.goal_planner import GoalPosePlanner
+                live = client.state()
+                if not GoalPosePlanner.verify_arrival({**framing_candidate, 'coordinate_epoch': epoch},
+                        live['position_enu_m'], live['yaw_enu_rad'], coordinate_epoch(live)):
+                    raise ValueError('Completed photography action lacks the actual planned framing pose')
+                framing_candidate['hard_constraints']['path'] = True
             task.status = 'awaiting_photo'
+            if parent_runtime and parent_runtime.is_photo_stage(owner):
+                parent_runtime.sessions[owner]['photo_state']['minimum_capture_stamp'] = client.state()['stamp_sim_s']
             audited(task.summary(), 'photo_progress')
         return result
 
@@ -1115,7 +1258,7 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
         Never authorizes flight or replaces multiview target confirmation.
         """
         owner = turn_owner(runtime.state['messages'], runtime.config)
-        if search_manager.adaptive.sessions.get(owner):
+        if search_manager.adaptive.sessions.get(owner) and not (parent_runtime and parent_runtime.is_photo_stage(owner)):
             raise ValueError('目标搜索必须使用原搜索复核流程')
         store.get(owner, capture_id, require_delivered=True)
         task = store.photo_tasks.get(owner)
@@ -1131,20 +1274,34 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
                                    next_adjustment, stop_reason, edges=edges.model_dump()), 'photo_progress')
 
     @tool
-    def review_target_candidate(source_capture_id: str, current_capture_id: str, current_target_id: str,
+    def review_target_candidate(current_target_id: str,
                                 source_supported: bool, current_supported: bool, same_object: bool,
                                 source_description: str, current_description: str, reason: str,
                                 runtime: ToolRuntime, source_uncertain: bool = False,
-                                current_uncertain: bool = False) -> dict:
+                                current_uncertain: bool = False, source_capture_id: str | None = None,
+                                current_capture_id: str | None = None) -> dict:
         """Review the injected actual image pair and source ROI, without flying.
 
         Assess visible pixels independently of prior labels/stereo. Current ID
         must be one of the current reported candidates, or empty if not seen.
+        Supported means the visible category AND required attributes match the
+        pending query, not merely that some object or the same object is visible.
         A failed hypothesis can be rejected; not-seen alone is not absence proof.
         For each image supported and uncertain are mutually exclusive: never set both true.
+        Omit source_capture_id/current_capture_id: the program binds the current
+        owned image pair. They are optional legacy checks, never replacement IDs.
         """
         try:
             owner = turn_owner(runtime.state['messages'], runtime.config)
+            session = search_manager.adaptive.sessions.get(owner) or {}
+            active = session.get('confirmation') or {}
+            if (session.get('search_phase') != 'awaiting_review'
+                    or not active.get('source_capture_id') or not active.get('current_capture_id')):
+                raise ValueError('Confirmation requires the current owned pending image pair')
+            if ((source_capture_id is not None and source_capture_id != active['source_capture_id'])
+                    or (current_capture_id is not None and current_capture_id != active['current_capture_id'])):
+                raise ValueError('Confirmation supplied IDs do not match the current owned image pair')
+            source_capture_id,current_capture_id = active['source_capture_id'],active['current_capture_id']
             if not all(isinstance(v, str) and 0 < len(v) <= 1000 for v in
                        (source_description, current_description, reason)):
                 raise ValueError('Confirmation requires actual visual descriptions and a bounded reason')
@@ -1159,10 +1316,9 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
                 current_target_id, source_supported, current_supported, same_object,
                 (source_description+'；'+current_description+'；'+reason)[:1000], source_uncertain, current_uncertain)
             session = search_manager.adaptive.sessions[owner]
-            retained = (session.get('search_phase') == 'confirming'
-                        and (session.get('confirmation') or {}).get('source_capture_id') == source_capture_id)
+            retained = session.get('search_phase') == 'confirming' and session['status'] == 'searching'
             if retained:
-                store.pin_confirmation_source(owner, source_capture_id)
+                store.pin_confirmation_source(owner, session['confirmation']['source_capture_id'])
             else:
                 store.unpin_confirmation_source(owner)
             result = audited(result, 'review_target_candidate')
@@ -1189,7 +1345,115 @@ def build_single_vlm_agent(client, model_config, flight_tools, system_prompt, mo
             model = EvidenceChatOpenAI(**model_config, **options)
         else:
             model = ChatOpenAI(**model_config, **options)
-    return create_agent(model, [*flight_tools, capture_scene, observe_target_search_view, report_scene,
-                               review_target_candidate, review_photo, adjust_photo_view, rotate_photo_view, *search_tools],
-                        system_prompt=system_prompt + SINGLE_VLM_PROMPT + SEARCH_PROMPT + AUTONOMY_PROMPT + PHOTO_PROMPT,
+    tools = [*flight_tools, capture_scene, observe_target_search_view, report_scene,
+             review_target_candidate, review_photo, adjust_photo_view, rotate_photo_view, *search_tools]
+    parent_prompt = ''
+    if parent_runtime:
+        from task_runtime.contracts import PlanProposal
+        from task_runtime.planning import PLAN_PROMPT
+
+        @tool
+        def define_task_plan(plan: PlanProposal, runtime: ToolRuntime) -> dict:
+            """Decompose the entire original instruction into ordered target-referenced stages.
+
+            Never specify coordinates, owner IDs, budgets or permissions. Preserve
+            close photos, reports, relations and the exact terminal requirement.
+            The program advances completed stages and performs normal finishing.
+            """
+            owner = turn_owner(runtime.state['messages'], runtime.config)
+            return parent_runtime.define(owner, plan.model_dump())
+
+        tools.append(define_task_plan)
+
+        @tool
+        def revise_task_plan(remaining_stage_ids: list[str],
+                             strategy: Literal['reacquire_target', 'alternate_view', 'continue_search'],
+                             reason: str, runtime: ToolRuntime) -> dict:
+            """Respond to program-requested GLOBAL_REASONING without coordinates or new permissions.
+
+            Retain ALL unfinished stage IDs, keep the active stage first. Select
+            only from task_runtime.available_replan_strategies. Without an actual
+            target reference use continue_search, not invented recovery evidence.
+            Completed stages, budgets, owner and flight scope cannot be changed.
+            """
+            owner = turn_owner(runtime.state['messages'], runtime.config)
+            return parent_runtime.replan(owner, remaining_stage_ids, strategy, reason)
+
+        tools.append(revise_task_plan)
+
+        @tool
+        def report_target_frame(capture_id: str, front_description: str, rear_description: str,
+                                runtime: ToolRuntime, front_box: list[float] | None = None,
+                                rear_box: list[float] | None = None,
+                                front_left_box: list[float] | None = None,
+                                front_right_box: list[float] | None = None) -> dict:
+            """Ground the visible object's own front/rear in the delivered image.
+
+            Only actual separated part ROIs; null when not visible or uncertain.
+            When rear is hidden, front_left_box/right_box can identify separated
+            image-left/right surfaces of the SAME front face at similar heights,
+            inside front_box. Stereo derives a front normal; no rear is invented.
+            Program stereo computes uncertainty, never model world coordinates.
+            An unavailable axis triggers a new bounded observation, not task rejection.
+            """
+            owner = turn_owner(runtime.state['messages'], runtime.config)
+            return parent_runtime.report_target_frame(owner, capture_id, front_box, rear_box,
+                                                       [front_description, rear_description], front_left_box, front_right_box)
+
+        @tool
+        def execute_task_goal(candidate_id: str, runtime: ToolRuntime) -> dict:
+            """Execute only the current program-verified terminal pose and capture a fresh frame.
+
+            Uses cached owner/stage/target-bound execution tickets, never arbitrary
+            coordinates. Accepted-flight failure or uncertain response is not retried.
+            """
+            owner = turn_owner(runtime.state['messages'], runtime.config)
+            return parent_runtime.execute_goal(owner, candidate_id)
+
+        tools.extend([report_target_frame, execute_task_goal])
+
+        @tool
+        def review_goal_region(capture_id: str, front_visible: bool, description: str,
+                               runtime: ToolRuntime, front_box: list[float] | None = None,
+                               front_left_box: list[float] | None = None,
+                               front_right_box: list[float] | None = None) -> dict:
+            """Review the actual fresh post-goal image for the object's own front face.
+
+            Unknown/occluded front stays false/null. Program checks actual stereo,
+            prior front-frame agreement and relative pose; this does not itself land.
+            For a front-face normal, provide fresh front_left_box/right_box inside
+            front_box again. These are the image sides of the same front face.
+            """
+            owner = turn_owner(runtime.state['messages'], runtime.config)
+            return parent_runtime.review_goal_region(owner, capture_id, front_visible, front_box, description,
+                                                     front_left_box, front_right_box)
+
+        @tool
+        def land_task_goal(runtime: ToolRuntime) -> dict:
+            """Finish a requested object-front landing using the current executor permit.
+
+            No coordinates, reason labels or authorization from the model. The
+            program requires fresh relation, flat support and full descent proof.
+            Actual landed/disarmed and relative position are separately verified.
+            """
+            owner = turn_owner(runtime.state['messages'], runtime.config)
+            return parent_runtime.land_goal(owner)
+
+        tools.extend([review_goal_region, land_task_goal])
+
+        @tool
+        def observe_task_photo(runtime: ToolRuntime) -> dict:
+            """Run the parent's initial preparation or capture after its actual photo adjustment.
+
+            Shares the one takeoff/coordinate binding. A new capture ID without
+            a completed new action cannot consume another photographic viewpoint.
+            """
+            owner = turn_owner(runtime.state['messages'], runtime.config)
+            return parent_runtime.observe_photo(owner)
+
+        tools.append(observe_task_photo)
+        parent_runtime.schemas = {t.name:t.tool_call_schema for t in tools}
+        parent_prompt = PLAN_PROMPT
+    return create_agent(model, tools,
+                        system_prompt=system_prompt + SINGLE_VLM_PROMPT + SEARCH_PROMPT + AUTONOMY_PROMPT + PHOTO_PROMPT + parent_prompt,
                         middleware=[SceneMiddleware(store, client, model_config, search_manager)], checkpointer=InMemorySaver())

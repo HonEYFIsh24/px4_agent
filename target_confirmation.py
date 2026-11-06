@@ -35,7 +35,11 @@ PAIRED_REVIEW_PROMPT = ('复核同一任务两个实际视角。图像依次为�
     '各当前候选框裁图。裁图不是新视角。先客观描述每个框内像素，再判断对象及属性。'
     '不能把原标签、置信度、双目成功、几何假设或用户希望目标存在当成证明。'
     '框若主要覆盖路面、墙体或遮挡物，不能把框外的目标当框内证据；局部可见就明确局部。'
-    'supported表示框内有可辨认的对象证据，不要求整个物体完整入镜；若局部的颜色和结构足以识别可为true，'
+    'source_supported/current_supported仅表示对应框内像素足以支持元数据query指定的目标类别及属性，'
+    '不是表示框内存在任意可辨认物体。same_object只判断两图是否同一物体，不能替代是否符合query的判断。'
+    '若看清的类别或属性与query明确冲突，supported=false且uncertain=false；'
+    '若类别或所需属性看不清，supported=false且uncertain=true。例如灰色箱壁本身不能证明白色货车。'
+    '不要求整个物体完整入镜；若局部的颜色和结构足以支持query可为true，'
     '不可仅因裁切、不完整而一律否定，也不可只凭普通白色平面猜测车辆。'
     'current_target_id只能选列出的当前候选，未见对应对象时为空且current_supported=false。'
     '若源框或当前框像素不足以判断，应分别设置source_uncertain或current_uncertain为true，'
@@ -133,8 +137,10 @@ def box_region_geometry(source, current):
 
 
 def observations_for(semantic_map, query, capture_id):
+    from task_runtime.association import labels_compatible
     return [(landmark, observation) for landmark in semantic_map.landmarks.values()
-            if landmark.label == query for observation in landmark.observations
+            if (labels_compatible(landmark.label, query) if getattr(semantic_map, 'association', None) else landmark.label == query)
+            for observation in landmark.observations
             if observation['capture_id'] == capture_id]
 
 
@@ -149,6 +155,7 @@ def observation_for(semantic_map, target_id, capture_id):
 
 
 def confirmation_goal(semantic_map, target_id, capture_id):
+    from target_observation import surface_reference
     landmark, observation = observation_for(semantic_map, target_id, capture_id)
     origin = observation['bearing_origin_enu_m']
     if observation['position_enu_m'] is not None:
@@ -174,6 +181,10 @@ def confirmation_goal(semantic_map, target_id, capture_id):
             'source_observer_enu_m': list(observation['body_pose_enu']['position_m']),
             'source_camera_enu_m': list(origin), 'source_bbox': list(observation['bbox']),
             'probe_points_enu_m': points, 'probe_basis': basis,
+            'surface_reference': surface_reference(landmark, observation),
+            'bearing_reference': {'origin_enu_m': list(origin),
+                'direction_enu': list(observation['bearing_direction_enu']),
+                'basis': 'actual_image_bearing_without_metric_range'},
             'hypotheses_are_target_locations': False}
 
 

@@ -12,6 +12,7 @@ from coverage_search import (TargetMemory, CoverageSearchError, project_ground_p
                              validate_observation_capture, _validated_coordinate_epoch)
 from stereo_localization import (vector, finite, quaternion_rotation,
                                 matvec, iris_left_optical_to_body)
+from landmark_association import duplicate_hypotheses
 
 
 class SemanticMapError(CoverageSearchError):
@@ -80,16 +81,19 @@ class SemanticMap:
         self.coordinate_epoch = epoch_identity(geometry['coordinate_epoch'])
         self.registration = copy.deepcopy(geometry['registration'])
         self.grid = copy.deepcopy(geometry['grid'])
-        if (self.grid.get('rows') != 48 or self.grid.get('cols') != 48
-                or self.grid.get('resolution_m') != .5 or self.grid.get('radius_m') != 12.):
-            raise SemanticMapError('MVP requires a 48x48 ground grid at 0.5m resolution')
+        from search_limits import validate_grid
+        try:
+            self.cell_count = validate_grid(self.grid)
+        except ValueError as exc:
+            raise SemanticMapError(str(exc))
         vector(self.grid['origin_xy_enu_m'], 2, 'grid origin')
         finite(self.grid['ground_enu_z_m'], 'ground height')
         self.eligible = self._indices(geometry['eligible_cell_ids'])
         self.cells = [{'coverage': 0., 'last_capture_id': None, 'last_seen_sim_s': None,
                        'observation_count': 0, 'semantic_score': 0., 'candidate_target_ids': []}
-                      for _ in range(2304)]
+                      for _ in range(self.cell_count)]
         self.memory = TargetMemory()
+        self.association = None
         self.landmarks, self.observations, self.capture_ids, self.image_pairs = {}, [], set(), set()
         self.view_positions = {i: [] for i in self.eligible}
         self.status, self.invalid_reason = 'valid', None
@@ -97,9 +101,8 @@ class SemanticMap:
         if not .5 <= self.relation_scale <= 8:
             raise SemanticMapError('Relation scale must be configured separately from measurement uncertainty')
 
-    @staticmethod
-    def _indices(indices):
-        if not isinstance(indices, list) or any(type(i) is not int or not 0 <= i < 2304 for i in indices):
+    def _indices(self, indices):
+        if not isinstance(indices, list) or any(type(i) is not int or not 0 <= i < self.cell_count for i in indices):
             raise SemanticMapError('Invalid visibility cell IDs')
         if len(set(indices)) != len(indices):
             raise SemanticMapError('Duplicate geometry cell IDs')
@@ -107,6 +110,57 @@ class SemanticMap:
 
     def invalidate(self, reason):
         self.status, self.invalid_reason = 'invalid', str(reason)
+
+    def enable_joint_association(self):
+        if self.association is None:
+            from task_runtime.association import CrossViewAssociation
+            self.association = CrossViewAssociation()
+
+    def set_query(self, query):
+        """Stage view only; never reset observations, scope, identities or coverage."""
+        if self.status != 'valid' or not isinstance(query, str) or not 0 < len(query) <= 80:
+            raise SemanticMapError('Cannot set an invalid stage query')
+        self.query = query
+        self._semantic_scores()
+
+    def link_reviewed_instance(self, source_id, current_id, source_capture, current_capture, geometry, review):
+        """Strong unique reviewed single-depth link preserves the earlier stable ID.
+
+        Only the unlocalized side may be joined. No bearing triangulation or
+        appearance score becomes a metric sample; all original evidence survives.
+        """
+        from task_runtime.association import labels_compatible
+        if self.association is None or source_id == current_id:
+            return source_id
+        source, current = self.landmarks[source_id], self.landmarks[current_id]
+        if (self.status != 'valid' or geometry.get('association_basis') != 'single_depth_projection'
+                or geometry.get('compatible') is not True
+                or not all(review.get(k) is True for k in ('source_supported', 'current_supported', 'same_object'))
+                or (source.position_enu_m is None) == (current.position_enu_m is None)
+                or not labels_compatible(source.label, current.label)):
+            raise SemanticMapError('Instance link lacks unique reviewed single-depth evidence')
+        a = next(o for o in source.observations if o['capture_id'] == source_capture)
+        b = next(o for o in current.observations if o['capture_id'] == current_capture)
+        if (a['coordinate_epoch'] != b['coordinate_epoch'] or b['stamp_sim_s'] <= a['stamp_sim_s']
+                or {o['capture_id'] for o in source.observations} & {o['capture_id'] for o in current.observations}
+                or {o['image_sha256']['left'] for o in source.observations} & {o['image_sha256']['left'] for o in current.observations}):
+            raise SemanticMapError('Instance link repeats an image or crosses coordinates')
+        if source.position_enu_m is None:
+            fused = next(t for t in self.memory.targets if t['id'] == current_id)
+            fused.update(id=source_id, label=source.label)
+            source.position_enu_m = copy.deepcopy(current.position_enu_m)
+            source.covariance_enu_m2 = copy.deepcopy(current.covariance_enu_m2)
+            source.status = current.status
+        source.observations = sorted(source.observations+current.observations, key=lambda o: o['stamp_sim_s'])
+        source.attributes['aliases'] = sorted(set(source.attributes.get('aliases', [source.label])+
+                                                  current.attributes.get('aliases', [current.label])))
+        source.attributes['reviewed_instance_links'] = source.attributes.get('reviewed_instance_links', [])+[
+            {'source_id': source_id, 'retired_id': current_id, 'source_capture_id': source_capture,
+             'current_capture_id': current_capture, 'association_basis': 'single_depth_projection',
+             'new_metric_samples_created': 0, 'semantic_independently_verified': False}]
+        del self.landmarks[current_id]
+        self._semantic_scores()
+        return source_id
 
     def _identity(self, geometry):
         if self.status != 'valid':
@@ -126,9 +180,10 @@ class SemanticMap:
             raise SemanticMapError(self.invalid_reason)
 
     def centre(self, index):
-        row, col = divmod(index, 48)
+        row, col = divmod(index, self.grid['cols'])
         x, y = self.grid['origin_xy_enu_m']
-        return [x-12+(col+.5)*.5, y-12+(row+.5)*.5, self.grid['ground_enu_z_m']]
+        radius,resolution = self.grid['radius_m'],self.grid['resolution_m']
+        return [x-radius+(col+.5)*resolution, y-radius+(row+.5)*resolution, self.grid['ground_enu_z_m']]
 
     def _associate(self, label, point, evidence):
         candidates = []
@@ -193,30 +248,57 @@ class SemanticMap:
                 norm = math.sqrt(sum(x*x for x in direction));direction = [x/norm for x in direction]
                 evidence = {'capture_id': checked['capture_id'], 'stamp_sim_s': checked['stamp_sim_s'],
                     'body_pose_enu': copy.deepcopy(checked['pose']), 'camera_info': copy.deepcopy(snapshot['camera_intrinsics']),
+                    'image_sha256': copy.deepcopy(checked['hashes']), 'coordinate_epoch': copy.deepcopy(epoch),
+                    'stereo_pair_id': snapshot['stereo_pair_id'],
                     'bbox': box, 'bearing_origin_enu_m': list(geometry['camera_origin_enu_m']), 'bearing_direction_enu': direction,
                     'uncalibrated_visual_score': target.get('confidence'), 'position_enu_m': None}
+                if self.association:
+                    evidence.update(reported_label=label, reported_attributes=copy.deepcopy(target.get('attributes') or {}))
                 metric = target.get('stereo_location') or {}
+                association = None
                 if metric.get('status') == 'ok':
                     if (metric.get('image_sha256') != checked['hashes']
                             or abs(metric.get('image_stamp_sim_s', -1)-checked['stamp_sim_s']) > 1e-6
                             or epoch_identity(metric.get('coordinate_epoch')) != self.coordinate_epoch):
                         raise SemanticMapError('Stereo measurement belongs to another image or epoch')
                     point = vector(metric['position_enu_m'], 3, 'stereo surface position')
+                    evidence['position_enu_m'] = point
+                    evidence['covariance_enu_m2'] = copy.deepcopy(metric['covariance_enu_m2'])
+                if self.association is not None:
+                    self.association.matcher.remember(frame, evidence)
+                    evidence['association'] = self.association.decide(label, target.get('attributes') or {}, evidence, self.landmarks)
+                    association = evidence['association']['target_id']
+                elif metric.get('status') == 'ok':
                     association = self._associate(label, point, evidence)
-                    accepted = self.memory.observe(label, metric, checked['capture_id'], checked['pose'],
-                        association_target_id=association, allow_auto_association=False)
+                if metric.get('status') == 'ok':
+                    metric_ids = {t['id'] for t in self.memory.targets}
+                    memory_label = self.landmarks[association].label if association else label
+                    accepted = self.memory.observe(memory_label, metric, checked['capture_id'], checked['pose'],
+                        association_target_id=association if association in metric_ids else None,
+                        new_target_id=association if association and association not in metric_ids else None,
+                        allow_auto_association=False)
                     if not accepted['accepted']: raise SemanticMapError(accepted['reason'])
                     identifier = accepted['target_id']
-                    evidence['position_enu_m'] = point
+                    # Preserve the same-frame measurement before world-pose
+                    # uncertainty was added. It is not a navigation reference.
+                    evidence['relative_stereo'] = {'capture_id': checked['capture_id'],
+                        'pair_id': snapshot['stereo_pair_id'], 'bbox': list(box),
+                        'measurement': copy.deepcopy(metric)}
                     landmark = self.landmarks.setdefault(identifier, SemanticLandmark(identifier, label))
                     landmark.attributes['reported_attributes'] = copy.deepcopy(target.get('attributes') or {})
+                    if self.association:
+                        landmark.attributes['aliases'] = sorted(set(landmark.attributes.get('aliases', [landmark.label])+[label]))
                     landmark.observations.append(evidence)
                 else:
-                    if sum(k.startswith('bearing_') for k in self.landmarks) >= 64:
+                    if association is None and sum(k.startswith('bearing_') for k in self.landmarks) >= 64:
                         raise SemanticMapError('Unlocalized clue capacity reached')
-                    identifier = 'bearing_{:03d}'.format(1+sum(k.startswith('bearing_') for k in self.landmarks))
-                    self.landmarks[identifier] = SemanticLandmark(identifier, label,
-                        attributes={'localization_failure': metric.get('reason', 'no valid stereo location')}, observations=[evidence])
+                    identifier = association or 'bearing_{:03d}'.format(1+max(
+                        (int(k.split('_')[1]) for k in self.landmarks if k.startswith('bearing_')), default=0))
+                    landmark = self.landmarks.setdefault(identifier, SemanticLandmark(identifier, label))
+                    landmark.attributes.update(localization_failure=metric.get('reason', 'no valid stereo location'))
+                    if self.association:
+                        landmark.attributes['aliases'] = sorted(set(landmark.attributes.get('aliases', [landmark.label])+[label]))
+                    landmark.observations.append(evidence)
             for fused in self.memory.reports():
                 landmark = self.landmarks[fused['id']]
                 landmark.position_enu_m = fused['position_enu_m']
@@ -260,12 +342,12 @@ class SemanticMap:
 
     def coverage_gain(self, visible_cells):
         if self.status != 'valid': raise SemanticMapError('Cannot query invalid map')
-        return sum((1-self.cells[i]['coverage'])*.25 for i in self._indices(list(visible_cells)) & self.eligible)
+        return sum((1-self.cells[i]['coverage'])*self.grid['resolution_m']**2 for i in self._indices(list(visible_cells)) & self.eligible)
 
     def semantic_gain(self, visible_cells, query=None):
         if self.status != 'valid': raise SemanticMapError('Cannot query invalid map')
         if query is not None and query != self.query: raise SemanticMapError('Semantic field is scoped to its actual task query')
-        return sum((1-self.cells[i]['coverage'])*self.cells[i]['semantic_score']*.25
+        return sum((1-self.cells[i]['coverage'])*self.cells[i]['semantic_score']*self.grid['resolution_m']**2
                    for i in self._indices(list(visible_cells)) & self.eligible)
 
     def insufficiently_observed_cells(self):
@@ -274,7 +356,7 @@ class SemanticMap:
 
     def semantic_regions(self, threshold=.2, limit=64):
         if self.status != 'valid': raise SemanticMapError('Cannot query invalid map')
-        if not 0 <= threshold <= 1 or type(limit) is not int or not 1 <= limit <= 2304:
+        if not 0 <= threshold <= 1 or type(limit) is not int or not 1 <= limit <= self.cell_count:
             raise SemanticMapError('Invalid semantic region query')
         cells = [i for i in self.eligible if self.cells[i]['semantic_score'] >= threshold and self.cells[i]['coverage'] < 1.]
         cells.sort(key=lambda i: (-self.cells[i]['semantic_score'], i))
@@ -288,7 +370,8 @@ class SemanticMap:
             'coordinate_epoch': copy.deepcopy(self.coordinate_epoch), 'observation_count': len(self.observations),
             'eligible_cells': len(self.eligible), 'geometrically_observed_cells': observed,
             'geometric_coverage_fraction': observed/len(self.eligible) if self.eligible else 0.,
-            'localized_landmarks': len(self.memory.targets), 'unlocalized_bearing_clues': sum(k.startswith('bearing_') for k in self.landmarks),
+            'localized_landmarks': len(self.memory.targets),
+            'unlocalized_bearing_clues': sum(l.position_enu_m is None for l in self.landmarks.values()),
             'semantic_field_active': any(self.cells[i]['semantic_score'] > 0 for i in self.eligible),
             'coverage_is_recognition_probability': False, 'strategy_changed': False}
 
@@ -297,4 +380,8 @@ class SemanticMap:
             'registration': copy.deepcopy(self.registration),
             'eligible_cell_ids': sorted(self.eligible), 'cells': copy.deepcopy(self.cells),
             'landmarks': [asdict(x) for x in self.landmarks.values()], 'observations': copy.deepcopy(self.observations),
+            'landmark_association_hypotheses': (duplicate_hypotheses(list(self.landmarks.values()), point_in_box)
+                                               if self.status == 'valid' else []),
+            'landmark_count_is_object_count': False,
+            **({'association_backend': self.association.matcher.name} if self.association else {}),
             'relation_scale_m': self.relation_scale}

@@ -8,8 +8,10 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (QCheckBox, QGridLayout, QHBoxLayout, QLabel, QListWidget, QPlainTextEdit, QPushButton,
                                QSizePolicy, QSplitter, QTabWidget, QVBoxLayout, QWidget)
 from desktop_search_data import (search_snapshot, observation_image, current_prediction, telemetry_matches,
-                                 status_text, static_obstacle_outlines, landmark_uncertainty_ellipse)
+                                 status_text, static_obstacle_outlines, landmark_uncertainty_ellipse,
+                                 task_runtime_view, task_runtime_text, goal_prediction)
 from semantic_map import explicit_semantic_relation
+from landmark_association import display_groups
 
 
 def fmt(value, unit=''):
@@ -105,7 +107,7 @@ class SearchMap(QWidget):
         predicted=set((self.candidate or {}).get('visible_cell_ids') or []) if self.layers['predicted'] else set()
         for i in eligible:
             if type(i) is not int or not 0<=i<len(s['cells']):continue
-            row,col=divmod(i,48); x=ox-span+col*res; y=oy-span+row*res; cell=s['cells'][i]
+            row,col=divmod(i,grid['cols']); x=ox-span+col*res; y=oy-span+row*res; cell=s['cells'][i]
             rect=QRectF(point(x,y+res),point(x+res,y))
             color=QColor('#397bb0') if self.layers['coverage'] and cell.get('coverage',0)>0 else QColor('#405060')
             p.fillRect(rect,color)
@@ -145,7 +147,7 @@ class SearchMap(QWidget):
                 p.setBrush(Qt.BrushStyle.NoBrush);p.setPen(QPen(QColor(145,230,255,120),1))
                 for i in selected.get('visible_cell_ids',[]):
                     if type(i) is int and i in eligible:
-                        row,col=divmod(i,48);x=ox-span+col*res;y=oy-span+row*res
+                        row,col=divmod(i,grid['cols']);x=ox-span+col*res;y=oy-span+row*res
                         p.drawRect(QRectF(point(x,y+res),point(x+res,y)))
             for index,o in enumerate(s.get('observations',[]),1):
                 pos=o.get('position_enu_m')
@@ -156,7 +158,17 @@ class SearchMap(QWidget):
                     if isinstance(q,list) and len(q)==4 and all(type(v) in (int,float) and math.isfinite(v) for v in q):
                         x,y,z,w=q;heading=math.atan2(2*(w*z+x*y),1-2*(y*y+z*z))
                         p.drawLine(point(*pos[:2]),point(pos[0]+math.cos(heading),pos[1]+math.sin(heading)))
+            grouped = set()
+            for group in display_groups(s):
+                members=group['members'];a,b=[m['position_enu_m'] for m in members]
+                p.setBrush(Qt.BrushStyle.NoBrush);p.setPen(QPen(QColor('#ffab69'),1,Qt.PenStyle.DashLine))
+                p.drawLine(point(*a[:2]),point(*b[:2]))
+                for member in members:
+                    pos=member['position_enu_m'];p.drawEllipse(point(*pos[:2]),5,5)
+                draw_label(point(*a[:2]),group['label']+'（疑似重复，位置待核实）')
+                grouped.update(group['member_ids'])
             for landmark in s.get('landmarks',[]):
+                if landmark['id'] in grouped:continue
                 pos=landmark.get('position_enu_m');p.setPen(QColor('#ffab69'))
                 if pos:
                     ellipse=landmark_uncertainty_ellipse(landmark.get('covariance_enu_m2'))
@@ -212,6 +224,7 @@ class SearchWorkbench(QWidget):
         self.live_image=ScaledImage('等待新鲜相机画面');self.live_image.setMinimumSize(100,55)
         live_layout.addWidget(self.live_image,1)
         live_layout.addWidget(QLabel('实时画面 · 不叠加历史检测框'))
+        self.task_details=CompactTextEdit();self.task_details.setReadOnly(True);tabs.addTab(self.task_details,'完整任务')
         self._reports=[];self._candidates=[];self._last_image=None;self._candidate_signature=None;self._pix_cache={};self.live_mission={};self._shown_review_pair=None
 
     def set_live_camera(self, pixmap, message='相机未连接 / 图像已过期'):
@@ -228,6 +241,8 @@ class SearchWorkbench(QWidget):
     def update_data(self,state,command):
         old_id=(self.command or {}).get('id');self.command=command;self.status.setText(status_text(command,state))
         self.live_mission=state.get('mission') or {}
+        text=task_runtime_text(command)
+        if self.task_details.toPlainText()!=text:self.task_details.setPlainText(text)
         flight=('已落地、上锁' if state.get('connected') is True and state.get('armed') is False and state.get('landed_state')==1 else
                 '已解锁 / 未确认落地' if state.get('connected') is True and state.get('armed') is True else '等待可靠飞行遥测')
         self.flight_status.setText('飞行结果：'+flight)
@@ -246,6 +261,13 @@ class SearchWorkbench(QWidget):
                     and self.live_mission.get('action') in ('return_home', 'land'))
         self.prediction=(current_prediction(command,snap)
                          if command and command.get('status')=='running' and not stopping else None)
+        parent=task_runtime_view(command)
+        if parent:
+            goal=parent.get('goal_state') or {}
+            if parent.get('result') or goal and goal.get('phase')!='observing' or (parent.get('current_stage') or {}).get('kind')=='photo':
+                self.prediction=None
+            terminal=goal_prediction(command,snap)
+            if terminal and not stopping:self.prediction=terminal
         self.map.prediction=self.prediction
         self.map.relations=[]
         if snap and command:
@@ -264,7 +286,8 @@ class SearchWorkbench(QWidget):
         elapsed=(finished if type(finished) in (int,float) else time.time())-created if type(created) in (int,float) else None
         self.metrics.setText('有效观察 {} · 几何覆盖 {} · 已完成视点 {} · 模型调用 {} · 墙钟 {} s'.format(
             len(snap.get('observations',[])) if snap else '—',fmt(100*snap.get('geometric_coverage_fraction',0),'%') if snap else '—',
-            len(executed) if command else '—',len((command or {}).get('model_calls') or []) if command else '—',fmt(elapsed)))
+            len(executed) if command else '—',(parent.get('budget',{}).get('model_calls_used') if parent else
+                sum(c.get('model_request_count',1) for c in (command or {}).get('model_calls') or [])) if command else '—',fmt(elapsed)))
         validated=[c for c in ((self.prediction or {}).get('ranked_candidates') or []) if c.get('path_verified') is True]
         candidates=validated[:5]
         selected_id=(self.prediction or {}).get('selected_id')
@@ -280,7 +303,8 @@ class SearchWorkbench(QWidget):
         if signature != self._candidate_signature:
             self._candidate_signature=signature
             self.candidates.blockSignals(True);self.candidates.clear()
-            for c in candidates:self.candidates.addItem('{} · {} · 覆盖 {} m²'.format(c.get('id'),c.get('direction',''),fmt(c.get('coverage_gain_m2'))))
+            for c in candidates:self.candidates.addItem('{} · {}'.format(c.get('id'),c.get('direction',''))+
+                (' · 终点路径' if (self.prediction or {}).get('planning_mode')=='goal_pose' else ' · 覆盖 {} m²'.format(fmt(c.get('coverage_gain_m2')))))
             index=next((i for i,c in enumerate(candidates) if c['id']==(self.prediction or {}).get('selected_id')),0)
             if candidates:self.candidates.setCurrentRow(index);self.selected_candidate=candidates[index]['id']
             else:self.selected_candidate=None
@@ -317,10 +341,17 @@ class SearchWorkbench(QWidget):
             mission=self.live_mission;batch=(mission.get('search_constraint') or {}).get('batch_id')
             stage=('执行器'+{'running':'执行中','succeeded':'已完成','failed':'失败','cancelled':'已取消'}.get(mission.get('status'),'已接受')
                    if selected and mission.get('viewpoint_candidate_id')==c['id'] and batch==(self.prediction or {}).get('batch_id') else '已选择，等待执行器状态' if selected else '候选预览')
-            labels={'coverage':'覆盖','semantic':'语义','motion':'移动代价','repeat':'重复代价','target_visibility':'目标可见性','parallax':'视差'}
+            labels={'coverage':'覆盖','semantic':'语义','motion':'移动代价','repeat':'重复代价','target_visibility':'目标可见性','parallax':'视差','observation_range':'观察距离','bearing_approach':'沿方位接近','height_change':'高度变化代价'}
+            if mode=='goal_pose':
+                text='终点位姿 · {}\nENU {} · 机体航向 {} rad\n关系：{} · 路径 {} m · 阶段 {}\n终点预测与到达各自核验；用户目标以父任务结果为准。'.format(
+                    c['id'],c.get('position_enu_m'),fmt(c.get('yaw_enu_rad')), (c.get('goal_spec') or {}).get('relation'),
+                    fmt((c.get('path') or {}).get('path_length_m')),(self.prediction or {}).get('phase'))
+            else:
+                text=None
             selector='模型选择：'+str((self.prediction or {}).get('selection_reason','')) if (self.prediction or {}).get('selector')=='vlm' else '确定性评分选择'
-            text='{} · {} · {}\n新增覆盖 {} m² · 语义 {} · 路径 {} m · 预计 {} s\n评分贡献：{}\n{}'.format(
-                '确认视角' if mode=='confirmation' else '探索视角',stage,c.get('direction',''),
+            text=text or '{} · {} · {}\n新增覆盖 {} m² · 语义 {} · 路径 {} m · 预计 {} s\n评分贡献：{}\n{}'.format(
+                ('接近拍摄视角' if ((self.prediction or {}).get('confirmation_goal') or {}).get('purpose')=='approach'
+                 else '目标复核视角') if mode=='confirmation' else '探索视角',stage,c.get('direction',''),
                 fmt(c.get('coverage_gain_m2')),fmt(c.get('semantic_gain_m2')),fmt((c.get('path') or {}).get('path_length_m')),fmt(c.get('motion_seconds')),
                 ' / '.join('{} {}'.format(labels.get(k,k),fmt(v)) for k,v in (c.get('score_terms') or {}).items()),selector)
         else:text='暂无当前地图对应的候选；预览不代表已执行。'
@@ -401,9 +432,15 @@ class SearchWorkbench(QWidget):
             text='暂无有效地图或语义地标。'
         else:
             landmarks=snap.get('landmarks') or []
-            lines=['地标与候选线索：{} 条'.format(len(landmarks)),
+            groups=display_groups(snap)
+            lines=['地标与候选证据：{} 条（不是物体数量）'.format(len(landmarks)),
                    '语义热区：'+('已由任务关系激活（不是概率）' if snap.get('semantic_field_active') else '未激活'),
                    '图像框为识别区域；地面物体占据范围尚未测得。椭圆是未标定的位置不确定范围，不代表物体大小。']
+            for group in groups:
+                lines.append('{}：{} 疑似重复；保留两个位置估计，尚未合并。\n'
+                             '一个历史位置投影与新框相符，但反向投影冲突；可能是背景深度或不同物体。'
+                             '地图空心点与连接虚线表示位置假设，不是两件已确认物体或飞行路径。'.format(
+                                 group['label'],' / '.join(group['member_ids'])))
             relations=[]
             for item in landmarks:
                 pos=item.get('position_enu_m');observations=item.get('observations') or []

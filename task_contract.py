@@ -49,8 +49,14 @@ def assess_task(prompt):
         unsupported.append('custom_unmet_search_end_policy')
     hold = bool(re.search(r'悬停|保持悬停|\bhover\b|\bhold\b', positive, re.I))
     home = bool(re.search(r'返航|返回(?:起点|原点|起飞点)|return home', positive, re.I))
+    close_photo = bool(re.search(
+        r'(?:靠近|接近|附近|旁边|近处|近距离).{0,24}(?:拍摄|拍照|采图|摄影)'
+        r'|(?:拍摄|拍照|采图).{0,24}(?:靠近|接近|附近|旁边|近距离)'
+        r'|(?:approach|close[ -]up|nearby|near).{0,40}(?:photo|picture|photograph)'
+        r'|(?:photo|picture|photograph).{0,40}(?:close[ -]up|nearby|near)', positive, re.I))
     return {'version': 1, 'original_request': prompt, 'admission': 'rejected' if unsupported else 'accepted',
-            'requires_target_search': bool(re.search(r'找到|寻找|搜寻|\bfind\b|\bsearch for\b', positive)),
+            'requires_target_search': close_photo or bool(re.search(r'找到|寻找|搜寻|\bfind\b|\bsearch for\b', positive)),
+            'target_observation_required': close_photo,
             'unsupported_capabilities': sorted(set(unsupported)),
             'matching_scope': 'known_target_relative_endings_not_general_language_completeness',
             'search_success_end': 'hold' if hold and not home else 'return_home_land',
@@ -62,6 +68,21 @@ def assess_task(prompt):
 
 def search_result(command, flight_completion_verified=False):
     """Separate goal completion from flow termination and recovery flight."""
+    parent = command.get('task_runtime_result')
+    if isinstance(parent, dict) and parent.get('schema_version') == 1:
+        targets = (parent.get('evidence_summary') or {}).get('targets') or {}
+        confirmed = any(t.get('confirmation_level') == 'multiview' for t in targets.values())
+        single = any(t.get('confirmation_level') == 'single_frame' for t in targets.values())
+        return {'user_goal_completed':parent['goal_status'] == 'satisfied',
+                'search_process_ended':True, 'search_status':'parent_'+parent['goal_status'],
+                'target_found':confirmed or single,'target_confirmed':confirmed,
+                'target_observation_required':bool((command.get('task_contract') or {}).get('target_observation_required')),
+                'target_observation_completed':any(s.get('kind')=='close_photo' and s.get('status')=='completed'
+                    for s in (command.get('task_runtime',{}).get('plan') or {}).get('stages',[])),
+                'confirmation_level':'multiview' if confirmed else 'single_frame' if single else 'visual_candidate' if targets else 'unconfirmed',
+                'flight_status':parent['flight_status'], 'flight_source':parent['termination_source'],
+                'flight_purpose':'goal_completion' if parent['goal_status']=='satisfied' else 'unmet_goal_recovery',
+                'basis':'parent_task_plan_and_verified_skill_results'}
     progress = [e['result'] for e in command.get('search_events', [])
                 if isinstance(e.get('result'), dict) and 'search_status' in e['result']]
     if not progress:
@@ -74,9 +95,12 @@ def search_result(command, flight_completion_verified=False):
             return None
         status = region[-1]['status']
         found = status == 'target_found'
-        return {'user_goal_completed': found and flight_completion_verified,
+        contract = command.get('task_contract') or assess_task(command['prompt'])
+        return {'user_goal_completed': found and flight_completion_verified and not contract.get('target_observation_required'),
                 'search_process_ended': status in ('target_found', 'sampling_complete', 'budget_exhausted'),
                 'search_status': status, 'target_found': found, 'target_confirmed': False,
+                'target_observation_required': bool(contract.get('target_observation_required')),
+                'target_observation_completed': False,
                 'confirmation_level': 'legacy_stereo_geometry' if found else 'unconfirmed',
                 'flight_status': 'grounded_disarmed' if flight_completion_verified else 'not_verified',
                 'flight_source': 'legacy_audited_flight',
@@ -84,17 +108,21 @@ def search_result(command, flight_completion_verified=False):
     last = progress[-1]
     found = last.get('search_status') == 'target_found'
     multiview = last.get('target_confirmation_mode') == 'multiview'
-    confirmed = found and multiview and any(e.get('outcome') == 'confirmed'
-                                            for e in command.get('target_confirmation_events', []))
+    confirmed = bool(last.get('target_visual_confirmed', found) and multiview
+                     and any(e.get('outcome') == 'confirmed' for e in command.get('target_confirmation_events', [])))
     termination = last.get('termination') or {}
     contract = command.get('task_contract') or assess_task(command['prompt'])
     normal = termination.get('source') == 'normal_completion' and termination.get('purpose') != 'unmet_goal_recovery'
     ending_ok = normal and (termination.get('flight_status') == 'grounded_disarmed'
                            or contract['search_success_end'] == 'hold')
     ended = last.get('search_status') in ('target_found', 'budget_exhausted', 'coverage_exhausted', 'no_reachable_view')
-    return {'user_goal_completed': bool(found and (confirmed or not multiview) and ending_ok),
+    observation = last.get('target_observation') or {}
+    observation_ok = not contract.get('target_observation_required') or observation.get('completed') is True
+    return {'user_goal_completed': bool(found and (confirmed or not multiview) and ending_ok and observation_ok),
             'search_process_ended': ended, 'search_status': last.get('search_status'),
             'target_found': found, 'target_confirmed': confirmed,
+            'target_observation_required': bool(contract.get('target_observation_required')),
+            'target_observation_completed': observation.get('completed') is True,
             'confirmation_level': 'multiview' if confirmed else 'single_frame' if found and not multiview else 'unconfirmed',
             'flight_status': termination.get('flight_status', 'not_verified'),
             'flight_source': termination.get('source'), 'flight_purpose': termination.get('purpose'),

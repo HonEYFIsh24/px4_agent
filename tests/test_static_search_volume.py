@@ -5,6 +5,7 @@ import unittest
 
 from mission import MissionError
 from static_navigation import StaticNavigator
+from search_limits import SEARCH_RADIUS_M
 
 
 class SearchVolumeTests(unittest.TestCase):
@@ -38,7 +39,7 @@ class SearchVolumeTests(unittest.TestCase):
 
     def test_invalid_radius_and_out_of_volume_start_or_goal_are_rejected(self):
         nav = self.navigator(1.)
-        for radius in (True, 0., -1., 13., float('nan')):
+        for radius in (True, 0., -1., SEARCH_RADIUS_M+1., float('nan')):
             with self.assertRaises(ValueError):
                 nav.preview_path([-3., 0., 3.], [3., 0., 3.], [0., 0.], radius)
         for start, goal in (([-5., 0., 3.], [3., 0., 3.]),

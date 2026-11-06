@@ -19,6 +19,8 @@ class FrozenMap(SemanticMap):
                      'registration', 'grid', 'cells', 'observations'):
             setattr(self, name, copy.deepcopy(snapshot[name]))
         self.eligible = set(snapshot['eligible_cell_ids'])
+        from search_limits import validate_grid
+        self.cell_count = validate_grid(self.grid)
 
     def snapshot(self):
         return copy.deepcopy(self._snapshot)
@@ -91,7 +93,8 @@ def replay_executor(path, world, index=-1):
     nav.origin = registration['world_from_enu_origin_m']; nav.yaw = registration['world_from_enu_yaw_rad']
     nav.registration_id = identity['sortie_id']  # isolated offline geometry; never an execution authority
     backend = StaticViewpointEvaluator(nav, data['pose'], data['camera_info'], identity['coordinate_epoch'],
-        fixed_yaw=data['fixed_yaw'], reference_kind='live_enu_pose', probe_points_enu_m=data['probes'], allow_yaw=True)
+        fixed_yaw=data['fixed_yaw'], reference_kind='live_enu_pose', probe_points_enu_m=data['probes'], allow_yaw=True,
+        search_radius_m=data.get('search_radius_m',12.),grid_resolution_m=data.get('grid_resolution_m',.5))
     result = {'actual_flight':False, 'network_calls':0, 'source':str(path), 'operation':data['operation'],
               'original_outcome':end['event'], 'query_id':initial['id']}
     try:

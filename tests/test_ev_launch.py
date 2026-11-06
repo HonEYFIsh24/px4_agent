@@ -198,7 +198,7 @@ class LaunchEntryContracts(unittest.TestCase):
         self.assertIn("--ev-test-faults", result.stdout)
 
     def test_px4_official_hook_point_precedes_sensors_commander_and_vehicle_estimator_setup(self):
-        source = Path("/home/dut/PX4-Autopilot/ROMFS/px4fmu_common/init.d-posix/rcS")
+        source = Path(os.environ.get('PX4_DIR',str(Path.home()/'PX4-Autopilot'))) / 'ROMFS/px4fmu_common/init.d-posix/rcS'
         if not source.exists():
             self.skipTest("this source contract requires the selected PX4 checkout")
         text = source.read_text()

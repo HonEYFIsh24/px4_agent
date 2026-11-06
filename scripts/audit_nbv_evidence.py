@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT/'scripts'))
 from stereo_localization import vector, finite
+from mission import MAX_ALTITUDE
+from search_limits import validate_grid
 
 
 def snapshot_revision(snapshot):
@@ -19,7 +21,7 @@ def snapshot_revision(snapshot):
 
 
 def audit_record(record, load_snapshot, segment_safe, require_semantic_guidance=False, require_vlm_selection=False,
-                 require_diverse_pool=False, require_auto_prepare=False):
+                 require_diverse_pool=False, require_auto_prepare=False, load_version=None):
     """Check archived execution, not model prose. Callbacks supply immutable evidence."""
     command = record['command']
     predictions = command.get('nbv_events') or []
@@ -51,6 +53,10 @@ def audit_record(record, load_snapshot, segment_safe, require_semantic_guidance=
             source_id = prediction['source_capture_id']
             index = capture_ids.index(source_id)
             source = load_snapshot(source_id)
+            if snapshot_revision(source) != revision and load_version is not None:
+                source = load_version(revision)
+            validate_grid(source['grid'])
+            radius = source['grid']['radius_m']
             identity = prediction['identity']
             if (set(identity) != {'world_sha256', 'sortie_id', 'coordinate_epoch', 'registration'}
                     or source['owner'] != owner or snapshot_revision(source) != revision
@@ -129,7 +135,7 @@ def audit_record(record, load_snapshot, segment_safe, require_semantic_guidance=
             if (scope != owned[0]['mission']['search_constraint'] or scope.get('revoked') is not False
                     or scope['owner'] != owner or scope['identity'] != identity
                     or scope['map_revision'] != revision or scope['batch_id'] != batch
-                    or scope['origin_xy_enu_m'] != origin or scope['search_radius_m'] != 12.
+                    or scope['origin_xy_enu_m'] != origin or scope['search_radius_m'] != radius
                     or mission.get('viewpoint_candidate_id') != selected['id']
                     or mission['steps'] != expected_steps or owned[0]['mission']['steps'] != expected_steps):
                 raise ValueError('actual mission changed candidate, identity or search permission')
@@ -144,14 +150,14 @@ def audit_record(record, load_snapshot, segment_safe, require_semantic_guidance=
                 if (len(points) < 2 or plan.get('source') != 'verified_static_collision_map_3d'
                         or plan.get('route_complete') is not True
                         or plan.get('full_route_within_search_volume') is not True
-                        or plan.get('search_origin_xy_enu_m') != origin or plan.get('search_radius_m') != 12.
+                        or plan.get('search_origin_xy_enu_m') != origin or plan.get('search_radius_m') != radius
                         or (plan_index == 0 and math.dist(points[0],
                             vector(prediction['reference']['start_enu_m'], 3, 'predicted source')) > .35)
                         or math.dist(vector(entry['goal_enu_m'], 3, 'actual goal'), goal) > 1e-8
                         or math.dist(vector(plan['goal_enu_m'], 3, 'plan goal'), goal) > 1e-8
                         or math.dist(points[-1], goal) > 1e-8
-                        or any(not 1.-1e-9 <= p[2] <= 10.+1e-9
-                               or math.dist(p[:2], origin) > 12.+1e-9 for p in points)
+                        or any(not 1.-1e-9 <= p[2] <= MAX_ALTITUDE+1e-9
+                               or math.dist(p[:2], origin) > radius+1e-9 for p in points)
                         or any(not segment_safe(identity, a, b) for a, b in zip(points, points[1:]))):
                     raise ValueError('actual plan violates candidate, volume or registered collision geometry')
                 current_length = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
@@ -259,8 +265,16 @@ def audit(result_file, output, world, require_semantic_guidance=False, require_v
         nav.yaw = finite(registration['world_from_enu_yaw_rad'], 'registered yaw')
         return nav.segment_safe(a, b)
 
+    def load_version(revision):
+        if not isinstance(revision, str) or len(revision) != 64 or any(c not in '0123456789abcdef' for c in revision):
+            raise ValueError('Invalid map revision digest')
+        value = json.loads((directory/('map-'+revision+'.snapshot.json')).read_text())
+        if snapshot_revision(value) != revision:
+            raise ValueError('Planning map snapshot does not match its SHA256 revision')
+        return value
+
     result = audit_record(record, load, safe, require_semantic_guidance, require_vlm_selection,
-                          require_diverse_pool, require_auto_prepare)
+                          require_diverse_pool, require_auto_prepare, load_version=load_version)
     semantic = audit_semantic(result_file, output/'semantic')
     required = ['task_succeeded', 'finished_grounded_disarmed', 'map_events_all_valid',
                 'map_events_cover_successful_reports', 'replay_has_all_successful_reports',

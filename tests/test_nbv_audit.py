@@ -26,7 +26,8 @@ class Transport:
 class NBVAuditTests(unittest.TestCase):
     def setUp(self):
         self.transport = Transport()
-        self.command = {'mode': 'task', 'interrupted': False, 'vision_failure': None,
+        self.command = {'id': 'task', 'prompt': '寻找前方目标，报告后返航降落',
+                        'mode': 'task', 'interrupted': False, 'vision_failure': None,
                         'flight_failure': None, 'tool_results': []}
         self.app = SimpleNamespace(client=self.transport, current_command=self.command,
             lock=threading.RLock(), control_lock=threading.RLock(),

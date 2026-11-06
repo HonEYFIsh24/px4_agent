@@ -45,6 +45,18 @@ class EvidenceAuditTests(unittest.TestCase):
     def save_record(self):
         self.result.write_text(json.dumps(self.record))
 
+    def test_staged_pixel_association_replays_the_real_backend_and_original_bytes(self):
+        import base64
+        m = SemanticMap(OWNER, self.geometry, query='蓝色油桶', instruction=self.record['command']['prompt'])
+        m.enable_joint_association()
+        self.frame['image_base64'] = base64.b64encode((self.captures/(self.identifier+'.jpg')).read_bytes()).decode()
+        m.update_observation(self.frame, self.report, self.geometry)
+        self.online = m.snapshot()
+        (self.captures/(self.identifier+'.semantic-map.json')).write_text(json.dumps(self.online))
+        report = audit(self.result, self.root/'staged-replay')
+        self.assertTrue(report['checks']['online_replay_equal'], report['evidence'])
+        self.assertEqual(self.online['association_backend'], 'cpu_harris_patch_affine_v1')
+
     def test_complete_archive_proves_integrity_but_single_view_is_not_multiview(self):
         report = audit(self.result, self.root / 'audit')
         checks = report['checks']

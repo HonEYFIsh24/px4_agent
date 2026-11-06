@@ -8,6 +8,7 @@ import re
 from mission import MAX_ALTITUDE, MissionError
 from semantic_map import epoch_identity
 from stereo_localization import vector, finite, quaternion_rotation
+from search_limits import grid_dimensions
 
 
 def registered_identity(navigator, coordinate_epoch):
@@ -25,7 +26,10 @@ def registered_identity(navigator, coordinate_epoch):
 class StaticViewpointEvaluator:
     """Evaluates predictions; no coverage update, mission creation or last_plan write."""
     def __init__(self, navigator, pose, camera_info, coordinate_epoch, fixed_yaw=None,
-                 reference_kind='archived_capture', probe_points_enu_m=None, allow_yaw=False):
+                 reference_kind='archived_capture', probe_points_enu_m=None, allow_yaw=False,
+                 search_radius_m=12., grid_resolution_m=.5):
+        grid_dimensions(search_radius_m,grid_resolution_m)
+        self.search_radius, self.grid_resolution = search_radius_m,grid_resolution_m
         self.navigator = navigator
         self.allow_yaw = allow_yaw is True
         self.pose = copy.deepcopy(pose)
@@ -82,7 +86,7 @@ class StaticViewpointEvaluator:
         response = {'source': 'verified_static_3d_viewpoint_prediction', 'prediction_only': True,
                     'execution_authorized': False, 'requires_executor_revalidation': True,
                     'identity': identity, 'start_enu_m': list(self.position),
-                    'origin_xy_enu_m': origin, 'search_radius_m': 12.,
+                    'origin_xy_enu_m': origin, 'search_radius_m': self.search_radius,
                     'fixed_yaw_enu_rad': self.yaw, 'source_pose_kind': self.reference_kind,
                     'camera_calibration_sha256': hashlib.sha256(json.dumps(self.camera_info,
                         sort_keys=True, allow_nan=False).encode()).hexdigest(), 'results': []}
@@ -95,13 +99,14 @@ class StaticViewpointEvaluator:
                 candidate_yaw = math.atan2(math.sin(self.yaw + heading_step*math.pi/4),
                                            math.cos(self.yaw + heading_step*math.pi/4))
                 result.update(heading_step=heading_step, target_yaw_enu_rad=candidate_yaw)
-            if (not 1. <= point[2] <= MAX_ALTITUDE or math.dist(point[:2], origin) > 12.+1e-9
+            if (not 1. <= point[2] <= MAX_ALTITUDE or math.dist(point[:2], origin) > self.search_radius+1e-9
                     or not self.navigator.segment_safe(point, point)):
                 result['reason'] = 'candidate lacks search-volume or inflated flight clearance'
             elif operation == 'visibility':
                 pose = {'position_m': point, 'frame_id': 'map', 'body_reference': 'base_link',
                         'orientation_xyzw': [0., 0., math.sin(candidate_yaw/2), math.cos(candidate_yaw/2)]}
-                visible = self.navigator.observation_visibility(pose, self.camera_info, origin)
+                visible = self.navigator.observation_visibility(pose, self.camera_info, origin,
+                    radius=self.search_radius,resolution=self.grid_resolution)
                 result.update(reachable=True, point_clearance_only=True,
                               visible_cell_ids=visible['visible_cell_ids'])
                 if self.probes is not None:
@@ -115,7 +120,7 @@ class StaticViewpointEvaluator:
                             'pixel_uv': projection['pixel_uv'], 'camera_origin_enu_m': visible['camera_origin_enu_m']})
             elif operation == 'paths':
                 try:
-                    plan = self.navigator.preview_path(self.position, point, origin)
+                    plan = self.navigator.preview_path(self.position, point, origin,self.search_radius)
                 except MissionError as exc:
                     result['reason'] = str(exc)
                 else:

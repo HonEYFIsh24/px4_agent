@@ -11,6 +11,28 @@ class SemanticMapRuntime:
     def __init__(self, client, capacity=8):
         self.client, self.capacity, self.maps = client, capacity, {}
 
+    def checkpoint(self, owner):
+        """Archive the exact planning revision, retaining acquisition-time maps.
+
+        Stage queries/reviews can change semantic state without a new photograph.
+        The old capture archive must not be overwritten to hide that distinction.
+        """
+        from viewpoint_planner import map_revision
+        model = self.maps[owner]
+        revision = map_revision(model)
+        directory = os.getenv('UAV_CAPTURE_EVIDENCE_DIR')
+        if directory:
+            path = Path(directory)/('map-'+revision+'.snapshot.json')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            value = model.snapshot()
+            if path.exists():
+                if json.loads(path.read_text()) != value:
+                    raise ValueError('Archived planning map revision was modified')
+            else:
+                with path.open('x') as stream:
+                    json.dump(value, stream, ensure_ascii=False, allow_nan=False)
+        return revision
+
     def observe(self, owner, frame, report, session=None, instruction='', *, after_update=None):
         state = self.client.state()
         nav, scene = state.get('navigation') or {}, state.get('scene') or {}
@@ -43,6 +65,8 @@ class SemanticMapRuntime:
             if len(self.maps) >= self.capacity:
                 del self.maps[next(iter(self.maps))]
             self.maps[owner] = existing
+        if (session or {}).get('execution_mode') == 'orchestrated':
+            existing.enable_joint_association()
         if session is not None:
             identity = session.setdefault('spatial_map_identity', {})
             identity.update(status=existing.status, world_sha256=existing.world_sha256, sortie_id=existing.sortie_id)

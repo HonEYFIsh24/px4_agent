@@ -465,6 +465,49 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(client.camera_reads, [])
         self.assertTrue(all(not image_urls(messages) for messages in model.calls))
 
+    def test_omitted_capture_id_binds_the_latest_delivered_unreported_image(self):
+        request = lambda _: tool_call('report_scene', observation(), 'bound-report')
+        graph, model, _, client = self.build([capture_request, request,
+            capture_request, request, AIMessage('done')])
+        result, _ = self.invoke(graph)
+        captures = [json.loads(m.content)['capture_id'] for m in result['messages']
+                    if isinstance(m, ToolMessage) and m.name == 'capture_scene']
+        reports = [json.loads(m.content) for m in result['messages']
+                   if isinstance(m, ToolMessage) and m.name == 'report_scene']
+        self.assertEqual(len(captures), 2)
+        self.assertNotEqual(*captures)
+        self.assertEqual([r['capture_id'] for r in reports], captures)
+        self.assertTrue(all(r['status'] == 'ok' for r in reports))
+        self.assertEqual(len(client.camera_reads), 2)
+        self.assertEqual([len(image_urls(m)) for m in model.calls], [0,1,0,1,0])
+
+    def test_omitted_id_cannot_use_missing_unshown_consumed_or_previous_turn_images(self):
+        request = lambda _: tool_call('report_scene', observation(), 'bound-report')
+        for fault in ('missing', 'unshown', 'consumed', 'previous_turn'):
+            with self.subTest(fault=fault):
+                client = CameraClient();store = single_vlm.FrameStore(client, CONFIG)
+                if fault == 'unshown':
+                    store.capture(('thread-a','turn-a'), 'unshown owned preseed')
+                script = ([capture_request, request, AIMessage('first done'), request, AIMessage('claim success')]
+                    if fault == 'previous_turn' else
+                    [capture_request, request, request, AIMessage('claim success')] if fault == 'consumed' else
+                    [request, AIMessage('claim success')])
+                graph, model, _, _ = self.build(script, client=client, store=store)
+                result, _ = self.invoke(graph)
+                if fault == 'previous_turn': result, _ = self.invoke(graph, '重新报告', turn='turn-b')
+                reports = [json.loads(m.content) for m in result['messages']
+                           if isinstance(m, ToolMessage) and m.name == 'report_scene']
+                self.assertEqual(reports[-1]['status'], 'error')
+
+    def test_explicit_truncated_id_is_rejected_instead_of_repaired(self):
+        def truncated(messages):
+            capture = tool_payload(messages, 'capture_scene')['capture_id']
+            return tool_call('report_scene', {'capture_id': capture[:16]+capture[-8:], **observation()}, 'truncated')
+        graph, model, _, client = self.build([capture_request, truncated, AIMessage('claim success')])
+        result, _ = self.invoke(graph)
+        self.assertEqual(tool_payload(result['messages'], 'report_scene')['status'], 'error')
+        self.assertEqual(len(client.camera_reads), 1)
+
     def test_preseeded_capture_cannot_report_without_successful_image_model_call(self):
         client = CameraClient()
         store = single_vlm.FrameStore(client, CONFIG)
@@ -665,8 +708,10 @@ class WebGuardTests(unittest.TestCase):
     def test_success_after_failed_report_cannot_unlock_new_mission(self):
         def invalid_report(messages):
             capture_id = tool_payload(messages, "capture_scene")["capture_id"]
-            return tool_call("report_scene", {"capture_id": capture_id,
-                             **observation([target(bbox=[.6, .4, .4, .6])])}, "first-error")
+            # Exercise a report-body provenance failure after schema validation.
+            # Invalid boxes are now rejected before the report body can run.
+            return tool_call("report_scene", {"capture_id": capture_id+'-unknown',
+                             **observation()}, "first-error")
 
         def later_report(messages):
             captures = [json.loads(message.content) for message in messages

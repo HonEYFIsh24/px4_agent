@@ -23,10 +23,11 @@ def render(snapshot, output, world=None):
     plt.rcParams['axes.unicode_minus'] = False
     grid = snapshot['grid']
     x,y = grid['origin_xy_enu_m']
-    extent = [x-12,x+12,y-12,y+12]
+    radius=grid['radius_m'];rows,cols=grid['rows'],grid['cols']
+    extent = [x-radius,x+radius,y-radius,y+radius]
     eligible = set(snapshot['eligible_cell_ids'])
-    coverage = np.full(2304, -1.)
-    semantic = np.full(2304, np.nan)
+    coverage = np.full(rows*cols, -1.)
+    semantic = np.full(rows*cols, np.nan)
     for i in eligible:
         coverage[i] = snapshot['cells'][i]['coverage']
         semantic[i] = snapshot['cells'][i]['semantic_score']
@@ -34,12 +35,12 @@ def render(snapshot, output, world=None):
     from matplotlib.colors import ListedColormap, BoundaryNorm
     cmap = ListedColormap(['#555b61','#dce0e4','#438dc4'])
     for ax in axes:
-        ax.imshow(coverage.reshape(48,48), origin='lower',extent=extent,cmap=cmap,
+        ax.imshow(coverage.reshape(rows,cols), origin='lower',extent=extent,cmap=cmap,
                   norm=BoundaryNorm([-1.5,-.5,.5,1.5],3),interpolation='none')
         ax.set_aspect('equal');ax.set_xlim(extent[:2]);ax.set_ylim(extent[2:])
         ax.set_xlabel('本地 ENU x / m');ax.grid(alpha=.18)
     axes[0].set_ylabel('本地 ENU y / m')
-    heat = axes[1].imshow(np.ma.masked_less(semantic.reshape(48,48), .05),origin='lower',extent=extent,
+    heat = axes[1].imshow(np.ma.masked_less(semantic.reshape(rows,cols), .05),origin='lower',extent=extent,
                          cmap='YlOrRd',vmin=0,vmax=1,alpha=.72,interpolation='none')
     fig.colorbar(heat, ax=axes[1],fraction=.04,pad=.03,label='语义吸引分数（非概率）')
     # Geometry is unlabeled collision data, never semantic truth.

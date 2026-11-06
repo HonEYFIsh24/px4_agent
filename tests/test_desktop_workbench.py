@@ -17,6 +17,35 @@ except ImportError as exc:
 
 @unittest.skipUnless(os.environ.get('UAV_DESKTOP_UI_TEST')=='1','requires explicit Qt test')
 class WorkbenchTests(unittest.TestCase):
+    def test_30m_map_renders_60_columns_instead_of_using_historical_48(self):
+        from desktop_workbench import SearchMap
+        app=QApplication.instance() or QApplication([]);app.setQuitOnLastWindowClosed(False)
+        widget=SearchMap();widget.resize(400,400)
+        index=45*60+20
+        cells=[{'coverage':0.,'semantic_score':0.} for _ in range(3600)]
+        cells[index]['coverage']=1.
+        widget.snapshot={'grid':{'rows':60,'cols':60,'radius_m':30.,'resolution_m':1.,'origin_xy_enu_m':[0.,0.]},
+                         'cells':cells,'eligible_cell_ids':[index],'landmarks':[],'observations':[]}
+        widget.show();app.processEvents();image=widget.grab().toImage()
+        scale=min(widget.width(),widget.height())/63.
+        ratio=image.devicePixelRatio()
+        x=int((widget.width()/2-9.5*scale)*ratio);y=int((widget.height()/2-15.5*scale)*ratio)
+        self.assertEqual(image.pixelColor(x,y).name(),'#397bb0')
+        widget.close()
+    def test_duplicate_depth_hypothesis_is_labeled_without_inventing_object_count(self):
+        from test_landmark_association import conflicting_map
+        app=QApplication.instance() or QApplication([]);app.setQuitOnLastWindowClosed(False)
+        widget=SearchWorkbench();snapshot=conflicting_map().snapshot()
+        widget.snapshot=snapshot;widget.map.snapshot=snapshot
+        widget.refresh_landmarks();widget.resize(900,600);widget.show();app.processEvents()
+        text=widget.landmark_details.toPlainText()
+        self.assertIn('不是物体数量',text)
+        self.assertIn('target_01 / target_02 疑似重复',text)
+        self.assertIn('保留两个位置估计，尚未合并',text)
+        self.assertEqual(len(snapshot['landmarks']),2)
+        self.assertFalse(widget.grab().isNull())
+        widget.close()
+
     def test_new_observations_follow_latest_until_user_selects_history(self):
         app=QApplication.instance() or QApplication([]);app.setQuitOnLastWindowClosed(False)
         widget=SearchWorkbench();widget.show()

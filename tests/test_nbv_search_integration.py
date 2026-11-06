@@ -22,8 +22,9 @@ from test_vision import CONFIG
 
 
 class ScopedFixtureBridge(LocalStereoBridge):
-    def __init__(self):
+    def __init__(self, search_radius=12., grid_resolution=.5):
         super().__init__()
+        self.search_radius,self.grid_resolution = search_radius,grid_resolution
         self.nav = navigator()
         self.telemetry['scene']['world_sha256'] = self.nav.world_sha256
         self.telemetry['external_vision']['ekf'].update(primary_instance=0,
@@ -61,7 +62,8 @@ class ScopedFixtureBridge(LocalStereoBridge):
             if self.reject_geometry: raise ValueError('controlled geometry failure')
             pair = self.pairs[payload['pair_id']]
             info = pair['left']['camera_intrinsics']
-            result = self.nav.observation_visibility(pair['body_pose_enu'], info, payload['origin_xy_enu_m'])
+            result = self.nav.observation_visibility(pair['body_pose_enu'], info, payload['origin_xy_enu_m'],
+                radius=self.search_radius,resolution=self.grid_resolution)
             result.update(capture_pair_id=pair['pair_id'], coordinate_epoch=coordinate_epoch(pair['external_vision']),
                 stamp_sim_s=pair['stamp_sim_s'], image_sha256=pair['image_sha256'],
                 body_pose_enu=pair['body_pose_enu'], camera_intrinsics=info)
@@ -73,11 +75,13 @@ class ScopedFixtureBridge(LocalStereoBridge):
             context = payload.get('search_context')
             if context:
                 if payload['operation'] == 'context':
-                    self.authority.bind(context, pair['pair_id'], pair, identity, payload['origin_xy_enu_m'])
+                    self.authority.bind(context, pair['pair_id'], pair, identity, payload['origin_xy_enu_m'],
+                                        search_radius_m=self.search_radius)
                 else: self.authority.require_batch(context)
             pose = {**pair['body_pose_enu'], 'position_m': list(self.telemetry['position_enu_m'])}
             result = StaticViewpointEvaluator(self.nav, pose, pair['left']['camera_intrinsics'], epoch,
-                fixed_yaw=0., reference_kind='live_enu_pose', probe_points_enu_m=payload.get('probe_points_enu_m')).query(payload['operation'], payload['origin_xy_enu_m'],
+                fixed_yaw=0., reference_kind='live_enu_pose', probe_points_enu_m=payload.get('probe_points_enu_m'),
+                search_radius_m=self.search_radius,grid_resolution_m=self.grid_resolution).query(payload['operation'], payload['origin_xy_enu_m'],
                     payload['expected_identity'], payload['candidates'])
             if context and payload['operation'] == 'paths': self.authority.issue(context, result)
             return result
@@ -129,7 +133,7 @@ def synthetic_metric_target(bridge, pair_id, bboxes):
 
 class NBVGraphTests(unittest.TestCase):
     def run_task(self, bridge, script, mode='nbv_geometry', selector='deterministic', pool='ranked', auto_prepare=False,
-                 confirmation='single_frame', architecture='single_vlm'):
+                 confirmation='single_frame', architecture='single_vlm', prompt=None, timeout=15):
         model = LocalScriptModel(script=script)
         with mock.patch.dict(os.environ, {'UAV_SEARCH_MODE': mode, 'UAV_NBV_SELECTOR': selector,
                 'UAV_NBV_CANDIDATE_POOL': pool, 'UAV_NBV_AUTO_PREPARE': '1' if auto_prepare else '0',
@@ -138,8 +142,8 @@ class NBVGraphTests(unittest.TestCase):
                 build_single_vlm_agent(client, config, flight_tools(client), SYSTEM_PROMPT, model=model),
                 agent_architecture=architecture)
             self.last_app = app
-            identifier = app.submit('找到蓝色油桶，完成后返航降落。')['id']
-            end = time.monotonic()+15
+            identifier = app.submit(prompt or '找到蓝色油桶，完成后返航降落。')['id']
+            end = time.monotonic()+timeout
             while time.monotonic() < end:
                 result = app.command(identifier)
                 if result['status'] != 'running': return result, app, model

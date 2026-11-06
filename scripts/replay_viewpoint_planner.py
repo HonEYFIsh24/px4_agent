@@ -44,7 +44,9 @@ def run(result_file, world, output, modes=('geometry', 'semantic'), candidate_po
     if registered_identity(navigator, semantic_map.coordinate_epoch) != map_identity(semantic_map):
         raise ValueError('offline geometric registration does not match the saved evidence')
     evaluator = StaticViewpointEvaluator(navigator, snapshot['body_pose_enu'], snapshot['camera_intrinsics'],
-                                        semantic_map.coordinate_epoch, allow_yaw=heading_mode == 'discrete')
+                                        semantic_map.coordinate_epoch, allow_yaw=heading_mode == 'discrete',
+                                        search_radius_m=semantic_map.grid['radius_m'],
+                                        grid_resolution_m=semantic_map.grid['resolution_m'])
     before, last_plan = copy.deepcopy(semantic_map.snapshot()), copy.deepcopy(navigator.last_plan)
     report = {'source_result': str(result_file.resolve()), 'source_capture_id': last,
               'world_sha256': navigator.world_sha256, 'python_version': platform.python_version(),

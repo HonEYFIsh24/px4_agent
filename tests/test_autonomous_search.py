@@ -124,14 +124,18 @@ class AdaptiveTests(unittest.TestCase):
 
     def test_observation_budget_and_radius_are_enforced(self):
         self.report()
-        for _ in range(7):
+        budget = self.search.summary(OWNER)['max_observations']
+        self.assertEqual(budget, 12)
+        for index in range(budget-1):
             r = self.search.next_view(OWNER, 'auto', '未发现')
             if 'goto' not in r: break
             self.arrive(r['goto'])
-            self.assertLessEqual(math.dist(self.client.telemetry['position_enu_m'][:2], [0., 0.]), 12.)
+            self.assertLessEqual(math.dist(self.client.telemetry['position_enu_m'][:2], [0., 0.]), 30.)
             self.report()
+            if index == 6:
+                self.assertEqual(self.search.summary(OWNER)['search_status'], 'searching')
         self.assertEqual(self.search.summary(OWNER)['search_status'], 'budget_exhausted')
-        self.assertEqual(len(self.search.summary(OWNER)['observations']), 8)
+        self.assertEqual(len(self.search.summary(OWNER)['observations']), budget)
 
     def test_operator_or_tool_failure_forbids_resuming_search(self):
         self.report()

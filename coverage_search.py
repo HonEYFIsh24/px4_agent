@@ -286,7 +286,7 @@ class TargetMemory:
         self.coordinate_epoch, self._epoch_set = None, False
 
     def observe(self, label, measurement, capture_id, observer_pose_enu, *,
-                association_target_id=None, allow_auto_association=True):
+                association_target_id=None, allow_auto_association=True, new_target_id=None):
         label = _label(label)
         if (measurement.get("status") != "ok" or measurement.get("method") != "stereo_sgbm_robust_surface"
                 or measurement.get("frame") != "local_enu"):
@@ -340,7 +340,11 @@ class TargetMemory:
         else:
             if len(self.targets) >= self.max_targets:
                 raise CoverageSearchError("Target memory is full; no target evidence was silently discarded")
-            target = {"id": "target_{:02d}".format(len(self.targets)+1), "label": label, "observations": [],
+            identifier = new_target_id or "target_{:02d}".format(len(self.targets)+1)
+            if (not isinstance(identifier, str) or not re.fullmatch(r'(target_\d{2}|bearing_\d{3})', identifier)
+                    or any(t['id'] == identifier for t in self.targets)):
+                raise CoverageSearchError('Invalid or duplicate program-assigned target identity')
+            target = {"id": identifier, "label": label, "observations": [],
                       "coordinate_epoch": copy.deepcopy(epoch)}
             self.targets.append(target)
         if len(target["observations"]) >= self.max_observations:

@@ -14,7 +14,7 @@ class WorkbenchEvidenceTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
         self.image=b'fixture image';self.digest=hashlib.sha256(self.image).hexdigest();(self.root/'frame.jpg').write_bytes(self.image)
         self.snap={'status':'valid','owner':['thread','command'],'world_sha256':'world','sortie_id':'sortie','coordinate_epoch':{'vio_epoch':1},
-                   'grid':{'rows':48,'cols':48},'cells':[{}]*2304,'observations':[{'capture_id':'frame','image_sha256':{'left':self.digest}}]}
+                   'grid':{'rows':48,'cols':48,'radius_m':12.,'resolution_m':.5},'cells':[{}]*2304,'observations':[{'capture_id':'frame','image_sha256':{'left':self.digest}}]}
         (self.root/'frame.semantic-map.json').write_text(json.dumps(self.snap))
         self.command={'id':'command','perceptions':[{'status':'ok','capture_id':'frame','camera':{'image_sha256':self.digest}}],
                       'semantic_map_events':[{'status':'valid','capture_id':'frame','world_sha256':'world','sortie_id':'sortie'}]}
@@ -23,6 +23,15 @@ class WorkbenchEvidenceTests(unittest.TestCase):
         self.assertEqual(search_snapshot(self.command,self.root),self.snap)
         self.command['id']='another';self.assertIsNone(search_snapshot(self.command,self.root))
         self.command['id']='command';self.command['semantic_map_events'].append({'status':'invalid'})
+        self.assertIsNone(search_snapshot(self.command,self.root))
+
+    def test_wider_grid_requires_matching_dimensions_and_cell_count(self):
+        self.snap['grid']={'radius_m':30.,'resolution_m':1.,'rows':60,'cols':60}
+        self.snap['cells']=[{}]*3600
+        (self.root/'frame.semantic-map.json').write_text(json.dumps(self.snap))
+        self.assertEqual(search_snapshot(self.command,self.root),self.snap)
+        self.snap['cells']=[{}]*2304
+        (self.root/'frame.semantic-map.json').write_text(json.dumps(self.snap))
         self.assertIsNone(search_snapshot(self.command,self.root))
 
     def test_historical_image_requires_report_and_matching_hash(self):
@@ -48,6 +57,17 @@ class WorkbenchEvidenceTests(unittest.TestCase):
         self.assertEqual(status_text(self.command,{}),'多视角确认完成')
         self.assertEqual(status_text(self.command,{'mission':{'status':'running','action':'land'}}),'正在返航降落')
         self.assertEqual(status_text(self.command,{'mission':{'status':'running','action':'takeoff'}}),'起飞与导航初始化')
+
+    def test_target_approach_reacquisition_and_exhaustion_are_distinct(self):
+        progress={'search_status':'searching','search_phase':'confirming','target_focus_state':'approaching'}
+        self.command.update(status='running',search_events=[{'result':progress}])
+        self.assertIn('正在接近',status_text(self.command,{}))
+        progress['target_focus_state']='reacquiring'
+        self.assertIn('重新观察',status_text(self.command,{}))
+        progress['search_status']='budget_exhausted'
+        self.assertEqual(status_text(self.command,{}),'搜索预算已用尽')
+        progress['search_status']='no_reachable_view'
+        self.assertIn('正在收尾',status_text(self.command,{}))
 
     def test_live_position_requires_matching_world_sortie_and_epoch(self):
         self.snap['coordinate_epoch']={'vio_epoch':1,'ekf_counters':{'xy':1,'z':2,'heading':3}}

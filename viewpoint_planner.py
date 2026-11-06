@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass, asdict
 
 from stereo_localization import vector, finite, quaternion_rotation
+from search_limits import MAX_OBSERVATIONS, SEARCH_RADIUS_M
 
 
 class ViewpointError(ValueError):
@@ -25,6 +26,9 @@ class ViewpointConfig:
     repeat_weight: float = .2
     target_visibility_weight: float = 1.
     parallax_weight: float = .5
+    observation_range_weight: float = .8
+    bearing_approach_weight: float = 1.5
+    depth_height_weight: float = .5
     coverage_scale_m2: float = 100.
     semantic_scale_m2: float = 25.
     motion_scale_s: float = 10.
@@ -92,6 +96,8 @@ class ViewpointPlanner:
         self.config = config or ViewpointConfig()
         self._result = None
         self.confirmation_goal = None
+        self.search_radius_m = SEARCH_RADIUS_M
+        self.acquire_depth = False
 
     def candidate_pool(self, ranked, reference, fill=False):
         if self.config.candidate_pool_mode == 'ranked' or not ranked:
@@ -115,7 +121,7 @@ class ViewpointPlanner:
     def generate_candidates(self, pose, origin_xy, fixed_yaw=None):
         position = vector(pose['position_m'], 3, 'NBV position')
         origin = vector(origin_xy, 2, 'NBV origin')
-        if not 1. <= position[2] <= MAX_ALTITUDE or math.dist(position[:2], origin) > 12.+1e-9:
+        if not 1. <= position[2] <= MAX_ALTITUDE or math.dist(position[:2], origin) > self.search_radius_m+1e-9:
             raise ViewpointError('NBV source is outside the search volume')
         if fixed_yaw is None:
             rotation = quaternion_rotation(pose['orientation_xyzw'])
@@ -133,7 +139,7 @@ class ViewpointPlanner:
                 point = [position[0]+dx, position[1]+dy, z]
                 key = tuple(round(x, 8) for x in point)
                 if (key in seen or math.dist(point, position) < .5
-                        or math.dist(point[:2], origin) > 12.+1e-9):
+                        or math.dist(point[:2], origin) > self.search_radius_m+1e-9):
                     continue
                 seen.add(key)
                 if math.hypot(dx, dy) < 1e-8:
@@ -144,6 +150,44 @@ class ViewpointPlanner:
                 direction += '升高' if z > position[2]+1e-8 else '下降' if z < position[2]-1e-8 else '平移'
                 points.append({'id': 'view_{:03d}'.format(len(points)+1),
                                'position_enu_m': point, 'fixed_yaw_enu_rad': yaw, 'direction': direction})
+        # Add short, target-centred observation arcs only from metric visual
+        # evidence. Bearing-range probes must never become approach waypoints.
+        surface = (self.confirmation_goal or {}).get('surface_reference')
+        if surface is not None:
+            anchor = vector(surface['point_enu_m'], 3, 'target surface')
+            angle = math.atan2(position[1]-anchor[1], position[0]-anchor[0])
+            for radius in (surface['desired_range_m'], surface['max_range_m']):
+                for i in range(8):
+                    for z in heights:
+                        bearing = angle+i*math.pi/4
+                        point = [anchor[0]+radius*math.cos(bearing), anchor[1]+radius*math.sin(bearing), z]
+                        key = tuple(round(x, 8) for x in point)
+                        if (key in seen or not .5 <= math.dist(point, position) <= 4.
+                                or math.dist(point[:2], origin) > self.search_radius_m+1e-9):
+                            continue
+                        seen.add(key)
+                        points.append({'id': 'view_{:03d}'.format(len(points)+1),
+                                       'position_enu_m': point, 'fixed_yaw_enu_rad': yaw,
+                                       'direction': '围绕已定位目标调整观察位置',
+                                       'candidate_basis': 'observed_surface_standoff_arc'})
+        if self.acquire_depth:
+            # A measured direction supports short relative motion, not a target
+            # coordinate. Every endpoint and the entire route still go through
+            # the same collision/permission checks and single-use tickets.
+            ray = self.confirmation_goal['bearing_reference']['direction_enu']
+            length = math.hypot(*ray[:2]);forward = [ray[0]/length,ray[1]/length]
+            for step in (1.,2.):
+                for lateral in (0.,-.75,.75):
+                    point = [position[0]+step*forward[0]-lateral*forward[1],
+                             position[1]+step*forward[1]+lateral*forward[0],
+                             max(1.5,min(MAX_ALTITUDE-.5,position[2]))]
+                    key = tuple(round(x,8) for x in point)
+                    if key in seen or math.dist(point[:2],origin)>self.search_radius_m+1e-9:
+                        continue
+                    seen.add(key)
+                    points.append({'id':'view_{:03d}'.format(len(points)+1),'position_enu_m':point,
+                        'fixed_yaw_enu_rad':yaw,'direction':'沿当前目标方位小步接近，重新获取深度',
+                        'candidate_basis':'local_motion_along_observed_bearing_not_target_position'})
         if self.config.heading_mode == 'discrete':
             base = points + ([{'position_enu_m': list(position), 'direction': '原地', 'fixed_yaw_enu_rad': yaw}]
                              if 1.5 <= position[2] <= MAX_ALTITUDE-.5 else [])
@@ -154,11 +198,15 @@ class ViewpointPlanner:
                                    'direction': candidate['direction'] + ('向右转45度' if step < 0 else '向左转45度')})
         return points
 
-    def _score(self, coverage, semantic, seconds, repeat, target_visibility=0., parallax=0.):
+    def _score(self, coverage, semantic, seconds, repeat, target_visibility=0., parallax=0., range_quality=0.,
+               bearing_advance=0., height_change=0.):
         c = self.config
         if self.confirmation_goal is not None:
             terms = {'target_visibility': c.target_visibility_weight*target_visibility,
-                     'parallax': c.parallax_weight*parallax,
+                     'parallax': c.parallax_weight*parallax*(.2 if self.confirmation_goal.get('purpose') == 'approach' or self.acquire_depth else 1.),
+                     'observation_range': c.observation_range_weight*range_quality,
+                     'bearing_approach': c.bearing_approach_weight*bearing_advance,
+                     'height_change': -c.depth_height_weight*height_change,
                      'motion': -c.motion_weight*seconds/c.motion_scale_s,
                      'repeat': -c.repeat_weight*repeat}
             return sum(terms.values()), terms
@@ -180,14 +228,27 @@ class ViewpointPlanner:
             for point in confirmation_goal['probe_points_enu_m']:
                 vector(point, 3, 'confirmation hypothesis')
             avoid = confirmation_goal.get('avoid_observer_positions', [])
-            if not isinstance(avoid, list) or len(avoid) > 8:
+            if not isinstance(avoid, list) or len(avoid) > MAX_OBSERVATIONS:
                 raise ViewpointError('confirmation previous observers must be a bounded list')
             for point in avoid:
                 vector(point, 3, 'previous confirmation observer')
+            surface = confirmation_goal.get('surface_reference')
+            if surface is not None:
+                # Bind range scoring to the observed metric probe, never to a
+                # VLM-proposed coordinate or a hypothetical bearing depth.
+                if (surface.get('basis') != 'validated_stereo_visible_surface_not_object_center'
+                        or surface.get('point_enu_m') != confirmation_goal['probe_points_enu_m'][0]
+                        or surface.get('source_capture_id') != confirmation_goal['source_capture_id']
+                        or surface.get('target_id') != confirmation_goal['target_id']
+                        or confirmation_goal.get('probe_basis') != 'actual_stereo_surface_with_bounded_uncertainty_probe'
+                        or not 0 < finite(surface['uncertainty_margin_m'], 'range uncertainty') <= 1.5
+                        or (surface.get('min_range_m'), surface.get('desired_range_m'), surface.get('max_range_m')) != (2.5, 4., 5.5)):
+                    raise ViewpointError('target range reference lacks bound metric evidence')
         revision = map_revision(semantic_map)
         if not semantic_map.observations:
             raise ViewpointError('NBV needs at least one saved actual observation')
         identity, origin = map_identity(semantic_map), list(semantic_map.grid['origin_xy_enu_m'])
+        self.search_radius_m = semantic_map.grid['radius_m']
         reference = None
 
         def query(operation, candidates):
@@ -204,7 +265,7 @@ class ViewpointPlanner:
                     or response.get('prediction_only') is not True or response.get('identity') != identity
                     or response.get('execution_authorized') is not False
                     or response.get('requires_executor_revalidation') is not True
-                    or response.get('origin_xy_enu_m') != origin or response.get('search_radius_m') != 12.):
+                    or response.get('origin_xy_enu_m') != origin or response.get('search_radius_m') != self.search_radius_m):
                 raise ViewpointError('candidate prediction identity or search permission changed')
             if (not isinstance(response.get('camera_calibration_sha256'), str)
                     or not re.fullmatch('[0-9a-f]{64}', response['camera_calibration_sha256'])
@@ -239,6 +300,20 @@ class ViewpointPlanner:
             return response
 
         reference = query('context', [])
+        self.acquire_depth = False
+        if confirmation_goal is not None and confirmation_goal.get('purpose') == 'depth_acquisition':
+            bearing = confirmation_goal.get('bearing_reference') or {}
+            ray = vector(bearing.get('direction_enu'),3,'actual target bearing')
+            if (bearing.get('basis') != 'actual_image_bearing_without_metric_range'
+                    or bearing.get('origin_enu_m') != confirmation_goal['source_camera_enu_m']
+                    or abs(math.sqrt(sum(v*v for v in ray))-1.) > 1e-6
+                    or confirmation_goal.get('surface_reference') is not None):
+                raise ViewpointError('depth acquisition requires an actual direction and no invented metric target')
+            box = confirmation_goal['source_bbox']
+            self.acquire_depth = (math.dist(reference['start_enu_m'],confirmation_goal['source_observer_enu_m']) <= .5
+                                  and math.hypot(*ray[:2]) >= .2
+                                  and .03 <= min(box[2]-box[0],box[3]-box[1])
+                                  and max(box[2]-box[0],box[3]-box[1]) < .5)
         candidates = self.generate_candidates({'position_m': reference['start_enu_m']}, origin,
                                                reference['fixed_yaw_enu_rad'])
         visibility_results = []
@@ -257,12 +332,46 @@ class ViewpointPlanner:
             if coverage <= 0 and confirmation_goal is None:
                 rejected.append({'id': candidate['id'], 'stage': 'visibility', 'reason': 'no new geometric coverage'})
                 continue
-            target_visibility, parallax = 0., 0.
+            target_visibility, parallax, range_quality, distance = 0., 0., 0., None
+            bearing_advance,height_change = 0.,0.
+            if self.acquire_depth:
+                ray = confirmation_goal['bearing_reference']['direction_enu'];length = math.hypot(*ray[:2])
+                dx,dy,dz = [a-b for a,b in zip(candidate['position_enu_m'],reference['start_enu_m'])]
+                advance = (dx*ray[0]+dy*ray[1])/length
+                cross = abs(dx*ray[1]-dy*ray[0])/length
+                if math.hypot(dx,dy) <= 2.5 and abs(dz) <= .5 and cross <= 1.:
+                    bearing_advance = max(0.,min(1.,advance/2.))
+                height_change = min(2.,abs(dz)/2.)
             if confirmation_goal is not None:
                 probes = result.get('probe_visibility')
                 expected_probes = confirmation_goal['probe_points_enu_m']
                 if not isinstance(probes, list) or len(probes) != len(expected_probes):
                     raise ViewpointError('confirmation prediction lacks target visibility evidence')
+                surface = confirmation_goal.get('surface_reference')
+                if (confirmation_goal.get('purpose') == 'reveal_front'
+                        and confirmation_goal.get('probe_basis') == 'actual_stereo_surface_with_bounded_uncertainty_probe'):
+                    # Information-only prediction from the existing measured
+                    # surface. Do not create a navigation anchor, relax the
+                    # absolute covariance gate or invent an object centre.
+                    camera = vector(probes[0]['camera_origin_enu_m'], 3, 'front-observation camera')
+                    distance = math.dist(camera, confirmation_goal['probe_points_enu_m'][0])
+                    source_range = math.dist(confirmation_goal['source_camera_enu_m'], confirmation_goal['probe_points_enu_m'][0])
+                    if distance > min(10., source_range+.5):
+                        rejected.append({'id': candidate['id'], 'stage': 'information_need',
+                            'reason': 'front/rear evidence needs a lateral view within useful stereo range'})
+                        continue
+                    range_quality = min(1., 4./max(distance, .1))
+                    height_change = min(2., abs(candidate['position_enu_m'][2]-reference['start_enu_m'][2])/2.)
+                if surface is not None:
+                    camera = vector(probes[0]['camera_origin_enu_m'], 3, 'predicted observation camera')
+                    distance = math.dist(camera, surface['point_enu_m'])
+                    if distance-surface['uncertainty_margin_m'] < surface['min_range_m']:
+                        rejected.append({'id': candidate['id'], 'stage': 'target_range',
+                                         'reason': 'predicted observation is too close to measured target surface'})
+                        continue
+                    # Fixed physical scale: adequate distance beats continually
+                    # increasing the confirmation baseline or exploring away.
+                    range_quality = min(1., surface['desired_range_m']/max(distance, .1))
                 box = confirmation_goal['source_bbox']
                 pixels = min((box[2]-box[0])*640, (box[3]-box[1])*480)
                 for probe, expected in zip(probes, expected_probes):
@@ -295,7 +404,8 @@ class ViewpointPlanner:
                 if (math.dist(candidate['position_enu_m'], confirmation_goal['source_observer_enu_m']) < .5
                         or any(math.dist(candidate['position_enu_m'], old) < .75
                                for old in confirmation_goal.get('avoid_observer_positions', []))
-                        or target_visibility <= 0 or parallax < .05):
+                        or target_visibility <= 0
+                        or (parallax < .05 and confirmation_goal.get('purpose') != 'approach' and not self.acquire_depth)):
                     rejected.append({'id': candidate['id'], 'stage': 'confirmation',
                                      'reason': 'insufficient predicted target visibility or distinct-view parallax'})
                     continue
@@ -315,10 +425,13 @@ class ViewpointPlanner:
             # Rotation cost is omitted from this upper bound; the estimated cost
             # below is not a guaranteed lower bound on real arrival time.
             upper, _ = self._score(coverage, semantic, lower_length/self.config.nominal_speed_m_s, repeat,
-                                   target_visibility, parallax)
+                                   target_visibility, parallax, range_quality, bearing_advance,height_change)
             useful.append({**candidate, 'visible_cell_ids': visible, 'coverage_gain_m2': coverage,
                            'semantic_gain_m2': semantic, 'repeat_cost': repeat, 'optimistic_score': upper,
                            'target_visibility_score': target_visibility, 'parallax_score': parallax,
+                           'observation_range_score': range_quality,
+                           'predicted_target_range_m': distance,
+                           'bearing_advance_score':bearing_advance,'height_change_cost':height_change,
                            **({'target_yaw_enu_rad': target_yaw} if 'heading_step' in candidate else {})})
         useful.sort(key=lambda p: (-p['optimistic_score'], p['id']))
         remaining, evaluated, attempted, pruned = list(useful), [], 0, []
@@ -341,17 +454,19 @@ class ViewpointPlanner:
                 points += [vector(p, 3, 'path waypoint') for p in waypoints]
                 if (plan.get('source') != 'verified_static_collision_map_3d'
                         or plan.get('route_complete') is not True or plan.get('full_route_within_search_volume') is not True
-                        or plan.get('search_origin_xy_enu_m') != origin or plan.get('search_radius_m') != 12.
+                        or plan.get('search_origin_xy_enu_m') != origin or plan.get('search_radius_m') != self.search_radius_m
                         or math.dist(points[-1], candidate['position_enu_m']) > 1e-8
                         or math.dist(points[0], paths['start_enu_m']) > 1e-8
-                        or any(not 1.-1e-9 <= p[2] <= MAX_ALTITUDE+1e-9 or math.dist(p[:2], origin) > 12.+1e-9 for p in points)):
+                        or any(not 1.-1e-9 <= p[2] <= MAX_ALTITUDE+1e-9 or math.dist(p[:2], origin) > self.search_radius_m+1e-9 for p in points)):
                     raise ViewpointError('candidate route exceeds its source, goal or full search-volume permission')
                 length = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
                 if not math.isclose(length, finite(plan['path_length_m'], 'path length'), rel_tol=1e-9, abs_tol=1e-9):
                     raise ViewpointError('candidate route length does not match its waypoints')
                 seconds = length/self.config.nominal_speed_m_s + ((math.pi/4/.5 + 1.) if 'heading_step' in candidate else 0.)
                 score, terms = self._score(candidate['coverage_gain_m2'], candidate['semantic_gain_m2'], seconds,
-                                           candidate['repeat_cost'], candidate['target_visibility_score'], candidate['parallax_score'])
+                                           candidate['repeat_cost'], candidate['target_visibility_score'],
+                                           candidate['parallax_score'], candidate['observation_range_score'],
+                                           candidate['bearing_advance_score'],candidate['height_change_cost'])
                 evaluated.append({**candidate, 'path': plan, 'motion_seconds': seconds,
                                   'score': score, 'score_terms': terms, 'path_verified': True,
                                   'execution_ticket': result.get('execution_ticket')})

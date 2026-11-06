@@ -1,5 +1,25 @@
 # 桌面自主搜索工作台
 
+## 完整任务运行时（2026-11-06，当前）
+
+`UAV_TASK_RUNTIME=staged` 在原工作台增加“完整任务”页签：原任务、当前阶段、真实目标ID/版本、推理模式、缺失信息及最终未完成项。地图可展示程序验证的终点位置、航向和路径，和信息NBV候选分开；终态不保留待执行旧候选。原实时左相机、历史原图检测框、多视角双图及独立悬停/降落保留。
+
+新运行时和默认legacy入口在启动时固定，异常不空中回退。当前真实搜索/报告/返航一次通过，车前原句测试一次在恢复策略接口失败后安全落地；不是车前落地通过。代码、回归、现场截图和真实边界见 [架构](task_runtime_architecture.md)、[验收记录](task_runtime_validation.md)。没有录制新视频。
+
+## 宽敞庭院与30米搜索（2026-11-05，历史实测）
+
+默认启动改用courtyard_spacious.world，桌面默认几何NBV/多视角。搜索半径30米，新地图60×60、1米分辨率；历史48×48地图仍可显示。接近无深度目标时显示“正在小步接近以获取可靠深度”，候选解释包含沿方位接近与高度变化贡献。当前图没有可靠深度时不会显示虚构的目标距离。首次宽敞庭院实飞完成12观察、11换位、多视角确认和返航落地，近照判据未通过；相对测距修复后的第二次实飞在第二帧因报告格式错误中止，未到近照阶段。最新9张实际Qt关键帧在 `logs/setup/relative-range-flight-20261105/task/`，未录像，工作台如实显示失败和实际落地。实现、实测及距离不确定度诊断见 [宽敞场景与接近流程](spacious_search.md)。下方12米地图描述属于历史版本。
+
+## 2026-11-05 目标接近与持续观察
+
+当前搜索状态可区分“目标已确认，正在接近并调整拍摄位置”和“目标暂时不可见，正在围绕已有线索重新观察”；预算耗尽和无可验证路径时优先显示收尾状态。候选解释增加观察距离评分，接近拍摄阶段显示“接近拍摄视角”。这些值来自搜索状态机及规划结果；预测距离不是实测距离，也不是物体中心或落点。详见 [目标观察流程与验收边界](target_observation.md)。本次尚未新飞行。
+
+随后按用户要求将自主搜索有效观察上限提高至12次；桌面“已观察/上限”读取实际进度字段，复核历史也保留完整12次范围。15分钟、12米搜索半径和飞行安全门禁保留。该调整的真实复测记录以交接文档最新条目为准。
+
+## 2026-11-04 疑似重复地标显示
+
+新地图快照可携带非权威的跨视角关联假设。同名物体的两组位置发生冲突、但具有唯一单向投影支持时，地图以共享标签“疑似重复，位置待核实”展示；两个空心点仍是两个原始位置估计，橙色连接虚线是待核实关系，不是规划路径。地标详情保留各 ID，并注明“证据条数不是物体数量”。多候选歧义或同帧共现不归组。该显示不合并实体 ID/坐标、不改变确认等级、也不证明只有一个物体。旧快照不自动重写；本轮只完成真实历史回放及离屏布局检查，尚未新飞行。详见 [关联诊断与限制](landmark_association.md)。
+
 ## 2026-11-03 正式闭环验收
 
 已通过一次首次换位/旋转后新双目帧与多视角确认验收，并在独立实例录制了完整实际桌面闭环。场景 `scene/test_environments/courtyard_delivery.world`，种子 17，指令为“找到前方的白色货车，调整到合适的角度拍摄并报告周围环境，完成后返航降落。”正式任务保存 8 份视觉报告、执行 7 次票据换位；三次复核为未确认、未确认、确认，最终实际返航、落地、上锁。NBV/地图回放与确认审计均通过；弱裁切框相容没有直接被提升为确认。记录只证明本次运行，不代表所有任务成功率。
@@ -15,14 +35,16 @@
 重新演示前检查当前进程及飞行状态；使用新的日志/验收目录。标准启动配置如下，未设置验收目录时正常启动桌面，由用户输入任务：
 
 ```bash
-env PX4_DIR=/home/fxxk/PX4-Autopilot UAV_NAVIGATION_MODE=static_3d \
+# 在仓库根目录执行。
+PROJECT_DIR="$(pwd -P)"
+env PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}" UAV_NAVIGATION_MODE=static_3d \
   UAV_ENABLE_YAW=1 UAV_ENABLE_NBV_YAW=1 \
   UAV_SEARCH_MODE=nbv_geometry UAV_NBV_SELECTOR=deterministic \
   UAV_NBV_HEADING_MODE=discrete UAV_NBV_AUTO_PREPARE=1 \
   UAV_TARGET_CONFIRMATION=multiview PX4_AGENT_GAZEBO_SEED=17 GUI=false \
-  bash /home/fxxk/px4_agent/scripts/start_system.sh --control-ui desktop \
-  --env-file /home/fxxk/px4_agent/.env --ev-profile no_gps \
-  --world-file /home/fxxk/px4_agent/scene/test_environments/courtyard_delivery.world
+  bash "$PROJECT_DIR/scripts/start_system.sh" --control-ui desktop \
+  --env-file "$PROJECT_DIR/.env" --ev-profile no_gps \
+  --world-file "$PROJECT_DIR/scene/test_environments/courtyard_delivery.world"
 ```
 
 两个航向开关都必须设置，缺少其中一个时初始化会被门禁拒绝；不得绕过。`GUI=false` 仅关闭独立 Gazebo 图形窗口，相机传感器和桌面实时相机仍正常运行。

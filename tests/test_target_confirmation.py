@@ -123,17 +123,18 @@ class ConfirmationTests(unittest.TestCase):
         self.search.begin(OWNER, '蓝色油桶')
         self.search.execute_pending(OWNER)
 
-    def observe(self, present=True, metric=True):
+    def observe(self, present=True, metric=True, point=None):
+        point = [5., 0., 1.] if point is None else point
         identifier = self.store.capture(OWNER, '蓝色油桶')['capture_id']
         self.store.mark_delivered(OWNER, identifier, {})
         frame = self.store.get(OWNER, identifier)
         targets = []
         if present:
-            projection = project_ground_point(frame['snapshot']['camera_intrinsics'], frame['snapshot']['body_pose_enu'], [5., 0., 1.], 20.)
+            projection = project_ground_point(frame['snapshot']['camera_intrinsics'], frame['snapshot']['body_pose_enu'], point, 20.)
             self.assertTrue(projection['inside_fov_and_range'])
             u, v = projection['pixel_uv']
             box = [max(0., u/640-.06), max(0., v/480-.07), min(1., u/640+.06), min(1., v/480+.07)]
-            targets = [target(frame, [5., 0., 1.], label='蓝色油桶', box=box)]
+            targets = [target(frame, point, label='蓝色油桶', box=box)]
             if not metric: targets[0]['stereo_location'] = {'status': 'unavailable', 'reason': 'controlled no metric fixture'}
         report = {'status': 'ok', 'capture_id': identifier, 'summary': 'synthetic observation', 'targets': targets}
         self.search.consume(OWNER, frame, report)
@@ -219,8 +220,9 @@ class ConfirmationTests(unittest.TestCase):
         self.observe(present=False)
         result = self.review(source=True, current=False, same=False)
         self.assertEqual(result['confirmation_outcome'], 'unconfirmed')
-        self.assertEqual(result['search_phase'], 'exploring')
-        self.assertIsNone(result['confirmation'])
+        self.assertEqual(result['search_phase'], 'confirming')
+        self.assertEqual(result['confirmation']['source_capture_id'], source['capture_id'])
+        self.assertEqual(result['target_focus_state'], 'reacquiring')
 
     def test_uncertain_source_is_not_rejected_and_stays_bounded(self):
         source = self.observe(metric=False)
@@ -234,8 +236,8 @@ class ConfirmationTests(unittest.TestCase):
         self.observe(present=False)
         result = self.review(source=False, current=False, same=False, source_uncertain=True, current_uncertain=True)
         self.assertEqual(result['confirmation_outcome'], 'unconfirmed')
-        self.assertEqual(result['search_phase'], 'exploring')
-        self.assertIsNone(result['confirmation'])
+        self.assertEqual(result['search_phase'], 'confirming')
+        self.assertEqual(result['confirmation']['source_capture_id'], source['capture_id'])
 
     def test_uncertainty_cannot_contradict_positive_support(self):
         self.observe()

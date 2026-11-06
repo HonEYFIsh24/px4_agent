@@ -30,6 +30,16 @@
         "world": "857a9639be2c2deb829c0acadca9023533afa7f0d9b95090c16a20fbe2632e4d",
         "manifest": "b02f45fc963552f8878449b268be15a80b91d2dccec5ad196da4b26bf18b5cf0"
       }
+    },
+    {
+      "id": "courtyard_spacious",
+      "world": "courtyard_spacious.world",
+      "manifest": "courtyard_spacious_manifest.json",
+      "world_sha256": "b624fb8ceabc2d56b8979b3a792678271bbc5165f9bcfb5ce627079b1d324f6a",
+      "asset_sha256": {
+        "world": "b624fb8ceabc2d56b8979b3a792678271bbc5165f9bcfb5ce627079b1d324f6a",
+        "manifest": "4a1f0597ce54bd0c790dc15ed6d979e19f9602853c25a875f8f6d3ce713ab7da"
+      }
     }
   ]
 }

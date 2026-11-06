@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Replay actual saved reports with archived geometry, or run an explicit controlled fixture."""
 import argparse
+import base64
 import hashlib
 import json
 import sys
@@ -32,7 +33,15 @@ def replay(result_file, output, audit_only=False):
         delivered=any(c.get('status')=='ok' and 'image' in c.get('input_modalities',[]) and identifier in c.get('capture_ids',[])
                       for c in model_calls)
         frame={'owner':owner,'delivered':delivered,'capture_id':identifier,'snapshot':snapshot}
+        online_file=directory/(identifier+'.semantic-map.json')
+        online=json.loads(online_file.read_text()) if online_file.exists() else {}
         if m is None:m=SemanticMap(owner,geometry,query=archive['query'],instruction=command['prompt'])
+        backend=online.get('association_backend')
+        if backend:
+            if backend!='cpu_harris_patch_affine_v1':raise ValueError('Archived association backend is not available for replay')
+            m.enable_joint_association()
+            frame['image_base64']=base64.b64encode((directory/(identifier+'.jpg')).read_bytes()).decode()
+        if m.query!=archive['query']:m.set_query(archive['query'])
         m.update_observation(frame,report,geometry)
     output.mkdir(parents=True,exist_ok=True)
     audit={'source':'actual_saved_images_reports_and_registered_geometry','skipped':skipped,
