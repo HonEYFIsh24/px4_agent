@@ -389,6 +389,10 @@ class SceneMiddleware(AgentMiddleware):
         self.context_memory = TaskContextMemory()
 
     def wrap_tool_call(self, request, handler):
+        from task_contract import contract_from_messages
+        contract = contract_from_messages(request.state.get('messages', []))
+        if contract and contract['admission'] == 'rejected':
+            raise ValueError(contract['reason'])
         name = request.tool_call["name"]
         active_session = None
         fatal_report_schema = False
@@ -578,6 +582,10 @@ class SceneMiddleware(AgentMiddleware):
                                tool_call_id=request.tool_call["id"], status="error")
 
     def wrap_model_call(self, request, handler):
+        from task_contract import contract_from_messages
+        contract = contract_from_messages(request.messages)
+        if contract and contract['admission'] == 'rejected':
+            return ModelResponse(result=[AIMessage(content=contract['reason'])])
         selection_frame = False
         photo_review_frame = False
         photo_selection_frame = False

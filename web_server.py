@@ -13,6 +13,7 @@ from urllib.parse import unquote, urlsplit
 
 from client import BridgeClient
 from vision import model_metadata, observation_reply
+from task_contract import assess_task, search_result
 
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_ENV_FILE = (PROJECT_DIR / ".env" if (PROJECT_DIR / ".env").is_file()
@@ -134,6 +135,22 @@ class AuditedClient:
     """Use the real bridge while blocking further actions after an operator interrupt."""
     def __init__(self, application):
         self.application = application
+
+    def search_task_contract(self, owner):
+        with self.application.lock:
+            command = self.application.current_command
+            if (not command or owner != (self.application.agent_thread_id, command['id'])
+                    or command['interrupted']):
+                raise ValueError('任务契约不属于当前活动指令')
+            return assess_task(command.get('task_contract', {}).get('original_request', command['prompt']))
+
+    def require_search_finish(self, owner, state):
+        self.search_task_contract(owner)
+        command = self.application.current_command
+        owned = {e['mission']['id'] for e in command.get('flight_missions', [])}
+        mission = state.get('mission') or {}
+        if mission.get('id') not in owned or mission.get('status') != 'succeeded':
+            raise ValueError('搜索收尾必须拥有当前已完成的飞行任务')
 
     @property
     def agent_architecture(self):
@@ -291,6 +308,8 @@ class AuditedClient:
             with self.application.control_lock:
                 with self.application.lock:
                     command = self.application.current_command
+                    if command and assess_task(command['prompt'])['admission'] == 'rejected':
+                        raise RuntimeError('完整任务能力匹配未通过，禁止执行模型请求')
                     if command is not None and command.get("interrupted"):
                         raise RuntimeError("操作员已中断此指令，禁止继续提交飞行动作")
                     if path in ("/mission", "/land", "/stop", '/navigation/execute-viewpoint', '/navigation/photo-action') and command is not None and command["mode"] == "observe":
@@ -307,6 +326,23 @@ class AuditedClient:
                                  and isinstance(e['mission'].get('id'), str)}
                         if command is None or payload.get('expected_mission_id') not in owned:
                             raise RuntimeError('相对取景和返航必须拥有当前飞行任务')
+                    manager = getattr(self, 'search_manager', None)
+                    if path == '/mission' and command and manager:
+                        owner = (self.application.agent_thread_id, command['id'])
+                        session = manager.adaptive.sessions.get(owner) or {}
+                        if session.get('finishing_mission_id'):
+                            # Recheck under the same lock as operator interrupts;
+                            # never return a newer/unowned flight to our old home.
+                            state = self.application.client.state()
+                            self.require_search_finish(owner, state)
+                            if (state.get('mission') or {}).get('id') != session['finishing_mission_id']:
+                                raise ValueError('搜索收尾前飞行任务已改变')
+                            from search_tools import _navigation_permission, coordinate_epoch
+                            _navigation_permission(state)
+                            if (coordinate_epoch(state) != session['epoch']
+                                    or state.get('scene', {}).get('world_sha256') != session['scene']
+                                    or state.get('navigation', {}).get('registration_id') != session['binding']['registration_id']):
+                                raise ValueError('搜索收尾前坐标身份已改变')
                 result = (self.application.client.request(path, payload) if timeout is None else
                           self.application.client.request(path, payload, timeout=timeout))
                 if path == '/navigation/photo-action' and result.get('status') == 'not_executed':
@@ -458,6 +494,17 @@ class WebApplication:
                        "tool_results": [], "interrupted": False, "flight_failure": None, "perception": None,
                        "vision_failure": None, "model_calls": [], "safety_landing": None, "tool_errors": [],
                        "perceptions": [], "min_observations": min_observations, "flight_missions": []}
+            command['task_contract'] = assess_task(prompt)
+            if command['task_contract']['admission'] == 'rejected':
+                command.update(status='failed', error=command['task_contract']['reason'],
+                               reply=command['task_contract']['reason'], finished_at=time.time(),
+                               task_outcome={'user_goal_completed': False, 'search_process_ended': False,
+                                             'admission': 'rejected', 'flight_status': 'not_started',
+                                             'basis': 'task_capability_check'})
+                self.commands[command_id] = command
+                while len(self.commands) > 100:
+                    self.commands.pop(next(iter(self.commands)))
+                return self.public_command(command)
             if mode == "observe":
                 self.latest_perception = None
             self.commands[command_id] = command
@@ -477,6 +524,7 @@ class WebApplication:
     def run_command(self, command):
         status, error, reply, mission = "succeeded", None, "", None
         photo_unmet_only = False
+        search_unmet_only = False
         try:
             result = self.agent.invoke({"messages": [{"role": "user", "content": command["prompt"], "id": command['id']}]},
                                        {"configurable": {"thread_id": self.agent_thread_id},
@@ -547,6 +595,17 @@ class WebApplication:
                     and not command['tool_errors'] and not command.get('search_initialization_failure')
                     and all(c.get('status') == 'ok' for c in command['model_calls']))
                 error = error or '拍摄构图目标未完成：' + str(photo_progress.get('photo_status'))
+            outcome = search_result(command, bool(completed_flight_evidence(command['tool_results'])))
+            if outcome is not None:
+                command['task_outcome'] = outcome
+                if not outcome['user_goal_completed']:
+                    search_unmet_only = (error is None and outcome['search_process_ended']
+                                         and outcome['flight_status'] == 'grounded_disarmed')
+                    error = error or '用户目标未完成：搜索状态为 ' + str(outcome['search_status'])
+            elif command.get('task_contract', {}).get('requires_target_search') and command['mode'] == 'task':
+                command['task_outcome'] = {'user_goal_completed': False, 'search_process_ended': False,
+                                           'search_status': 'not_started', 'basis': 'missing_search_evidence'}
+                error = error or '用户要求寻找目标，但缺少实际搜索流程和完成证据'
             if error:
                 status = "failed"
         except Exception as exc:
@@ -555,7 +614,7 @@ class WebApplication:
             # A failed model cannot be relied on to invoke the remaining landing tool.
             # Cancel this command's running worker even before it arms. Otherwise
             # a failed command could leave a delayed takeoff executing afterwards.
-            if status == 'failed' and not command['interrupted']:
+            if status == 'failed' and not command['interrupted'] and not search_unmet_only:
                 self.close_search_activity(command['id'], 'protocol_error' if command.get('flight_failure_stage') == 'search_mission_precheck' else 'safety_fault', error or 'Task failed')
             if status == "failed" and self.agent_architecture == "single_vlm" and command["mode"] == "task" and not command["interrupted"]:
                 accepted_ids={event['mission']['id'] for event in command.get('flight_missions',[])
@@ -686,9 +745,21 @@ class WebApplication:
                     verified = multiview_search_result(command)
                     if verified is not None:
                         command['search_outcome'], search_reply = verified
-                        if status == 'succeeded':
+                        if status == 'succeeded' or search_unmet_only:
                             command['model_reply_before_search_verification'] = self.clean_error(reply)
                             reply = search_reply
+                    outcome = search_result(command, bool(completed_flight_evidence(command['tool_results'])))
+                    if outcome is not None:
+                        outcome['user_goal_completed'] = outcome['user_goal_completed'] and status == 'succeeded'
+                        outcome['external_safety_recovery'] = copy.deepcopy(command.get('safety_landing'))
+                        command['task_outcome'] = outcome
+                        if not outcome['user_goal_completed']:
+                            status = 'failed'
+                            error = error or '用户目标未完成'
+                        if search_unmet_only:
+                            prefix = search_reply + '\n' if verified is not None else ''
+                            reply = (prefix + '用户目标未完成；搜索流程已结束，状态为 ' + str(outcome['search_status'])
+                                     + '。已核实落地上锁；收尾完成不代表已找到目标。')
                 command.update(status=status, reply=reply, error=self.clean_error(error) if error else None,
                                finished_at=time.time())
                 if mission:

@@ -362,7 +362,7 @@ def build_search_tools(client, manager=None):
     class TargetSearchArguments(BaseModel):
         model_config = ConfigDict(extra="forbid", strict=True)
         query: str = Field(min_length=1, max_length=80, description="Target label; use exactly this label in report_scene")
-        end_behavior: Literal["land", "hold"] = "land"
+        end_behavior: Literal["land", "hold"] = Field(default="land", description="Compatibility argument; original user request and program policy determine completion. Unmet searches return and land when healthy.")
         initial_altitude: float = Field(default=3., ge=1, le=MAX_ALTITUDE, description="Initial observation ENU altitude; default 3m; respect user-specified height")
 
     class TargetViewArguments(BaseModel):
@@ -430,7 +430,14 @@ def build_search_tools(client, manager=None):
             owner = runtime_owner(runtime)
             if owner in manager.sessions:
                 raise CoverageSearchError("当前指令已有区域搜索")
-            return manager._audit("begin_target_search", manager.adaptive.begin(owner, query, end_behavior, initial_altitude))
+            messages = runtime.state.get('messages', [])
+            original = next(((m.get('content', '') if isinstance(m, dict) else getattr(m, 'content', ''))
+                             for m in reversed(messages)
+                             if (m.get('role') if isinstance(m, dict) else getattr(m, 'type', None)) in ('human', 'user')), None)
+            if not isinstance(original, str) or not original.strip():
+                raise CoverageSearchError('自主搜索缺少完整用户要求')
+            return manager._audit("begin_target_search", manager.adaptive.begin(owner, query, end_behavior, initial_altitude,
+                                                                              original_request=original))
         except Exception as exc:
             return audited_error("begin_target_search", exc)
 

@@ -77,15 +77,26 @@ class AdaptiveSearch:
             raise ValueError('UAV_TARGET_CONFIRMATION must be single_frame, or multiview with an NBV search mode')
         self.semantic_maps = semantic_maps
 
-    def begin(self, owner, query, end_behavior="land", initial_altitude=3.):
+    def begin(self, owner, query, end_behavior="land", initial_altitude=3., *, original_request=None):
         with self.binding_lock:
-            return self._begin(owner, query, end_behavior, initial_altitude)
+            return self._begin(owner, query, end_behavior, initial_altitude, original_request=original_request)
 
-    def _begin(self, owner, query, end_behavior="land", initial_altitude=3.):
+    def _begin(self, owner, query, end_behavior="land", initial_altitude=3., *, original_request=None):
         from search_tools import _owner, _require_coordinate_evidence
         owner = _owner(owner)
         if owner in self.sessions:
             raise ValueError("本指令已有自主任务，请继续现有任务")
+        if end_behavior not in ('land', 'hold'):
+            raise ValueError('无效搜索结束方式')
+        from task_contract import assess_task
+        provider = getattr(type(self.client), 'search_task_contract', None)
+        contract = (self.client.search_task_contract(owner) if provider else
+                    assess_task(original_request if original_request is not None else query))
+        if contract['admission'] != 'accepted':
+            raise ValueError(contract['reason'])
+        # Model end_behavior is retained in the schema for compatibility, but
+        # cannot rewrite the user's completion request or the failure policy.
+        end_behavior = 'hold' if contract['search_success_end'] == 'hold' else 'land'
         state = self.client.state()
         if (state.get("simulation_only") is not True or state.get("ready") is not True
                 or state.get("scene", {}).get("verified") is not True
@@ -159,7 +170,7 @@ class AdaptiveSearch:
             forward=[math.cos(yaw), math.sin(yaw)], started=self.clock(), status="searching",
             observations=[], pending=({'action': 'takeoff', 'altitude': initial_altitude} if grounded else None),
             arrived=False, epoch=None if grounded else copy.deepcopy(initial_epoch), epoch_bound=False, scene=state["scene"].get("world_sha256"),
-            end_behavior=end_behavior, seen_captures=set())
+            end_behavior=end_behavior, task_contract=copy.deepcopy(contract), seen_captures=set())
         if not grounded:
             final_state = self.client.state()
             stamp = final_state.get('stamp_sim_s')
@@ -212,6 +223,7 @@ class AdaptiveSearch:
                     observations=copy.deepcopy(memory), pending=pending,
                     elapsed_seconds=round(self.clock()-s["started"], 1), max_observations=8,
                     max_duration_seconds=900, radius_m=12, end_behavior=s["end_behavior"],
+                    task_contract=copy.deepcopy(s.get('task_contract')),
                     coordinate_binding=copy.deepcopy(s.get('binding')),
                     coordinate_epoch=copy.deepcopy(s.get('epoch')) if s['epoch_bound'] else None,
                     ground_reference_enu_m=copy.deepcopy(s['boundary_origin']),
@@ -820,11 +832,24 @@ class AdaptiveSearch:
         if (progress['search_status'] not in ('target_found', 'budget_exhausted', 'coverage_exhausted', 'no_reachable_view')
                 or s.get('search_phase') == 'awaiting_review'):
             raise ValueError('搜索尚未满足确定性收尾条件')
-        if s['end_behavior'] == 'hold':
+        goal_met = progress['search_status'] == 'target_found'
+        if goal_met and s['end_behavior'] == 'hold':
             self.close_activity(owner, 'normal_completion', progress['search_status'])
+            s['termination'].update(policy_source='program_task_contract', purpose='goal_completion')
+            if hasattr(self.client, 'record'):
+                self.client.record('search_termination', self.summary(owner))
             return None
-        self.validate_state(owner, self.client.state())
+        # Exhaustion always uses the program-owned safe return policy. A model
+        # choosing hold during initialization cannot leave an unmet task aloft.
+        s['end_behavior'] = 'land'
+        state = self.client.state()
+        self.validate_state(owner, state)
+        if getattr(type(self.client), 'require_search_finish', None):
+            self.client.require_search_finish(owner, state)
+        s['finishing_mission_id'] = (state.get('mission') or {}).get('id')
         self.close_activity(owner, 'normal_completion', progress['search_status'])
+        s['termination'].update(policy_source='program_task_contract',
+                                purpose='goal_completion' if goal_met else 'unmet_goal_recovery')
         result = self.client.execute([{'action': 'return_home'}, {'action': 'land'}], 'Search state machine: '+progress['search_status'])
         if hasattr(self.client, 'record') and not hasattr(self.client, 'application'):
             self.client.record('execute_mission', result)

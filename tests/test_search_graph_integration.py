@@ -337,7 +337,10 @@ class ProductionSearchGraphTests(unittest.TestCase):
                        flight_call([{"action": "return_home"}], "return"), land(),
                        AIMessage("四点观察预算完成，未确认蓝色桶；已返航降落，不能据此声称目标不存在。")])
         command, app, fake, model, manager, journal = self.run_local(script)
-        self.assertEqual(command["status"], "succeeded", command.get("error"))
+        self.assertEqual(command["status"], "failed")
+        self.assertTrue(command['task_outcome']['search_process_ended'])
+        self.assertFalse(command['task_outcome']['user_goal_completed'])
+        self.assertEqual(command['task_outcome']['flight_status'], 'grounded_disarmed')
         progress = [event["result"]["search"] for event in command["search_events"] if event["tool"] == "search_progress"]
         self.assertEqual([item["observed_views"] for item in progress], [1, 2, 3, 4])
         self.assertEqual(progress[-1]["status"], "sampling_complete")
