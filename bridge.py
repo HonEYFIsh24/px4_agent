@@ -1051,7 +1051,8 @@ class Controller:
             self.mission.setdefault("navigation_plans", []).append(copy.deepcopy(event))
         self.log("navigation_planned", mission_id=self.mission["id"], **event)
         try:
-            for waypoint in plan["waypoints"]:
+            for index, waypoint in enumerate(plan["waypoints"]):
+                following = plan['waypoints'][index+1] if index+1 < len(plan['waypoints']) else None
                 self.navigation_gate_error = self.navigation_gate_fault = None
                 self.set_target(waypoint)
                 self.navigation_moving = True
@@ -1061,6 +1062,12 @@ class Controller:
                         self.navigation_hold()
                         raise MissionError("known static 3-D map clearance gate closed; holding")
                     if math.dist(self.position(), waypoint) > .2:
+                        stable[0] = None
+                        return False
+                    if following is not None and not self.navigation_map.segment_safe(self.position(), following):
+                        # Being near a corner does not justify cutting across it.
+                        # Keep approaching this waypoint until the next segment
+                        # is clear from the actual pose under the original map.
                         stable[0] = None
                         return False
                     stable[0] = time.monotonic() if stable[0] is None else stable[0]
@@ -1466,11 +1473,13 @@ class Controller:
             condition.wait(min(.02, remaining))
 
     def evaluate_viewpoints(self, operation, pair_id, origin_xy, expected_identity, candidates, search_context=None,
-                            probe_points_enu_m=None, goal_context=None):
+                            probe_points_enu_m=None, goal_context=None, probe_covariances_enu_m2=None):
         """Predict from fresh live ENU state; computation never publishes or creates flight."""
         from viewpoint_geometry import StaticViewpointEvaluator, registered_identity
         from search_limits import SEARCH_RADIUS_M, GRID_RESOLUTION_M
         metadata = self.stereo_reports.observation_metadata(pair_id)
+        if probe_covariances_enu_m2 is not None and search_context is None:
+            raise MissionError('surface uncertainty requires an owned prediction scope')
 
         def permission():
             self.ready()
@@ -1516,6 +1525,8 @@ class Controller:
             evaluator = StaticViewpointEvaluator(navigator, pose, metadata['camera_info_for_visibility'],
                 epoch, fixed_yaw=yaw, reference_kind='live_enu_pose', probe_points_enu_m=probe_points_enu_m,
                 search_radius_m=SEARCH_RADIUS_M,grid_resolution_m=GRID_RESOLUTION_M,
+                endpoint_tracking_reserve_m=.35 if search_context is not None and goal_context is None else 0.,
+                probe_covariances_enu_m2=probe_covariances_enu_m2,
                 allow_yaw=os.getenv('UAV_ENABLE_YAW', '0') == '1' and os.getenv('UAV_ENABLE_NBV_YAW', '0') == '1')
         # Keep A*/visibility work outside the publisher's controller lock. All inputs
         # are immutable for this registration; preview_path never writes last_plan.
@@ -1524,7 +1535,8 @@ class Controller:
                 'pose': pose, 'camera_info': metadata['camera_info_for_visibility'],
                 'fixed_yaw': yaw, 'identity': expected_identity, 'origin_xy': origin_xy,
                 'search_radius_m':SEARCH_RADIUS_M,'grid_resolution_m':GRID_RESOLUTION_M,
-                'candidates': candidates, 'probes': probe_points_enu_m, 'context': search_context}) as diagnostic:
+                'candidates': candidates, 'probes': probe_points_enu_m,
+                'probe_covariances_enu_m2': probe_covariances_enu_m2, 'context': search_context}) as diagnostic:
             if goal_context is not None:
                 from goal_pose_geometry import query_goal_poses
                 result = query_goal_poses(evaluator, operation, origin_xy, expected_identity, candidates, goal_context)
@@ -2061,22 +2073,24 @@ def main():
                         raise MissionError('observation geometry requires pair_id and origin_xy_enu_m')
                     result = controller.observation_geometry(payload['pair_id'], payload['origin_xy_enu_m'])
                 elif self.path == '/navigation/viewpoints':
-                    if (set(payload)-{'search_context', 'probe_points_enu_m'} != {'operation', 'pair_id', 'origin_xy_enu_m', 'expected_identity', 'candidates'}):
+                    if (set(payload)-{'search_context', 'probe_points_enu_m', 'probe_covariances_enu_m2'} != {'operation', 'pair_id', 'origin_xy_enu_m', 'expected_identity', 'candidates'}):
                         raise MissionError('invalid viewpoint prediction fields')
                     result = controller.evaluate_viewpoints(payload['operation'], payload['pair_id'],
                         payload['origin_xy_enu_m'], payload['expected_identity'], payload['candidates'], payload.get('search_context'),
-                        payload.get('probe_points_enu_m'))
+                        payload.get('probe_points_enu_m'),
+                        probe_covariances_enu_m2=payload.get('probe_covariances_enu_m2'))
                 elif self.path == '/navigation/execute-viewpoint':
                     if set(payload) != {'owner', 'batch_id', 'map_revision', 'candidate_id', 'ticket', 'description'}:
                         raise MissionError('viewpoint execution accepts only an owned ticket, never coordinates')
                     result = controller.execute_viewpoint(**payload)
                 elif self.path == '/navigation/goal-poses':
-                    if set(payload) != {'operation', 'pair_id', 'origin_xy_enu_m', 'expected_identity',
+                    if set(payload)-{'probe_covariances_enu_m2'} != {'operation', 'pair_id', 'origin_xy_enu_m', 'expected_identity',
                                         'candidates', 'search_context', 'probe_points_enu_m', 'goal_context'}:
                         raise MissionError('invalid versioned goal-pose prediction fields')
                     result = controller.evaluate_viewpoints(payload['operation'], payload['pair_id'],
                         payload['origin_xy_enu_m'], payload['expected_identity'], payload['candidates'],
-                        payload['search_context'], payload['probe_points_enu_m'], payload['goal_context'])
+                        payload['search_context'], payload['probe_points_enu_m'], payload['goal_context'],
+                        payload.get('probe_covariances_enu_m2'))
                 elif self.path == '/navigation/execute-goal-pose':
                     if set(payload) != {'owner', 'batch_id', 'map_revision', 'candidate_id', 'ticket', 'description', 'goal_context'}:
                         raise MissionError('goal-pose execution accepts only a versioned owned ticket')

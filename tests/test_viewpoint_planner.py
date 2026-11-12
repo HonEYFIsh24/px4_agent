@@ -105,14 +105,14 @@ class ViewpointTests(unittest.TestCase):
         self.assertIsNone(blocked['selected_id'])
         self.assertEqual(blocked['ranked_candidates'], [])
 
-    def test_confirmation_history_accepts_twelve_observers_and_rejects_over_budget(self):
+    def test_confirmation_history_accepts_sixteen_observers_and_rejects_over_budget(self):
         from target_confirmation import confirmation_goal
         from test_semantic_map import target
         frame, report, geometry = observation(self.nav, targets=[target(self.frame, [5.,0.,1.], label='蓝色油桶')])
         semantic_map = SemanticMap(OWNER, geometry, query='蓝色油桶')
         semantic_map.update_observation(frame, report, geometry)
         goal = confirmation_goal(semantic_map, next(iter(semantic_map.landmarks)), frame['capture_id'])
-        goal['avoid_observer_positions'] = [[-2., i*.25, 3.] for i in range(12)]
+        goal['avoid_observer_positions'] = [[-2., i*.25, 3.] for i in range(16)]
         snapshot = frame['snapshot']
         backend = StaticViewpointEvaluator(self.nav, snapshot['body_pose_enu'], snapshot['camera_intrinsics'],
             snapshot['coordinate_epoch'], probe_points_enu_m=goal['probe_points_enu_m'])

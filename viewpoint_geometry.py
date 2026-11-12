@@ -7,7 +7,7 @@ import re
 
 from mission import MAX_ALTITUDE, MissionError
 from semantic_map import epoch_identity
-from stereo_localization import vector, finite, quaternion_rotation
+from stereo_localization import vector, finite, quaternion_rotation, covariance_matrix
 from search_limits import grid_dimensions
 
 
@@ -27,10 +27,14 @@ class StaticViewpointEvaluator:
     """Evaluates predictions; no coverage update, mission creation or last_plan write."""
     def __init__(self, navigator, pose, camera_info, coordinate_epoch, fixed_yaw=None,
                  reference_kind='archived_capture', probe_points_enu_m=None, allow_yaw=False,
-                 search_radius_m=12., grid_resolution_m=.5):
+                 search_radius_m=12., grid_resolution_m=.5, endpoint_tracking_reserve_m=0.,
+                 probe_covariances_enu_m2=None):
         grid_dimensions(search_radius_m,grid_resolution_m)
         self.search_radius, self.grid_resolution = search_radius_m,grid_resolution_m
         self.navigator = navigator
+        self.endpoint_tracking_reserve = finite(endpoint_tracking_reserve_m, 'endpoint tracking reserve')
+        if not 0 <= self.endpoint_tracking_reserve <= .5:
+            raise MissionError('endpoint tracking reserve must be within 0..0.5m')
         self.allow_yaw = allow_yaw is True
         self.pose = copy.deepcopy(pose)
         self.camera_info = copy.deepcopy(camera_info)
@@ -40,6 +44,15 @@ class StaticViewpointEvaluator:
                                                or not 1 <= len(probe_points_enu_m) <= 16):
             raise MissionError('confirmation visibility requires 1..16 bounded probe points')
         self.probes = None if probe_points_enu_m is None else [vector(p, 3, 'confirmation probe') for p in probe_points_enu_m]
+        self.probe_covariances = None
+        if probe_covariances_enu_m2 is not None:
+            if (not self.probes or not isinstance(probe_covariances_enu_m2, list)
+                    or len(probe_covariances_enu_m2) != len(self.probes)):
+                raise MissionError('surface probe covariances must match the actual probe points')
+            self.probe_covariances = [covariance_matrix(c, 'actual surface probe covariance')
+                                      for c in probe_covariances_enu_m2]
+            if any(any(c[i][i] <= 0 for i in range(3)) for c in self.probe_covariances):
+                raise MissionError('surface probes require positive actual position variances')
         if self.probes and any(math.dist(p, self.position) > 20. for p in self.probes):
             raise MissionError('confirmation probe exceeds actual observation range')
         if pose.get('frame_id') not in ('map', 'local_enu') or pose.get('body_reference') != 'base_link':
@@ -56,6 +69,22 @@ class StaticViewpointEvaluator:
         k = vector(camera_info['K'], 9, 'viewpoint intrinsics')
         if k[0] <= 0 or k[4] <= 0:
             raise MissionError('invalid viewpoint focal length')
+
+    def endpoint_has_tracking_room(self, point, origin):
+        """Keep the whole endpoint tolerance box outside existing inflation."""
+        from static_navigation import intersects
+        reserve = self.endpoint_tracking_reserve
+        if not reserve:
+            return True
+        if (math.dist(point[:2], origin)+reserve > self.search_radius+1e-9
+                or point[2]-reserve < 1. or point[2]+reserve > MAX_ALTITUDE):
+            return False
+        world = self.navigator.to_world(point)
+        if any(not self.navigator.bounds[0][i]+reserve <= world[i] <= self.navigator.bounds[1][i]-reserve
+               for i in range(3)):
+            return False
+        return not any(intersects(world, world, [v-reserve for v in low], [v+reserve for v in high])
+                       for low, high in self.navigator.boxes)
 
     def query(self, operation, origin_xy, expected_identity, candidates):
         if operation not in ('context', 'visibility', 'paths'):
@@ -90,8 +119,12 @@ class StaticViewpointEvaluator:
                     'fixed_yaw_enu_rad': self.yaw, 'source_pose_kind': self.reference_kind,
                     'camera_calibration_sha256': hashlib.sha256(json.dumps(self.camera_info,
                         sort_keys=True, allow_nan=False).encode()).hexdigest(), 'results': []}
+        if self.endpoint_tracking_reserve:
+            response['endpoint_tracking_reserve_m'] = self.endpoint_tracking_reserve
         if self.probes is not None:
             response['probe_points_enu_m'] = copy.deepcopy(self.probes)
+        if self.probe_covariances is not None:
+            response['probe_covariances_enu_m2'] = copy.deepcopy(self.probe_covariances)
         for identifier, point, heading_step in validated:
             result = {'id': identifier, 'position_enu_m': point, 'reachable': False}
             candidate_yaw = self.yaw
@@ -102,6 +135,8 @@ class StaticViewpointEvaluator:
             if (not 1. <= point[2] <= MAX_ALTITUDE or math.dist(point[:2], origin) > self.search_radius+1e-9
                     or not self.navigator.segment_safe(point, point)):
                 result['reason'] = 'candidate lacks search-volume or inflated flight clearance'
+            elif not self.endpoint_has_tracking_room(point, origin):
+                result['reason'] = 'candidate lacks endpoint tracking reserve outside existing flight clearance'
             elif operation == 'visibility':
                 pose = {'position_m': point, 'frame_id': 'map', 'body_reference': 'base_link',
                         'orientation_xyzw': [0., 0., math.sin(candidate_yaw/2), math.cos(candidate_yaw/2)]}
@@ -112,12 +147,25 @@ class StaticViewpointEvaluator:
                 if self.probes is not None:
                     from coverage_search import project_ground_point
                     result['probe_visibility'] = []
-                    for probe in self.probes:
+                    for index, probe in enumerate(self.probes):
                         projection = project_ground_point(self.camera_info, pose, probe, 20.)
-                        result['probe_visibility'].append({
+                        row = {
                             'point_enu_m': list(probe), 'inside_fov_and_range': projection['inside_fov_and_range'],
                             'unoccluded': self.navigator.raw_line_of_sight(visible['camera_origin_enu_m'], probe),
-                            'pixel_uv': projection['pixel_uv'], 'camera_origin_enu_m': visible['camera_origin_enu_m']})
+                            'pixel_uv': projection['pixel_uv'], 'camera_origin_enu_m': visible['camera_origin_enu_m']}
+                        if self.probe_covariances is not None:
+                            delta = [b-a for a,b in zip(visible['camera_origin_enu_m'], probe)]
+                            distance = math.sqrt(sum(v*v for v in delta))
+                            direction = [v/distance for v in delta] if distance > 0 else [0., 0., 0.]
+                            matrix = self.probe_covariances[index]
+                            variance = sum(direction[i]*matrix[i][j]*direction[j] for i in range(3) for j in range(3))
+                            margin = 2*math.sqrt(max(0., variance))
+                            row.update(surface_visibility_possible=self.navigator.raw_surface_visibility_possible(
+                                visible['camera_origin_enu_m'], probe, margin),
+                                endpoint_uncertainty_m=margin,
+                                surface_visibility_basis='actual_covariance_projected_2sigma_endpoint_only',
+                                prediction_only=True, requires_fresh_visual_verification=True)
+                        result['probe_visibility'].append(row)
             elif operation == 'paths':
                 try:
                     plan = self.navigator.preview_path(self.position, point, origin,self.search_radius)
@@ -131,10 +179,11 @@ class StaticViewpointEvaluator:
 
 class RemoteViewpointEvaluator:
     """Internal client adapter; candidates are not coordinates generated by the VLM."""
-    def __init__(self, client, pair_id, search_context=None, probe_points_enu_m=None):
+    def __init__(self, client, pair_id, search_context=None, probe_points_enu_m=None, probe_covariances_enu_m2=None):
         self.client, self.pair_id = client, pair_id
         self.search_context = copy.deepcopy(search_context)
         self.probes = copy.deepcopy(probe_points_enu_m)
+        self.probe_covariances = copy.deepcopy(probe_covariances_enu_m2)
 
     def query(self, operation, origin_xy, expected_identity, candidates):
         payload = {
@@ -144,6 +193,8 @@ class RemoteViewpointEvaluator:
             payload['search_context'] = self.search_context
         if self.probes is not None:
             payload['probe_points_enu_m'] = self.probes
+        if self.probe_covariances is not None:
+            payload['probe_covariances_enu_m2'] = self.probe_covariances
         from search_diagnostics import stage
         with stage('remote_viewpoints', payload) as diagnostic:
             response = self.client.request('/navigation/viewpoints', payload, timeout=30)

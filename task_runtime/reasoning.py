@@ -42,14 +42,12 @@ class AdaptiveReasoning:
         if view:
             if view['visibility'] == 'lost':
                 kind, missing = 'RECOVER_OCCLUDED', ['fresh_same_instance_observation']
+            elif stage.kind in ('approach', 'relative_hover', 'relative_land'):
+                kind, missing = 'VISUAL_GOAL_REVIEW', ['current_image_and_model_relation_decision']
             elif (view.get('association_hypotheses') or {}).get('status') == 'ambiguous':
                 kind, missing = 'RESOLVE_INSTANCE', ['unique_visual_metric_correspondence']
             elif view['position_enu_m'] is None:
                 kind, missing = 'OBTAIN_DEPTH', ['fresh_valid_stereo_depth']
-            elif stage.kind in ('relative_hover', 'relative_land') and stage.relation in ('object_front', 'object_behind') and not view['orientation']:
-                kind, missing = 'REVEAL_FRONT', [
-                    'measured_visible_front_face_normal_or_front_rear_axis' if stage.relation == 'object_front'
-                    else 'visually_grounded_front_and_rear_metric_points']
             elif stage.kind == 'close_photo':
                 kind, missing = 'IMPROVE_FRAMING_AND_RANGE', ['same_frame_relative_range', 'usable_framing']
             else:

@@ -15,6 +15,24 @@ class StaticPlanningTests(unittest.TestCase):
         n.bind([0,0,0],[0,0,0,1],{'position_m':[0,0,0],'orientation_xyzw':[0,0,0,1]})
         return n
 
+    def test_surface_endpoint_uncertainty_does_not_change_flight_clearance(self):
+        n=self.navigator([([5.,-1.,0.],[7.,1.,4.])])
+        camera,point=[0.,0.,2.],[5.03,0.,2.]
+        self.assertFalse(n.raw_line_of_sight(camera,point))
+        self.assertTrue(n.raw_surface_visibility_possible(camera,point,.08))
+        self.assertFalse(n.raw_surface_visibility_possible(camera,point,.02))
+        self.assertFalse(n.segment_safe(camera,point))
+        self.assertFalse(n.raw_line_of_sight(camera,point))
+
+    def test_surface_endpoint_uncertainty_keeps_separate_near_occluders(self):
+        n=self.navigator([([5.,-1.,0.],[7.,1.,4.]),([4.97,-1.,0.],[4.98,1.,4.])])
+        # Both intersections lie in the .08m uncertainty interval, but the
+        # nearer separate obstacle does not contain the measured endpoint.
+        self.assertFalse(n.raw_surface_visibility_possible([0.,0.,2.],[5.03,0.,2.],.08))
+        for margin in (0.,-1.,float('inf'),float('nan'),True,6.):
+            with self.subTest(margin=margin):
+                self.assertFalse(n.raw_surface_visibility_possible([0.,0.,2.],[5.03,0.,2.],margin))
+
     def test_clear_flight_can_change_altitude_and_reach_ten_metres(self):
         n=self.navigator()
         p=n.plan([0,0,2],[2,0,10])

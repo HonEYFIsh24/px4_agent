@@ -1,11 +1,71 @@
 """Parent/goal presentation data tests; no flight or model IO."""
 import copy
 import os
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from desktop_search_data import task_runtime_view, task_runtime_text, goal_prediction, status_text
 
 _QT_APPLICATION = None  # Keep native QApplication owned by the main test thread.
+
+
+class AcceptanceObserverStartTests(unittest.TestCase):
+    def fixture(self, directory):
+        state={'armed':True,'landed_state':2,'position_enu_m':[-3.,-3.,1.6],
+            'mission':{'id':'owned-setup','status':'succeeded'},'navigation':{'registration_id':'sortie'},
+            'scene':{'world_sha256':'a'*64},'external_vision':{'healthy':True,'adapter':{'epoch':0},
+                'ekf':{'local_position_reset_counters':{'xy':2,'z':2,'heading':2}}}}
+        setup={'status':'succeeded','run':'run','target_truth_queried':False,'not_counted_as_goal_pose':True,
+               'final_state':copy.deepcopy(state)}
+        path=Path(directory)/'controlled-observer-setup.json';path.write_text(json.dumps(setup))
+        return state,setup,path
+
+    def test_normal_ground_start_remains_required_without_explicit_setup(self):
+        from scripts.validate_workbench_ui import observer_start_scope
+        with tempfile.TemporaryDirectory()as directory:
+            state,_,_=self.fixture(directory)
+            with self.assertRaises(ValueError):observer_start_scope({},state,Path(directory)/'live-ui','run')
+            state.update(armed=False,landed_state=1)
+            self.assertEqual(observer_start_scope({},state,Path(directory)/'live-ui','run'),{'mode':'grounded'})
+
+    def test_explicit_actual_setup_is_recorded_without_goal_pose_credit(self):
+        from scripts.validate_workbench_ui import observer_start_scope
+        with tempfile.TemporaryDirectory()as directory:
+            state,_,_=self.fixture(directory)
+            value=observer_start_scope({'controlled_observer_setup':'controlled-observer-setup.json'},
+                                       state,Path(directory)/'live-ui','run')
+            self.assertEqual(value['mode'],'controlled_airborne')
+            self.assertEqual(value['setup_mission_id'],'owned-setup')
+            self.assertFalse(value['setup_is_goal_pose_evidence'])
+
+    def test_changed_mission_pose_epoch_registration_or_world_cannot_reuse_setup(self):
+        from scripts.validate_workbench_ui import observer_start_scope
+        with tempfile.TemporaryDirectory()as directory:
+            state,_,_=self.fixture(directory)
+            for kind in ('mission','position','epoch','registration','world','unhealthy'):
+                bad=copy.deepcopy(state)
+                if kind=='mission':bad['mission']['id']='other'
+                elif kind=='position':bad['position_enu_m'][0]+=1.
+                elif kind=='epoch':bad['external_vision']['adapter']['epoch']+=1
+                elif kind=='registration':bad['navigation']['registration_id']='other'
+                elif kind=='world':bad['scene']['world_sha256']='b'*64
+                else:bad['external_vision']['healthy']=False
+                with self.subTest(kind=kind),self.assertRaises(ValueError):
+                    observer_start_scope({'controlled_observer_setup':'controlled-observer-setup.json'},
+                                         bad,Path(directory)/'live-ui','run')
+
+    def test_setup_reference_and_run_must_match_and_failure_never_falls_back(self):
+        from scripts.validate_workbench_ui import observer_start_scope
+        with tempfile.TemporaryDirectory()as directory:
+            state,setup,path=self.fixture(directory)
+            for reference,run in (('../controlled-observer-setup.json','run'),('controlled-observer-setup.json','other')):
+                with self.assertRaises(ValueError):observer_start_scope({'controlled_observer_setup':reference},state,
+                                                                        Path(directory)/'live-ui',run)
+            setup['status']='failed';path.write_text(json.dumps(setup))
+            with self.assertRaises(ValueError):observer_start_scope({'controlled_observer_setup':path.name},state,
+                                                                    Path(directory)/'live-ui','run')
 
 
 def presentation():

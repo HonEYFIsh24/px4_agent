@@ -8,9 +8,44 @@ import json
 import os
 import time
 import hashlib
+import math
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
+
+
+def observer_start_scope(request, state, directory, run):
+    """Record an explicit controlled start, without granting flight authority."""
+    if 'controlled_observer_setup' not in request:
+        if state.get('armed') is not False or state.get('landed_state') != 1:
+            raise ValueError('Desktop acceptance requires a grounded start or explicit controlled observer setup')
+        return {'mode': 'grounded'}
+    name = request['controlled_observer_setup']
+    if name != 'controlled-observer-setup.json':
+        raise ValueError('Invalid controlled observer setup reference')
+    path = Path(directory).parent/name
+    raw = path.read_bytes();setup = json.loads(raw)
+    previous = setup.get('final_state') or {}
+    mission = state.get('mission') or {};expected = previous.get('mission') or {}
+    external = state.get('external_vision') or {}
+    navigation = state.get('navigation') or {};old_navigation = previous.get('navigation') or {}
+    from search_tools import coordinate_epoch
+    epoch = coordinate_epoch(state)
+    if (setup.get('status') != 'succeeded' or setup.get('run') != run
+            or setup.get('target_truth_queried') is not False or setup.get('not_counted_as_goal_pose') is not True
+            or state.get('armed') is not True or state.get('landed_state') != 2
+            or not mission.get('id') or mission['id'] != expected.get('id') or mission.get('status') != 'succeeded'
+            or expected.get('status') != 'succeeded' or external.get('healthy') is not True
+            or not navigation.get('registration_id') or navigation['registration_id'] != old_navigation.get('registration_id')
+            or not epoch or epoch.get('vio_epoch') is None or epoch.get('ekf_counters') is None
+            or epoch != coordinate_epoch(previous)
+            or not (state.get('scene') or {}).get('world_sha256')
+            or (state.get('scene') or {}).get('world_sha256') != (previous.get('scene') or {}).get('world_sha256')
+            or math.dist(state['position_enu_m'], previous['position_enu_m']) > .4):
+        raise ValueError('Controlled observer setup no longer matches the actual mission, pose or coordinate identity')
+    return {'mode': 'controlled_airborne', 'scope': 'front relation skill; not broad-yard search',
+            'setup_file': name, 'setup_sha256': hashlib.sha256(raw).hexdigest(),
+            'setup_mission_id': mission['id'], 'setup_is_goal_pose_evidence': False}
 
 
 class WorkbenchAcceptance:
@@ -19,7 +54,7 @@ class WorkbenchAcceptance:
         if (self.directory/'result.json').exists() or (self.directory/'start.json').exists():
             raise ValueError('Refusing to reuse desktop acceptance directory')
         self.records=[];self.marked=set();self.started=False;self.completed=False;self.start_mono=None
-        self.seed_evidence=None;self.world_file=None;self.run=None
+        self.seed_evidence=None;self.world_file=None;self.run=None;self.observer_start=None
         self.timer=QTimer(window.root);self.timer.timeout.connect(self.tick);self.timer.start(250)
         (self.directory/'ready.json').write_text(json.dumps({'status':'waiting_for_explicit_start','pid':os.getpid()}))
 
@@ -29,7 +64,8 @@ class WorkbenchAcceptance:
                 'nbv_selector':os.getenv('UAV_NBV_SELECTOR','deterministic'),'candidate_pool_mode':os.getenv('UAV_NBV_CANDIDATE_POOL','ranked'),
                 'heading_mode':os.getenv('UAV_NBV_HEADING_MODE','fixed'),'nbv_auto_prepare':os.getenv('UAV_NBV_AUTO_PREPARE','0')=='1',
                 'capture_directory':os.getenv('UAV_CAPTURE_EVIDENCE_DIR'),'ui_events':self.records,
-                'run':self.run,'world_file':self.world_file,'gazebo_seed_evidence':self.seed_evidence}
+                'run':self.run,'world_file':self.world_file,'gazebo_seed_evidence':self.seed_evidence,
+                'initial_observer_setup':self.observer_start}
         path=self.directory/'result.tmp';path.write_text(json.dumps(record,ensure_ascii=False,indent=2));path.replace(self.directory/'result.json')
 
     def mark(self,name,command,state):
@@ -62,12 +98,13 @@ class WorkbenchAcceptance:
             request=json.loads(trigger.read_text());prompt=request.get('prompt')
             if (request.get('authorized') is not True or not isinstance(prompt,str) or not prompt.strip()
                     or state.get('simulation_only') is not True or state.get('ready') is not True
-                    or state.get('armed') is not False or state.get('landed_state')!=1
                     or time.monotonic()-w.last_state_at >= 2
                     or (state.get('external_vision') or {}).get('used_for_flight_control') is not True
                     or (state.get('navigation') or {}).get('method')!='static_3d'
                     or os.getenv('UAV_SEARCH_MODE')!='nbv_geometry'):
                 raise ValueError('Explicit start or grounded VIO/static-NBV precondition failed')
+            self.run=Path(os.environ['UAV_CAPTURE_EVIDENCE_DIR']).resolve().parent.name
+            self.observer_start=observer_start_scope(request,state,self.directory,self.run)
             world=Path(os.environ['PX4_AGENT_WORLD']).resolve()
             seed=int(os.environ['UAV_WORKBENCH_ACCEPTANCE_GAZEBO_SEED'])
             from scripts.validate_autonomous_search import gazebo_seed_evidence
@@ -75,7 +112,6 @@ class WorkbenchAcceptance:
             if hashlib.sha256(world.read_bytes()).hexdigest() != (state.get('scene') or {}).get('world_sha256'):
                 raise ValueError('Desktop scene does not match actual world file')
             self.world_file=str(world)
-            self.run=Path(os.environ['UAV_CAPTURE_EVIDENCE_DIR']).resolve().parent.name
             self.started=True;self.start_mono=time.monotonic();w.notebook.setCurrentIndex(w.workbench_tab)
             w.workbench.layer_checks['predicted'].setChecked(True)
             w.prompt.setPlainText(prompt);self.mark('01-input',None,state);w.submit();return

@@ -109,7 +109,7 @@ class TaskLandingGraphTests(unittest.TestCase):
         self.assertEqual(bridge.goal_land_executions, 1)
         self.assertFalse(bridge.telemetry['armed'])
         self.assertEqual(bridge.telemetry['landed_state'], 1)
-        self.assertLess(bridge.telemetry['position_enu_m'][1], -3.)
+        self.assertEqual(bridge.telemetry['position_enu_m'][:2], [0., 0.])
         self.assertEqual(result['task_runtime_result']['flight_status'], 'grounded_disarmed')
         self.assertEqual(result['task_runtime_result']['unmet_requirements'], [])
         self.assertTrue(result['task_runtime']['plan']['stages'][-1]['conditions']['landing_support_and_corridor'])
@@ -117,18 +117,18 @@ class TaskLandingGraphTests(unittest.TestCase):
         self.assertFalse(any(s.get('action') == 'return_home' for e in bridge.flight_requests
                              for s in e.get('steps', [])))
 
-    def test_landed_velocity_reset_preserves_actual_ground_but_cannot_complete_relative_goal(self):
+    def test_touchdown_velocity_reset_is_diagnostic_after_successful_visual_landing(self):
         bridge, result, app = self.run_landing(reset=True)
         self.assertEqual(bridge.goal_land_executions, 1)
         self.assertFalse(bridge.telemetry['armed'])
-        self.assertFalse(result['task_outcome']['user_goal_completed'])
-        self.assertEqual(result['task_runtime_result']['goal_status'], 'partial')
+        self.assertTrue(result['task_outcome']['user_goal_completed'])
+        self.assertEqual(result['task_runtime_result']['goal_status'], 'satisfied')
         self.assertEqual(result['task_runtime_result']['flight_status'], 'grounded_disarmed')
         facts = result['task_runtime_result']['evidence_summary']['relative_landing']
         self.assertTrue(facts['actual_ground_disarmed'])
         self.assertFalse(facts['navigation_reference_continuous'])
-        self.assertFalse(facts['relation_verified'])
-        self.assertEqual(result['task_runtime']['target_memory']['van']['map_status'], 'invalid')
+        self.assertTrue(facts['relation_verified'])
+        self.assertEqual(result['task_runtime']['target_memory']['van']['map_status'], 'valid')
 
 
 if __name__ == '__main__':unittest.main()

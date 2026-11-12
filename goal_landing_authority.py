@@ -38,7 +38,8 @@ class GoalLandingAuthority:
                 or mission.get('status') != 'succeeded' or identity != scope['identity']
                 or goal_context.get('terminal_action') != 'relative_land'
                 or prior.get('terminal_action') != 'relative_land'
-                or goal_context.get('relation') != 'object_front'
+                or goal_context.get('schema_version') != prior.get('schema_version')
+                or goal_context.get('schema_version') == 1 and goal_context.get('relation') != 'object_front'
                 or any(prior.get(k) != goal_context[k] for k in ('stage_id', 'plan_revision', 'target_id', 'relation'))
                 or goal_context['target_revision'] < prior.get('target_revision', 0)):
             raise MissionError('landing owner, completed goal hover, target or coordinate identity changed')

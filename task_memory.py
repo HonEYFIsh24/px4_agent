@@ -1,4 +1,4 @@
-"""Bounded historical task context; current-turn messages and checkpoints are untouched."""
+"""Deterministic request projections; complete tool evidence stays in checkpoints."""
 import json
 import os
 
@@ -87,6 +87,119 @@ def message_chars(messages):
                               ensure_ascii=False, default=str)) for m in messages)
 
 
+_PROJECTED_TOOLS = frozenset((
+    'get_drone_state', 'execute_mission', 'stop_drone', 'land_drone',
+    'capture_scene', 'inspect_scene', 'report_scene', 'observe_target_search_view',
+    'begin_target_search', 'next_target_search_view', 'execute_target_search_view',
+    'select_target_search_view', 'target_search_progress', 'plan_region_search',
+    'search_observation_status', 'define_task_plan', 'revise_task_plan',
+    'report_target_frame', 'execute_task_goal', 'review_goal_region', 'choose_task_goal', 'review_task_goal',
+    'land_task_goal', 'observe_task_photo', 'review_photo',
+    'adjust_photo_view', 'rotate_photo_view',
+))
+
+
+def current_tool_projection(message):
+    """Remove repeated audit collections from a model-request copy only.
+
+    Keep every message/tool-call pair, original user text, decision result and
+    error. Actual frame selection, delivery/identity guards and stage advancement
+    read the unprojected graph state before this function is called. No image,
+    memory, evidence or execution ticket is removed from that state.
+    """
+    if role(message) != 'tool' or value(message, 'name') not in _PROJECTED_TOOLS:
+        return message
+    item = payload(message)
+    if not item or item.get('status') == 'error' or value(message, 'status') == 'error':
+        return message
+    counts = {}
+
+    def omit(node, key):
+        if key in node:
+            removed = node.pop(key)
+            counts[key] = counts.get(key, 0) + (len(removed) if isinstance(removed, (list, dict)) else 1)
+
+    def walk(node):
+        if isinstance(node, list):
+            for child in node:
+                walk(child)
+            return
+        if not isinstance(node, dict):
+            return
+        # Each report embeds all earlier model calls, which themselves include
+        # context diagnostics. They are audit, not fresh visual/flight evidence.
+        for key in ('vlm_calls', 'model_calls'):
+            if isinstance(node.get(key), list) and node[key]:
+                omit(node, key)
+        if 'search_status' in node and isinstance(node.get('observations'), list):
+            observations = node['observations']
+            if len(observations) > 2:
+                node['observation_count_total'] = len(observations)
+                node['observation_summaries_retained'] = 2
+                node['observations'] = observations[-2:]
+                counts['earlier_search_observations'] = counts.get('earlier_search_observations', 0) + len(observations)-2
+        # Parent tool results repeat the complete authoritative snapshot. The
+        # middleware separately attaches the fresh parent model_context after
+        # this projection, so old planning/measurement internals are redundant.
+        if ('stage_revision' in node and isinstance(node.get('target_memory'), dict)
+                and isinstance(node.get('plan'), dict)):
+            for stage in node['plan'].get('stages', []):
+                if isinstance(stage, dict):
+                    omit(stage, 'evidence_refs')
+            if isinstance(node.get('current_stage'), dict):
+                omit(node['current_stage'], 'evidence_refs')
+            for target in (node.get('target_memory') or {}).values():
+                if not isinstance(target, dict):
+                    continue
+                omit(target, 'association_hypotheses')
+                orientation = target.get('orientation')
+                if isinstance(orientation, dict):
+                    # Retain measured uncertainty, relation quality, source IDs,
+                    # hashes, face ROI and fitting statistics. The original
+                    # stereo samples/derived regions are evaluated by program.
+                    for key in ('part_measurements', 'sample_measurements', 'sample_regions'):
+                        omit(orientation, key)
+            events = node.get('reasoning_events')
+            if isinstance(events, list) and len(events) > 2:
+                node['reasoning_events'] = events[-2:]
+                counts['earlier_reasoning_events'] = counts.get('earlier_reasoning_events', 0) + len(events)-2
+            goal = node.get('goal_state')
+            if isinstance(goal, dict) and isinstance(goal.get('object_frame_attempts'), list):
+                attempts = goal['object_frame_attempts']
+                if len(attempts) > 2:
+                    goal['object_frame_attempt_count_total'] = len(attempts)
+                    goal['object_frame_attempts'] = attempts[-2:]
+                    counts['earlier_object_frame_attempts'] = counts.get('earlier_object_frame_attempts', 0)+len(attempts)-2
+            if (isinstance(goal, dict) and isinstance(goal.get('prepared'), dict)
+                    and isinstance(goal['prepared'].get('candidates'), list)):
+                prepared = goal['prepared']
+                node['goal_state'] = goal = {**goal, 'prepared': {
+                    key: prepared.get(key) for key in ('status', 'selected_id', 'target_revision')}}
+                goal['candidate_summary'] = [{key: candidate.get(key) for key in
+                    ('id', 'position_enu_m', 'yaw_enu_rad', 'score', 'hard_constraints')}
+                    for candidate in prepared.get('candidates', [])[:3]]
+                counts['prepared_goal_audit'] = counts.get('prepared_goal_audit', 0)+1
+                for key in ('relation_review', 'landing', 'verified_outcome'):
+                    omit(goal, key)
+        for child in node.values():
+            walk(child)
+
+    walk(item)
+    if not counts:
+        return message
+    item['_context_projection'] = {
+        'basis': 'model_request_copy_only_full_evidence_in_checkpoint_and_task_audit',
+        'omitted_collection_entries': counts,
+        'earlier_results_are_historical_not_current_state': True,
+    }
+    content = json.dumps(item, ensure_ascii=False)
+    if len(content) >= len(value(message, 'content', '')):
+        return message  # Do not expand small results with projection metadata.
+    if isinstance(message, dict):
+        return {**message, 'content': content}
+    return message.model_copy(update={'content': content})
+
+
 class TaskContextMemory:
     def __init__(self, mode=None, max_turns=8, max_summary_chars=6000):
         self.mode = mode or os.getenv('UAV_SHORT_TERM_MEMORY', 'summary')
@@ -107,7 +220,7 @@ class TaskContextMemory:
             ('只根据历史', '仅根据历史', '只依据历史', '只根据上一轮报告', '只根据旧报告'))
         metrics = {'mode': self.mode, 'input_messages': len(messages), 'input_characters': before,
                    'historical_tasks': 0, 'summarized_tasks': 0, 'explicit_history_only': history_only}
-        if self.mode == 'full' or current == 0:
+        if self.mode == 'full':
             return messages, {**metrics, 'output_messages': len(messages), 'output_characters': before}
         boundaries = [i for i, m in enumerate(messages[:current]) if role(m) in ('human', 'user')]
         metrics['historical_tasks'] = len(boundaries)
@@ -131,6 +244,10 @@ class TaskContextMemory:
                 '总观察次数以observation_count_total为准，摘要中最近两份观察不代表只有两次观察。'
                 '不得自动重放旧动作，不得把旧capture_id用于本指令报告，旧坐标必须重新验证。\n'
                 + json.dumps(summaries, ensure_ascii=False)))
-        projected.extend(messages[current:])
+        current_messages = [current_tool_projection(message) for message in messages[current:]]
+        projected.extend(current_messages)
         return projected, {**metrics, 'summarized_tasks': len(summaries),
+                           'projected_current_tool_results': sum(a is not b for a, b in zip(current_messages, messages[current:])),
+                           'current_characters_before': message_chars(messages[current:]),
+                           'current_characters_after': message_chars(current_messages),
                            'output_messages': len(projected), 'output_characters': message_chars(projected)}

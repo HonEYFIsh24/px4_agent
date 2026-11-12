@@ -13,7 +13,7 @@ from target_observation import relative_range_reference
 from target_confirmation import observation_for
 from viewpoint_planner import map_revision
 from .contracts import GoalPoseCandidate, ObservationNeed
-from .object_frame import validate_navigation_measurement, FRONT_FACE_BASIS, current_front_relation
+from .object_frame import validate_navigation_measurement, FRONT_RELATION_BASES, current_front_relation
 
 
 def wrapped(angle):
@@ -72,7 +72,7 @@ class GoalPosePlanner:
         except (KeyError, TypeError, ValueError):
             return need('OBTAIN_DEPTH', ['valid_metric_surface_and_covariance'])
         orientation = state['orientation']
-        if orientation and orientation.get('basis') == FRONT_FACE_BASIS:
+        if orientation and orientation.get('basis') in FRONT_RELATION_BASES:
             if spec.relation != 'object_front':
                 return need('REVEAL_FRONT', ['rear/extent evidence; front face does not localize the rear'])
             if orientation['coordinate_epoch'] != semantic_map.coordinate_epoch:
@@ -95,10 +95,11 @@ class GoalPosePlanner:
                      'minimum_front_distance_m': relation['minimum_front_distance_m']})
                 return {'status': 'candidates', 'candidates': [asdict(candidate)],
                     'target_anchor_enu_m': list(anchor), 'target_revision': state['target_revision'],
+                    'target_anchor_covariance_enu_m2': copy.deepcopy(matrix),
                     'map_revision': revision, 'scoring': 'observed_current_front_region_v1',
                     'requires_target_visibility': True}
             if not orientation['global_axis_usable']:
-                return need('OBTAIN_DEPTH', ['more precise front lateral stereo; current relation remains uncertain'])
+                return need('IMPROVE_FRONT_RELATION', ['front_angular_uncertainty', 'front_relation_standoff_or_uncertainty'])
         if spec.relation in ('object_front', 'object_behind'):
             if not orientation or orientation['coordinate_epoch'] != semantic_map.coordinate_epoch:
                 return need('REVEAL_FRONT', [
@@ -145,6 +146,8 @@ class GoalPosePlanner:
                 candidates.append(asdict(candidate))
         return {'status': 'candidates' if candidates else 'no_safe_goal', 'candidates': candidates,
                 'target_anchor_enu_m': list(anchor), 'target_revision': state['target_revision'],
+                **({'target_anchor_covariance_enu_m2': copy.deepcopy(matrix)}
+                   if orientation and orientation.get('basis') in FRONT_RELATION_BASES else {}),
                 'map_revision': revision, 'scoring': 'project_fixed_scale_goal_v1',
                 'requires_target_visibility': spec.terminal_action != 'pass_landmark',
                 **({'route_axis_xy_enu': [math.cos(direction), math.sin(direction)],

@@ -354,8 +354,9 @@ class AdaptiveSearch:
                 confirmation = confirmation_goal(semantic_map, active['target_id'], active['source_capture_id'])
                 confirmation['avoid_observer_positions'] = [list(o['position_enu_m']) for o in s['observations']]
                 confirmation['purpose'] = active.get('purpose', 'confirmation')
+                confirmation['evidence_purpose'] = confirmation['purpose']
                 if (confirmation.get('surface_reference') is None
-                        and not (confirmation.get('purpose') == 'reveal_front'
+                        and not (confirmation.get('purpose') in ('reveal_front', 'front_relation')
                                  and confirmation.get('probe_basis') == 'actual_stereo_surface_with_bounded_uncertainty_probe')
                         and s['observations'][-1]['capture_id'] == active['source_capture_id']):
                     confirmation['purpose'] = 'depth_acquisition'
@@ -754,6 +755,8 @@ class AdaptiveSearch:
             active = s['confirmation']
             if identifier == active['source_capture_id']:
                 raise ValueError('Confirmation requires a second actual capture')
+            if self.retain_relation_identity(owner, semantic_map, frame):
+                return
             active.update(current_capture_id=identifier,
                           current_target_ids=[l.id for l, _ in observations_for(semantic_map, s['query'], identifier)])
             s['search_phase'] = 'awaiting_review'
@@ -765,6 +768,45 @@ class AdaptiveSearch:
                 s['search_phase'] = 'confirming'
                 s['target_focus_state'] = 'localizing_and_confirming'
                 self.confirmation_event(owner, 'candidate')
+
+    def retain_relation_identity(self, owner, semantic_map, frame):
+        """Retain a previously confirmed instance through unique fresh geometry.
+
+        No new semantic confirmation is claimed. Ambiguity, missing association,
+        refutation or weak geometry returns to the unchanged paired review.
+        """
+        from target_confirmation import (observation_for, observations_for, pair_geometry,
+            association_allows_confirmation, CONFIRMATION_GEOMETRY_POLICY)
+        s = self.sessions[owner]
+        previous, active = s.get('relation_identity_reference'), s.get('confirmation') or {}
+        if (not previous or previous.get('confirmation_level') != 'multiview'
+                or active.get('purpose') != 'front_relation' or previous['target_id'] != active.get('target_id')
+                or previous['query'] != s['query'] or previous['coordinate_epoch'] != s['epoch']):
+            return False
+        source_id, current_id = active['source_capture_id'], frame['capture_id']
+        source_landmark, source = observation_for(semantic_map, previous['target_id'], source_id)
+        current = observations_for(semantic_map, s['query'], current_id)
+        sources = observations_for(semantic_map, s['query'], source_id)
+        if len(current) != 1 or current[0][0].id != previous['target_id']:
+            return False
+        landmark, observed = current[0]
+        if (observed.get('association') or {}).get('status') != 'unique':
+            return False
+        if any(r.get('capture_id') in (source_id, current_id) for r in landmark.attributes.get('refuted_visual_observations', [])):
+            return False
+        geometry = pair_geometry(source_landmark, source, landmark, observed, CONFIRMATION_GEOMETRY_POLICY)
+        competitors = [l.id for l, o in sources
+                       if pair_geometry(l, o, landmark, observed, CONFIRMATION_GEOMETRY_POLICY)['compatible']]
+        if competitors != [previous['target_id']] or not association_allows_confirmation(geometry):
+            return False
+        proof = {'basis': 'retained_confirmed_identity_with_unique_fresh_geometry',
+            'original_reference': copy.deepcopy(previous), 'source_capture_id': source_id,
+            'current_capture_id': current_id, 'target_id': landmark.id,
+            'geometry': geometry, 'semantic_confirmation_repeated': False}
+        s.update(status='target_found', search_phase='identity_retained', target_focus_state='improving_front_relation',
+                 target_visual_confirmed=True, retained_identity=proof)
+        self.confirmation_event(owner, 'identity_retained', **proof)
+        return True
 
     def review_confirmation(self, owner, source_capture_id, current_capture_id, current_target_id,
                             source_supported, current_supported, same_object, reason,
@@ -946,6 +988,8 @@ class AdaptiveSearch:
             'multiview' if s.get('target_visual_confirmed') else 'visual_candidate' if s['status'] == 'candidate_acquired'
             else 'single_frame', copy.deepcopy(s['epoch']), stage_id))
         outcome['status'] = 'candidate_acquired' if s['status'] == 'candidate_acquired' else 'evidence_ready'
+        if (s.get('retained_identity') or {}).get('current_capture_id') == capture_id:
+            outcome['identity_retention'] = copy.deepcopy(s['retained_identity'])
         s.update(activity_closed=True, pending=None, nbv_awaiting_selection=False,
                  skill_handoff=outcome, parent_stage_revision=revision, nbv_private=None, nbv_public=None)
         return copy.deepcopy(outcome)
@@ -961,6 +1005,12 @@ class AdaptiveSearch:
         previous = s['skill_handoff']
         if target_id != previous['target_id']:
             raise ValueError('Observation stage cannot change the handed-off instance')
+        s.pop('retained_identity', None)
+        if purpose == 'front_relation' and previous['confirmation_level'] == 'multiview':
+            s['relation_identity_reference'] = {k: copy.deepcopy(previous[k]) for k in
+                ('target_id', 'capture_id', 'query', 'confirmation_level', 'coordinate_epoch', 'stage_id')}
+        else:
+            s.pop('relation_identity_reference', None)
         observation_for(self.semantic_maps.maps[owner], target_id, previous['capture_id'])
         if s.get('nbv_bound'):
             sequence = s.get('authority_stage_revision', 0)+1
@@ -983,6 +1033,9 @@ class AdaptiveSearch:
             raise ValueError('Next target requires an actual prior skill handoff')
         self.validate_state(owner, self.client.state(), allow_skill_handoff=True)
         semantic = self.semantic_maps.maps[owner]
+        s.pop('relation_identity_reference', None)
+        s.pop('retained_identity', None)
+        s.pop('front_relation_quality', None)
         semantic.set_query(query)
         if s.get('nbv_bound'):
             sequence = s.get('authority_stage_revision', 0)+1
@@ -1014,7 +1067,8 @@ class AdaptiveSearch:
             observation_for(semantic, target_id, last['capture_id'])
             s.update(search_phase='confirming', target_focus_state='reacquiring',
                 confirmation={'target_id': target_id, 'source_capture_id': last['capture_id'],
-                              'purpose': 'recovery' if strategy == 'reacquire_target' else 'confirmation'})
+                              'purpose': 'front_relation' if s.get('relation_identity_reference') else
+                                         'recovery' if strategy == 'reacquire_target' else 'confirmation'})
         elif strategy == 'continue_search':
             s.update(search_phase='exploring', confirmation=None)
         else:

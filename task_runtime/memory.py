@@ -40,6 +40,7 @@ class SharedTargetMemory:
             'coordinate_epoch': m.coordinate_epoch, 'world_sha256': m.world_sha256,
             'sortie_id': m.sortie_id, 'confirmation_level': confirmation_level,
             'orientation': landmark.attributes.get('object_orientation'), 'extent_known': False,
+            'front_relation_quality': landmark.attributes.get('front_relation_quality'),
             'refuted_visual_observations': landmark.attributes.get('refuted_visual_observations', []),
             'association_hypotheses': last.get('association'), 'map_status': m.status,
             'schema_version': 1})

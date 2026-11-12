@@ -50,6 +50,13 @@ def reply_text(message):
 
 def multiview_search_result(command):
     """Render class-confirmation outcome from tool facts, not final model prose."""
+    if isinstance(command.get('task_runtime_result'), dict):
+        outcome = search_result(command)
+        targets = (command['task_runtime_result'].get('evidence_summary') or {}).get('targets') or {}
+        query = ', '.join(str(t.get('query', '')) for t in targets.values())
+        return {**outcome, 'query': query,
+                'observation_count': sum(p.get('status') == 'ok' for p in command.get('perceptions', [])),
+                'basis': 'parent_task_evidence'}, '目标确认状态：'+outcome['confirmation_level']+'。'
     progress = [e['result'] for e in command.get('search_events', [])
                 if isinstance(e.get('result'), dict) and e['result'].get('target_confirmation_mode') == 'multiview']
     if not progress:
@@ -571,9 +578,11 @@ class WebApplication:
         photo_unmet_only = False
         search_unmet_only = False
         try:
+            parent = getattr(self.audited_client, 'task_runtime', None)
+            graph_limit = parent.graph_step_limit() if parent else 120
             result = self.agent.invoke({"messages": [{"role": "user", "content": command["prompt"], "id": command['id']}]},
                                        {"configurable": {"thread_id": self.agent_thread_id},
-                                        "recursion_limit": 120, "max_concurrency": 1})
+                                        "recursion_limit": graph_limit, "max_concurrency": 1})
             messages = command_messages(result, command["prompt"])
             if messages:
                 reply = reply_text(messages[-1])

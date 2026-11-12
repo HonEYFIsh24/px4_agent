@@ -7,6 +7,40 @@ import test_bridge_navigation as nav_fixture
 
 
 class StaticBridgeTests(unittest.TestCase):
+    def test_intermediate_arrival_tolerance_cannot_cut_an_inflated_corner(self):
+        from static_navigation import StaticNavigator
+        nav=StaticNavigator([([1.,.1,0.],[2.,2.,6.])],[[-5.,-5.,0.],[5.,5.,10.]],clearance=.5)
+        nav.bind([0.,0.,0.],[0.,0.,0.,1.],{'position_m':[0.,0.,0.],'orientation_xyzw':[0.,0.,0.,1.]})
+        first,goal=[.4,-.5,3.],[3.,-.5,3.]
+        self.fixture.set_pose([.4,-.35,3.])
+        self.assertTrue(nav.segment_safe(self.c.position(),first))
+        self.assertTrue(nav.segment_safe(first,goal))
+        self.assertFalse(nav.segment_safe(self.c.position(),goal))
+        nav.plan=mock.Mock(return_value={'waypoints':[first,goal]})
+        self.c.navigation_map=nav;self.c.navigation_active=True;self.c.mission={'id':'controlled-corner'}
+        self.c.checkpoint=mock.Mock();self.c.log=mock.Mock();clock=[10.];waits=[]
+        self.c.motion_segment_safe=lambda now:nav.segment_safe(self.c.position(),self.c.target)
+        def wait(predicate,timeout,require_offboard=False):
+            waits.append(self.c.target)
+            self.assertFalse(predicate())
+            clock[0]+=1.1
+            if len(waits)==1:
+                # Still within .2m, but the following segment is obstructed.
+                self.assertFalse(predicate())
+                self.fixture.set_pose(first)
+                self.assertFalse(predicate())
+                clock[0]+=1.1
+                self.assertTrue(predicate())
+            else:
+                self.fixture.set_pose(goal)
+                self.assertFalse(predicate())
+                clock[0]+=1.1
+                self.assertTrue(predicate())
+        self.c.wait_until=wait
+        with mock.patch.object(nav_fixture.bridge.time,'monotonic',side_effect=lambda:clock[0]):
+            self.c.move_static(goal)
+        self.assertEqual(waits,[first,goal])
+
     def setUp(self):
         self.fixture=nav_fixture.BridgeNavigationTests('test_auto_land_recovers_without_any_lidar_scan')
         # Reuse setup only, without running an inherited LiDAR test suite.
@@ -261,6 +295,28 @@ class StaticBridgeTests(unittest.TestCase):
         self.assertFalse(probes[0]['unoccluded'])
         self.assertTrue(probes[1]['unoccluded'])
         self.assertEqual(nav.last_plan, {'executing': 'keep'})
+        self.assertIsNone(self.c.worker)
+
+    def test_uncertain_surface_prediction_requires_owned_scope_and_cannot_remove_an_occluder(self):
+        nav, identity = self.prepare_viewpoint_capture()
+        point = [6., 0., 1.];covariance = [[[.0016, 0., 0.], [0., .0016, 0.], [0., 0., .0016]]]
+        candidates = [{'id': 'view_001', 'position_enu_m': [1.5, 0., 3.]}]
+        with self.assertRaisesRegex(MissionError, 'owned prediction scope'):
+            self.c.evaluate_viewpoints('visibility', 'pair', [0., 0.], identity, candidates,
+                probe_points_enu_m=[point], probe_covariances_enu_m2=covariance)
+        context = {'owner': ['thread', 'task'], 'map_revision': 'b'*64, 'batch_id': 'a'*32}
+        nav.raw_boxes.append(([5.97, -1., 0.], [8., 1., 2.]))
+        self.c.evaluate_viewpoints('context', 'pair', [0., 0.], identity, [], context,
+            probe_points_enu_m=[point], probe_covariances_enu_m2=covariance)
+        def probe():
+            return self.c.evaluate_viewpoints('visibility', 'pair', [0., 0.], identity, candidates, context,
+                probe_points_enu_m=[point], probe_covariances_enu_m2=covariance)['results'][0]['probe_visibility'][0]
+        first = probe()
+        self.assertFalse(first['unoccluded'])
+        self.assertTrue(first['surface_visibility_possible'])
+        self.assertTrue(first['requires_fresh_visual_verification'])
+        nav.raw_boxes.append(([5.94, -1., 0.], [5.95, 1., 2.]))
+        self.assertFalse(probe()['surface_visibility_possible'])
         self.assertIsNone(self.c.worker)
 
     def test_owned_ticket_submits_cached_goal_and_actual_planning_retains_scope(self):

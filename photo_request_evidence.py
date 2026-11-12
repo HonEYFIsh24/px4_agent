@@ -62,14 +62,14 @@ def write_private(directory, name, value):
 
 
 @contextmanager
-def request_evidence(enabled, owner, capture_id, model_config):
-    """Scope only a photo planning invocation, including its returned model output.
+def request_evidence(enabled, owner, capture_id, model_config, *, task_stage=False):
+    """Scope an opt-in photo planning or staged task model invocation.
 
     Any disk/serialization failure is diagnostic-only and cannot change flight
     behavior. HTTP headers, URL, proxy settings and provider credentials are never
     taken from the model. Image bytes remain in the existing capture evidence.
     """
-    directory=os.getenv('UAV_PHOTO_REQUEST_EVIDENCE_DIR') if enabled else None
+    directory=os.getenv('UAV_TASK_REQUEST_EVIDENCE_DIR' if task_stage else 'UAV_PHOTO_REQUEST_EVIDENCE_DIR') if enabled else None
     state={'status':'disabled','requests':[]}
     if directory:
         try:
@@ -99,6 +99,23 @@ def record_response(state, messages=None, failed=False):
 
 class EvidenceChatOpenAI(ChatOpenAI):
     """Preserve parent SDK parameters exactly; archive an image-referenced copy."""
+    def _create_chat_result(self, response, generation_info=None):
+        # Retain the SDK's actual returned tool names/argument strings before
+        # LangChain parses them. No HTTP headers or credentials are recorded.
+        state = _active.get()
+        if state is not None:
+            try:
+                raw = response if isinstance(response, dict) else response.model_dump()
+                changes = []; images = {}
+                safe = sanitized({'model': raw.get('model'), 'choices': raw.get('choices'),
+                                  'usage': raw.get('usage')}, state['secrets'], images, changes)
+                for request in state['requests']:
+                    write_private(state['directory'], request['id']+'.sdk-response.json',
+                                  {'request_id': request['id'], 'response': safe, 'redactions': changes})
+            except (OSError, ValueError, TypeError, AttributeError):
+                state['status'] = 'unavailable'
+        return super()._create_chat_result(response, generation_info)
+
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         payload=super()._get_request_payload(input_,stop=stop,**kwargs)
         state=_active.get()

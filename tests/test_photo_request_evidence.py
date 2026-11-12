@@ -59,6 +59,37 @@ class RequestEvidenceTests(unittest.TestCase):
             with self.scope(False):self.model._get_request_payload(self.messages)
         self.assertFalse(self.directory.exists())
 
+    def test_stage_scope_records_actual_bound_tools_choice_and_same_owned_image(self):
+        schema = {'type': 'function', 'function': {'name': 'report_scene',
+            'parameters': {'type': 'object', 'properties': {'targets': {'type': 'array', 'items': {'type': 'object'}}}}}}
+        directory = self.root/'logs'/'stage-requests'
+        with mock.patch.dict(os.environ, {'UAV_TASK_REQUEST_EVIDENCE_DIR': str(directory)}):
+            binding = self.model.bind_tools([schema], tool_choice='report_scene', parallel_tool_calls=False)
+            with module.request_evidence(True, ('thread', 'owner'), 'capture', self.config, task_stage=True) as state:
+                payload = self.model._get_request_payload(self.messages, **binding.kwargs)
+                module.record_response(state, [AIMessage('', tool_calls=[dict(name='report_scene', args={'targets': []}, id='call')])])
+        record = json.loads(next(directory.glob('*.request.json')).read_text())
+        self.assertEqual(record['payload']['tools'], payload['tools'])
+        self.assertEqual(record['payload']['tool_choice'], {'type': 'function', 'function': {'name': 'report_scene'}})
+        self.assertFalse(record['payload']['parallel_tool_calls'])
+        self.assertEqual(record['owner'], ['thread', 'owner'])
+        self.assertEqual(record['capture_id'], 'capture')
+        self.assertEqual(state['status'], 'recorded')
+        self.assertFalse(self.directory.exists())
+
+    def test_sdk_tool_name_is_recorded_before_parsing_even_if_it_was_not_offered(self):
+        raw = {'model': 'controlled-provider', 'choices': [{'finish_reason': 'tool_calls', 'message': {
+            'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'bad', 'type': 'function',
+                'function': {'name': 'observe_target_search_view', 'arguments': '{}'}}]}}]}
+        with self.scope() as state:
+            self.model._get_request_payload(self.messages)
+            result = self.model._create_chat_result(raw)
+            module.record_response(state, [result.generations[0].message])
+        record = json.loads(next(self.directory.glob('*.sdk-response.json')).read_text())
+        function = record['response']['choices'][0]['message']['tool_calls'][0]['function']
+        self.assertEqual(function, {'name': 'observe_target_search_view', 'arguments': '{}'})
+        self.assertEqual(result.generations[0].message.tool_calls[0]['name'], function['name'])
+
     def test_sensitive_text_and_tokens_redacted_without_altering_outbound_payload(self):
         messages=[HumanMessage('private-test-key Bearer another-secret https://user:password@host/path '+
                               '{"ticket":"serialized-ticket", "api_key":"serialized-key"}')]

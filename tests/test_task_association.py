@@ -30,6 +30,22 @@ def textured(seed=17):
 
 
 class PixelAssociationTests(unittest.TestCase):
+    def test_negated_target_label_and_color_never_supply_positive_query_evidence(self):
+        for label in ('灰色波纹金属箱体结构（非白色货车）','灰色箱体，不是白色货车',
+                      'gray structure (not a white van)', '货车，非白色', '白色货车（非目标）',
+                      '没有看到白色货车','未发现白色货车'):
+            with self.subTest(label=label):
+                self.assertFalse(labels_compatible(label,'白色货车'))
+                self.assertFalse(labels_compatible('白色货车',label))
+        self.assertFalse(labels_compatible('货车','白色货车',{'color':'not white'}))
+        self.assertFalse(labels_compatible('not a white van','not a white van'))
+
+    def test_positive_label_survives_a_negated_different_color_or_category(self):
+        for label in ('白色货车（不是集装箱）','白色货车，不是红色','white van, not a red van',
+                      '不是红色，而是白色货车','非洲的白色货车'):
+            with self.subTest(label=label):self.assertTrue(labels_compatible(label,'白色货车'))
+        self.assertTrue(labels_compatible('货车，非白色','灰色货车',{'color':'gray'}))
+
     def test_real_patch_matching_hash_cache_and_nonmatching_image(self):
         matcher = PatchMatcher()
         n = navigator()

@@ -12,13 +12,20 @@ from mission import MAX_ALTITUDE
 from search_limits import MAX_OBSERVATIONS, SEARCH_RADIUS_M
 from task_contract import assess_task
 from .contracts import TaskLimits, TaskResult, ObservationNeed, GoalSpec, TaskProtocolError
-from .planning import compile_plan, target_query
+from .planning import compile_plan, target_query, plan_constraints
 from .skills import ExistingSkills
 from .reasoning import AdaptiveReasoning
 
 
 class TaskOrchestrator:
     goal_stage_types = frozenset(('approach', 'relative_hover', 'relative_land', 'pass_landmark', 'relative_turn', 'face_target'))
+    model_call_limit = 60
+
+    def graph_step_limit(self):
+        # Graph nodes include model turns, program-owned capture/planning/goal
+        # transactions and closure. This is not a provider or flight budget.
+        return 2*(self.model_call_limit+3*MAX_OBSERVATIONS)+16
+
     def __init__(self, client, search_manager, clock=time.monotonic, frame_store=None):
         self.client, self.clock = client, clock
         self.skills = ExistingSkills(search_manager)
@@ -27,6 +34,8 @@ class TaskOrchestrator:
         self.goal_execution = GoalExecution(self.skills.search)
         from .landing import LandingSkill
         self.landing_skill = LandingSkill(self.skills.search)
+        from .visual_goal import VisualGoalSkill
+        self.visual_goal_skill = VisualGoalSkill(self)
         self.frame_store = frame_store
         from .photography import PhotographySkill
         self.photography = PhotographySkill(self.skills.search, frame_store)
@@ -44,8 +53,9 @@ class TaskOrchestrator:
                 self.sessions[owner] = {'instruction': instruction, 'plan': None, 'index': 0,
                     'revision': 0, 'started': self.clock(), 'model_calls': 0, 'recoveries': 0,
                     'issued_calls': {}, 'targets': {}, 'result': None, 'observations': set(),
+                    'awaiting_report_capture_id': None, 'pending_observation': None,
                     'reasoning': self.reasoning.initial(),
-                    'limits': TaskLimits(MAX_OBSERVATIONS, 900., 60, 1, SEARCH_RADIUS_M, MAX_ALTITUDE)}
+                    'limits': TaskLimits(MAX_OBSERVATIONS, 900., self.model_call_limit, 1, SEARCH_RADIUS_M, MAX_ALTITUDE)}
             elif self.sessions[owner]['instruction'] != instruction:
                 raise ValueError('Parent task cannot change the original instruction')
             return self.sessions[owner]
@@ -100,6 +110,61 @@ class TaskOrchestrator:
         s = self.sessions[owner]
         return s['plan'].stages[s['index']] if s['plan'] and s['index'] < len(s['plan'].stages) else None
 
+    def await_report(self, owner, capture_id):
+        """Own the capture/report transaction before another stage can advance."""
+        with self.lock:
+            self.require_live(owner)
+            s = self.sessions[owner]
+            frame = self.frame_store.get(owner, capture_id)
+            pending = s.get('pending_observation')
+            if pending:
+                if pending['capture_id'] != capture_id:
+                    raise TaskProtocolError('An unreported image cannot be replaced by another capture')
+                self.pending_frame(owner)
+                return
+            child = self.skills.search.sessions.get(owner) or {}
+            if (not s['plan'] or s['result'] or capture_id in s['observations']
+                    or child.get('epoch_bound') and frame['snapshot'].get('coordinate_epoch') != child['epoch']):
+                raise TaskProtocolError('Capture does not belong to the live parent observation')
+            s['awaiting_report_capture_id'] = capture_id
+            s['pending_observation'] = {'capture_id': capture_id, 'stage_revision': s['revision'],
+                'image_sha256': frame['camera']['image_sha256'],
+                'coordinate_epoch': copy.deepcopy(frame['snapshot'].get('coordinate_epoch')),
+                'delivered': frame['delivered']}
+            self.emit(owner, 'observation_captured_awaiting_report')
+
+    def pending_frame(self, owner, *, require_delivered=False):
+        s = self.sessions[owner]
+        pending = s.get('pending_observation')
+        if not pending or s.get('awaiting_report_capture_id') != pending['capture_id']:
+            raise TaskProtocolError('Parent has no matching pending observation')
+        frame = self.frame_store.get(owner, pending['capture_id'], require_delivered=require_delivered)
+        if (pending['stage_revision'] != s['revision']
+                or frame['camera']['image_sha256'] != pending['image_sha256']
+                or frame['snapshot'].get('coordinate_epoch') != pending['coordinate_epoch']):
+            raise TaskProtocolError('Pending observation identity or stage changed')
+        return frame
+
+    def observation_delivered(self, owner, capture_id):
+        with self.lock:
+            frame = self.pending_frame(owner, require_delivered=True)
+            if frame['capture_id'] != capture_id:
+                raise TaskProtocolError('Delivered image is not the pending parent observation')
+            self.sessions[owner]['pending_observation']['delivered'] = True
+
+    def observation_reported(self, owner, capture_id):
+        """Called only after the report, search consumption and map update succeed."""
+        with self.lock:
+            frame = self.pending_frame(owner, require_delivered=True)
+            child = self.skills.search.sessions[owner]
+            if (frame['capture_id'] != capture_id
+                    or not any(o['capture_id'] == capture_id for o in child['observations'])):
+                raise TaskProtocolError('Pending observation has no successfully consumed report')
+            s = self.sessions[owner]
+            s['observations'].add(capture_id)
+            s['awaiting_report_capture_id'] = s['pending_observation'] = None
+            self.emit(owner, 'observation_report_consumed')
+
     def start_stage(self, owner):
         s, stage = self.sessions[owner], self.stage(owner)
         s['revision'] += 1
@@ -133,14 +198,15 @@ class TaskOrchestrator:
                 raise ValueError('Relative goal requires the actual target handoff')
             nav = self.client.state().get('navigation') or {}
             capability = 'target_landing_supported' if stage.kind == 'relative_land' else 'goal_pose_execution_supported'
-            if nav.get(capability) is not True or stage.kind == 'relative_land' and stage.relation != 'object_front':
+            if nav.get(capability) is not True:
                 stage.status, stage.reason_code = 'unavailable', 'EXECUTOR_RELATIVE_GOAL_PROFILE_UNAVAILABLE'
                 return
-            stage.conditions = {'execution_capability': 'true', 'object_orientation': 'unknown', 'goal_region': 'unknown'}
+            stage.conditions = {'execution_capability': 'true', 'visual_relation': 'unknown', 'goal_region': 'unknown'}
             stage.reason_code = None
             s['reasoning'] = {**self.reasoning.initial(), 'global_replans': s['reasoning']['global_replans']}
-            s['goal_state'] = {'stage_id': stage.stage_id, 'phase': 'need_object_frame' if stage.relation in
-                               ('object_front', 'object_behind') else 'plan', 'prepared': None}
+            visual = stage.kind in ('approach', 'relative_hover', 'relative_land')
+            s['goal_state'] = {'stage_id': stage.stage_id, 'phase': 'choose_goal' if visual else 'plan',
+                'visual_goal': visual, 'view_capture_id': s['targets'][stage.target_ref]['capture_id'], 'prepared': None}
         elif stage.kind == 'photo':
             subject = target_query(next((t for t in s['plan'].targets if t['ref'] == stage.target_ref), s['plan'].targets[0]))
             s['photo_state'] = self.photography.start(owner, s['instruction'], subject, stage.altitude_m or 3.)
@@ -155,59 +221,6 @@ class TaskOrchestrator:
             if not self.is_photo_stage(owner):
                 raise ValueError('No active parent photography stage')
             return self.photography.capture(owner, self.sessions[owner]['photo_state'])
-
-    def report_target_frame(self, owner, capture_id, front_box, rear_box, descriptions,
-                            front_left_box=None, front_right_box=None):
-        from .object_frame import estimate_object_frame, estimate_front_face_frame
-        from target_confirmation import observation_for
-        with self.lock:
-            self.require_live(owner)
-            s, stage = self.sessions[owner], self.stage(owner)
-            goal = s.get('goal_state') or {}
-            if not stage or goal.get('phase') != 'need_object_frame' or goal.get('stage_id') != stage.stage_id:
-                raise ValueError('Object-frame report is not the current missing-evidence stage')
-            reference = s['targets'][stage.target_ref]
-            if capture_id != reference['capture_id'] or self.frame_store is None:
-                raise ValueError('Object-frame report must refer to the handed-off actual image')
-            frame = self.frame_store.get(owner, capture_id, require_delivered=True)
-            semantic = self.skills.search.semantic_maps.maps[owner]
-            landmark, observation = observation_for(semantic, reference['target_id'], capture_id)
-            face_profile = front_left_box is not None or front_right_box is not None
-            boxes = [front_box, front_left_box, front_right_box] if face_profile else [front_box, rear_box]
-            metrics = {'status': 'ok', 'targets': []}
-            if any(box is None for box in boxes):
-                result, reason = None, 'MISSING_FRONT_FACE_LATERAL_REGIONS' if face_profile else 'MISSING_FRONT_OR_REAR_ROI'
-            else:
-                metrics = self.client.localize_stereo(frame['snapshot']['stereo_pair_id'], boxes)
-                if metrics.get('status') != 'ok':
-                    raise ValueError('Object-part stereo response failed its transport contract')
-                if face_profile:
-                    evidence = estimate_front_face_frame(frame, observation, boxes, metrics['targets'], descriptions[0])
-                    result, reason = evidence['orientation'], evidence['reason_code']
-                else:
-                    result = estimate_object_frame(frame, observation, front_box, rear_box, metrics['targets'], descriptions)
-                    reason = 'FRONT_REAR_AXIS_AVAILABLE' if result else 'FRONT_REAR_METRIC_AXIS_UNAVAILABLE'
-            self.require_live(owner)  # Do not accept slow localization after cancel/reset.
-            diagnostic = {'capture_id': capture_id, 'target_id': reference['target_id'],
-                'profile': 'front_face_lateral' if face_profile else 'front_rear_axis', 'reason_code': reason,
-                'boxes': copy.deepcopy(boxes), 'measurements': copy.deepcopy(metrics['targets']),
-                'descriptions': descriptions, 'orientation_available': result is not None}
-            goal.setdefault('object_frame_attempts', []).append({k: v for k, v in diagnostic.items() if k != 'measurements'})
-            from search_diagnostics import emit
-            emit({'event': 'task_object_frame_evidence', 'owner': list(owner), **diagnostic})
-            if result is None:
-                goal.update(phase='request_observation', need_kind=(
-                    'OBTAIN_DEPTH' if face_profile and reason == 'FRONT_FACE_LATERAL_DEPTH_UNAVAILABLE'
-                    else 'REVEAL_FRONT'))
-                stage.conditions['object_orientation'] = 'unknown'
-            else:
-                landmark.attributes['object_orientation'] = result
-                landmark.attributes['object_frame_revision'] = landmark.attributes.get('object_frame_revision', 0)+1
-                stage.conditions['object_orientation'] = 'true'
-                goal['phase'] = 'plan'
-            s['revision'] += 1
-            s['issued_calls'].clear()
-            return self.emit(owner, 'object_frame_available' if result else 'object_frame_observation_required')
 
     def _review_original_reference(self, owner, reference, current):
         """Resolve a tentative handoff against an existing metric view before closing it.
@@ -289,6 +302,8 @@ class TaskOrchestrator:
         goal = s['goal_state']
         reference = s['targets'][stage.target_ref]
         semantic = self.skills.search.semantic_maps.maps[owner]
+        if goal.get('visual_goal'):
+            return self.visual_goal_skill.advance(owner, stage)
         if goal['phase'] == 'route_verification':
             capture = goal['verification_capture_id']
             saved = next((o for o in child['observations'] if o['capture_id'] == capture), None)
@@ -305,7 +320,7 @@ class TaskOrchestrator:
                         or abs((matches[0][1]['bbox'][0]+matches[0][1]['bbox'][2])/2-.5) > .15):
                     # A completed rotation is not proof the target was seen.
                     # Continue the same target's bounded local observation skill.
-                    child.update(search_phase='confirming', target_confirmation_mode='multiview', program_route_verification=False,
+                    child.update(search_phase='confirming', target_confirmation_mode='multiview', program_verification=False,
                         confirmation={'target_id': reference['target_id'], 'source_capture_id': reference['capture_id'], 'purpose': 'recovery'})
                     goal['phase'] = 'observing'
                     self.skills.search.next_view(owner, 'auto', '转向后目标关联或居中仍需新证据', preparation_source='task_route_recovery')
@@ -330,7 +345,7 @@ class TaskOrchestrator:
             route_reference.update(kind='route_observation', verified_capture_id=capture,
                                    stage_id=stage.stage_id, status='route_evidence_ready')
             child.update(status='route_completed', activity_closed=True, pending=None, confirmation=None,
-                         program_route_verification=False, nbv_private=None, nbv_public=None,
+                         program_verification=False, nbv_private=None, nbv_public=None,
                          parent_stage_revision=s['revision'], skill_handoff=route_reference)
             stage.conditions['fresh_post_action_report'] = 'true'
             s.pop('goal_state')
@@ -352,27 +367,7 @@ class TaskOrchestrator:
                 if outcome['target_id'] != reference['target_id']:
                     self._replace_refuted_relation_reference(owner, stage, reference, outcome)
                 s['targets'][stage.target_ref] = outcome
-                if goal['phase'] == 'verification':
-                    state = self.client.state()
-                    selected = next(c for c in goal['prepared']['candidates'] if c['id'] == goal['prepared']['selected_id'])
-                    if not GoalPosePlanner.verify_arrival(selected, state['position_enu_m'], state['yaw_enu_rad'],
-                                                        child['epoch']):
-                        raise ValueError('Fresh target review lacks actual goal pose arrival')
-                    stage.conditions.update(goal_region='true', fresh_target_verification='true', facing_target='true')
-                    goal['verified_outcome'] = outcome
-                    if stage.relation == 'object_front':
-                        goal['phase'] = 'need_relation_review'
-                        return False
-                    s.pop('goal_state', None)
-                    self.complete_stage(owner, [outcome, {'goal_pose': copy.deepcopy({k: v for k, v in selected.items()
-                        if k != 'execution_ticket'}), 'mission_id': goal['prepared']['execution']['mission_id']}])
-                    return True
-                from .object_frame import FRONT_FACE_BASIS
-                orientation = semantic.landmarks[outcome['target_id']].attributes.get('object_orientation')
-                refresh_face = (orientation and orientation.get('basis') == FRONT_FACE_BASIS
-                                and orientation['source_capture_id'] != outcome['capture_id'])
-                goal['phase'] = ('need_object_frame' if stage.relation in ('object_front', 'object_behind')
-                    and (not orientation or refresh_face) else 'plan')
+                goal['phase'] = 'plan'
                 return False
             if (goal['phase'] == 'verification' and progress['search_status'] == 'searching'
                     and child['observations'] and child['observations'][-1]['capture_id'] == goal.get('verification_capture_id')
@@ -399,15 +394,22 @@ class TaskOrchestrator:
             # fresh parent/search, larger budget or a guessed vehicle heading.
             s['revision'] += 1
             self.skills.search.resume_observation_skill(owner, stage.stage_id, s['revision'], reference['target_id'],
-                purpose='reveal_front' if goal.get('need_kind') == 'REVEAL_FRONT' else
-                        'recovery' if goal.get('need_kind') == 'RECOVER_OCCLUDED' else
+                purpose='recovery' if goal.get('need_kind') == 'RECOVER_OCCLUDED' else
                         'approach' if goal.get('need_kind') == 'OBTAIN_DEPTH' else 'confirmation', require_close=False)
             child['observation_ceiling'] = s['limits'].max_observations-1
             child['target_confirmation_mode'] = 'multiview'
             goal['phase'] = 'observing'
+            missing = ['fresh_target_observation']
             s['observation_need'] = ObservationNeed(goal.get('need_kind', 'REVEAL_FRONT'), reference['target_id'],
-                reference['capture_id'], ['object_relation_geometry'], ['fresh_visual_regions_with_metric_depth'])
+                reference['capture_id'], missing, ['fresh_visual_regions_with_metric_depth'])
             self.skills.search.next_view(owner, 'auto', '补充目标方向或关系证据', preparation_source='task_relation_evidence')
+            if self.skills.search.summary(owner)['search_status'] in (
+                    'budget_exhausted', 'coverage_exhausted', 'no_reachable_view'):
+                # An internally prepared batch may end without an executable
+                # view. Close from program state before offering another model
+                # turn with only status tools and stale selection history.
+                stage.reason_code = 'RELATION_EVIDENCE_EXHAUSTED'
+                self.finish(owner, False)
             return False
         if goal['phase'] == 'plan':
             state = self.client.state()
@@ -443,68 +445,15 @@ class TaskOrchestrator:
                 return False
             goal['phase'] = 'ready'
             self.emit(owner, 'goal_pose_ready')
-        if goal['phase'] == 'authorize_landing':
-            goal['landing'] = self.landing_skill.prepare(owner, stage, s['plan'].plan_revision, goal, reference)
-            if goal['landing']['status'] == 'not_executed':
-                if goal['landing'].get('reason_code') != 'FLAT_SUPPORT_UNAVAILABLE' or goal['landing'].get('mission_submitted') is not False:
-                    raise ValueError('Unknown landing-plan rejection is not recoverable')
-                selected = next(c for c in goal['prepared']['candidates'] if c['id'] == goal['prepared']['selected_id'])
-                goal.setdefault('rejected_positions', []).append(selected['position_enu_m'])
-                if len(goal['rejected_positions']) >= 2:
-                    stage.reason_code = 'NO_VERIFIED_FLAT_FRONT_LANDING_AREA'
-                    self.finish(owner, False)
-                else:
-                    goal['phase'] = 'plan'
-                return False
-            if goal['landing']['status'] != 'authorized':
-                raise ValueError('Landing authority returned an invalid result')
-            stage.conditions['landing_support_and_corridor'] = 'true'
-            goal['phase'] = 'landing_ready'
         return False
 
-    def review_goal_region(self, owner, capture_id, front_visible, front_box, description,
-                           front_left_box=None, front_right_box=None):
-        from .landing import verify_front_review
-        from target_confirmation import observation_for
+    def choose_task_goal(self, owner, capture_id, decision, description, ground_point_uv=None):
         with self.lock:
-            self.require_live(owner)
-            s, stage = self.sessions[owner], self.stage(owner)
-            goal = s.get('goal_state') or {}
-            reference = s['targets'][stage.target_ref]
-            if goal.get('phase') != 'need_relation_review' or capture_id != reference['capture_id']:
-                raise ValueError('Relation review needs the actual fresh post-goal verification image')
-            frame = self.frame_store.get(owner, capture_id, require_delivered=True)
-            semantic = self.skills.search.semantic_maps.maps[owner]
-            landmark, observation = observation_for(semantic, reference['target_id'], capture_id)
-            from .object_frame import FRONT_FACE_BASIS
-            face_profile = (landmark.attributes.get('object_orientation') or {}).get('basis') == FRONT_FACE_BASIS
-            boxes = [front_box, front_left_box, front_right_box] if face_profile else [front_box]
-            metrics = (self.client.localize_stereo(frame['snapshot']['stereo_pair_id'], boxes)
-                       if front_visible and all(b is not None for b in boxes) else {'status': 'ok', 'targets': []})
-            if metrics.get('status') != 'ok':
-                raise ValueError('Fresh relation stereo transport failed')
-            result = verify_front_review(landmark, observation, frame, front_box if front_visible else None,
-                                        metrics['targets'], description,
-                                        side_boxes=[front_left_box, front_right_box] if face_profile else None)
-            self.require_live(owner)
-            s['revision'] += 1
-            s['issued_calls'].clear()
-            if result is None:
-                goal.update(phase='request_observation', need_kind='REVEAL_FRONT')
-                return self.emit(owner, 'fresh_front_relation_unverified')
-            goal['relation_review'] = result
-            observation['object_front_review'] = copy.deepcopy(result)
-            landmark.attributes['object_frame_revision'] = landmark.attributes.get('object_frame_revision', 0)+1
-            stage.conditions['fresh_object_front_relation'] = 'true'
-            if stage.kind == 'relative_hover':
-                selected = next(c for c in goal['prepared']['candidates'] if c['id'] == goal['prepared']['selected_id'])
-                evidence = [goal['verified_outcome'], result, {'goal_pose': {k: copy.deepcopy(v) for k, v in selected.items()
-                            if k != 'execution_ticket'}, 'mission_id': goal['prepared']['execution']['mission_id']}]
-                s.pop('goal_state')
-                self.complete_stage(owner, evidence)
-            else:
-                goal['phase'] = 'authorize_landing'
-            return self.emit(owner, 'fresh_front_relation_verified')
+            return self.visual_goal_skill.choose(owner, capture_id, decision, description, ground_point_uv)
+
+    def review_task_goal(self, owner, capture_id, status, same_target, description):
+        with self.lock:
+            return self.visual_goal_skill.review(owner, capture_id, status, same_target, description)
 
     def land_goal(self, owner):
         with self.lock:
@@ -555,7 +504,7 @@ class TaskOrchestrator:
             reference = s['targets'][stage.target_ref]
             selected = next(c for c in goal['prepared']['candidates'] if c['id'] == candidate_id)
             point = selected['position_enu_m']
-            source_capture = reference['capture_id']
+            source_capture = goal.get('source_capture_id', reference['capture_id'])
             semantic = self.skills.search.semantic_maps.maps[owner]
             # A near/heading goal may be at the most recent observer location.
             # Reuse a real independent key view of this same instance for the
@@ -564,7 +513,7 @@ class TaskOrchestrator:
             sources = [o for o in semantic.landmarks[reference['target_id']].observations
                        if math.dist(o['body_pose_enu']['position_m'], point) >= .75
                        and semantic.observations[-1]['stamp_sim_s']-o['stamp_sim_s'] <= 120.]
-            if sources:
+            if sources and not goal.get('visual_goal'):
                 source_capture = sources[-1]['capture_id']
             self.frame_store.pin_confirmation_source(owner, source_capture)
             result = self.goal_execution.execute(owner, goal['prepared'], candidate_id)
@@ -579,9 +528,9 @@ class TaskOrchestrator:
             child['task_contract'] = {**child['task_contract'], 'target_observation_required': False}
             route = stage.kind in ('relative_turn', 'face_target', 'pass_landmark')
             goal['phase'] = 'route_verification' if route else 'verification'
-            if route:
+            if route or goal.get('visual_goal'):
                 child.update(search_phase='exploring', target_confirmation_mode='route_observation',
-                             handoff_evidence_profile='route_observation', confirmation=None, program_route_verification=True)
+                             handoff_evidence_profile='route_observation', confirmation=None, program_verification=True)
             capture = self.frame_store.capture(owner, child['query'], minimum_stamp=state['stamp_sim_s'])
             goal['verification_capture_id'] = capture['capture_id']
             if hasattr(self.client, 'record'):
@@ -702,13 +651,18 @@ class TaskOrchestrator:
                 s['observations'].update(o['capture_id'] for o in child['observations'])
             if len(s['observations']) > s['limits'].max_observations:
                 raise ValueError('Parent observation budget exceeded')
-            if (self.clock()-s['started'] >= s['limits'].max_duration_seconds
-                    or s['model_calls'] >= s['limits'].max_model_calls):
+            if ((self.clock()-s['started'] >= s['limits'].max_duration_seconds
+                    or s['model_calls'] >= s['limits'].max_model_calls)
+                    and (s.get('goal_state') or {}).get('phase') not in ('authorize_landing', 'landing_ready', 'landing')):
                 if child is None:
                     raise ValueError('Parent duration exhausted before flight preparation')
                 child.update(status='budget_exhausted',search_phase='exploring',confirmation=None)
-                self.stage(owner).reason_code = 'PARENT_DURATION_EXHAUSTED'
+                self.stage(owner).reason_code = ('PARENT_DURATION_EXHAUSTED' if
+                    self.clock()-s['started'] >= s['limits'].max_duration_seconds else 'PARENT_MODEL_CALLS_EXHAUSTED')
                 return self.finish(owner,False)
+            if s.get('pending_observation'):
+                self.pending_frame(owner)
+                return self.emit(owner, 'awaiting_observation_report')
             # Only already available evidence advances synchronously. The loop
             # never generates images, semantic claims or unverified positions.
             for _ in range(len(s['plan'].stages)+1):
@@ -766,7 +720,12 @@ class TaskOrchestrator:
                 if stage.kind in ('return_home_land','hold'):
                     return self.finish(owner, True)
                 if stage.kind in self.goal_stage_types:
-                    if self._advance_relative(owner, stage):
+                    advanced = self._advance_relative(owner, stage)
+                    # A rejected goal may synchronously finish and land. Do
+                    # not re-enter its old plan/request phase after closure.
+                    if s['result']:
+                        return self.snapshot(owner)
+                    if advanced:
                         continue
                     if s.get('goal_state', {}).get('phase') in ('plan', 'request_observation', 'authorize_landing'):
                         continue
@@ -845,41 +804,6 @@ class TaskOrchestrator:
                 'mission_submitted': False, 'errors': errors, 'next_tool': name,
                 'task_runtime': self.emit(owner, 'unexecuted_schema_correction')}
 
-    def _region_argument_errors(self, owner, arguments):
-        """Frame identity faults stay fatal; ROI formatting may use the shared credit."""
-        import math
-        from target_confirmation import observation_for
-        s = self.sessions[owner];stage = self.stage(owner);reference = s['targets'][stage.target_ref]
-        if arguments.get('capture_id') != reference['capture_id']:
-            raise TaskProtocolError('Object-region arguments refer to a different owned image')
-        semantic = self.skills.search.semantic_maps.maps[owner]
-        _, observation = observation_for(semantic, reference['target_id'], reference['capture_id'])
-        outer = observation['bbox'];errors = [];valid = {}
-        for field in ('front_box', 'rear_box', 'front_left_box', 'front_right_box'):
-            box = arguments.get(field)
-            if box is None:
-                continue
-            finite = (isinstance(box, list) and len(box) == 4
-                      and all(type(v) in (int, float) and math.isfinite(v) for v in box))
-            if not finite or not (0 <= box[0] < box[2] <= 1 and 0 <= box[1] < box[3] <= 1):
-                errors.append({'loc': [field], 'type': 'normalized_roi_invalid',
-                               'msg': 'Use normalized [left,top,right,bottom], ordered and within 0..1'})
-                continue
-            valid[field] = box
-            if not (outer[0] <= box[0] < box[2] <= outer[2] and outer[1] <= box[1] < box[3] <= outer[3]):
-                errors.append({'loc': [field], 'type': 'roi_outside_reported_target',
-                    'msg': 'Redraw inside the saved target bbox; use null if the region is not visible there',
-                    'allowed_target_bbox': list(outer)})
-        face = valid.get('front_box')
-        for field in ('front_left_box', 'front_right_box'):
-            box = valid.get(field)
-            if box is not None and (face is None or not (
-                    face[0] <= box[0] < box[2] <= face[2] and face[1] <= box[1] < box[3] <= face[3])):
-                errors.append({'loc': [field], 'type': 'roi_outside_front_face',
-                    'msg': 'Lateral regions must be inside the same visible front_box; unknown is null',
-                    'allowed_front_bbox': face})
-        return errors
-
     def guard_tool(self, owner, call):
         s = self.sessions[owner]
         self.require_live(owner)
@@ -887,10 +811,25 @@ class TaskOrchestrator:
             raise TaskProtocolError('Stale, duplicate or unowned parent tool response')
         name = call['name']
         if name not in self.allowed_tools(owner):
+            # A current model response may repeat the previous observation tool
+            # from history. It has executed nothing: reuse the SAME delivered
+            # image and the existing shared correction credit, never a flight.
+            if (name == 'observe_target_search_view' and call.get('args') == {}
+                    and s.get('pending_observation')):
+                frame = self.pending_frame(owner, require_delivered=True)
+                if (self.clock()-s['started'] >= s['limits'].max_duration_seconds
+                        or s['model_calls'] >= s['limits'].max_model_calls
+                        or s['recoveries'] >= s['limits'].max_recoveries):
+                    raise TaskProtocolError('Parent protocol correction budget exhausted')
+                s['recoveries'] += 1
+                return {'status': 'not_executed', 'reason_code': 'pending_image_requires_report',
+                    'tool_executed': False, 'mission_submitted': False, 'capture_id': frame['capture_id'],
+                    'next_tool': 'report_scene',
+                    'task_runtime': self.emit(owner, 'unexecuted_observation_correction')}
             raise TaskProtocolError('Tool is outside the current parent stage')
-        if name in ('report_target_frame', 'review_goal_region'):
+        if name in ('choose_task_goal', 'review_task_goal'):
             from search_diagnostics import emit
-            emit({'event': 'task_region_tool_request', 'owner': list(owner), 'tool': name,
+            emit({'event': 'task_visual_goal_request', 'owner': list(owner), 'tool': name,
                   'revision': s['revision'], 'arguments': call.get('args')})
         schema = self.schemas.get(name)
         try:
@@ -899,10 +838,22 @@ class TaskOrchestrator:
         except ValidationError as exc:
             return self._schema_correction(owner, name, call.get('args'),
                 exc.errors(include_input=False, include_url=False, include_context=False))
-        if name in ('report_target_frame', 'review_goal_region'):
-            errors = self._region_argument_errors(owner, call.get('args') or {})
-            if errors:
-                return self._schema_correction(owner, name, call.get('args'), errors)
+        if name == 'define_task_plan':
+            # Semantic plan validation is pure and must happen before starting
+            # a child search. Rejected plans share the original single credit;
+            # ordinary ToolMessage errors must not create an unbounded loop.
+            try:
+                compile_plan(call['args']['plan'], owner, s['instruction'], s['limits'])
+            except ValueError as exc:
+                if (s['recoveries'] >= s['limits'].max_recoveries
+                        or self.clock()-s['started'] >= s['limits'].max_duration_seconds
+                        or s['model_calls'] >= s['limits'].max_model_calls):
+                    raise TaskProtocolError('Parent plan correction budget exhausted') from None
+                s['recoveries'] += 1
+                return {'status': 'not_executed', 'reason_code': 'plan_contract_invalid',
+                        'tool_executed': False, 'mission_submitted': False, 'plan_error': str(exc)[:500],
+                        'plan_constraints': plan_constraints(s['instruction']), 'next_tool': name,
+                        'task_runtime': self.emit(owner, 'unexecuted_plan_contract_correction')}
         if name == 'revise_task_plan':
             from search_diagnostics import emit
             available = self.available_replan_strategies(owner)
@@ -952,12 +903,12 @@ class TaskOrchestrator:
                 {'adjust_photo_view', 'rotate_photo_view'} if photo == 'adjust' else set())}
         goal = s.get('goal_state')
         if stage and stage.kind in self.goal_stage_types and goal:
-            if goal['phase'] == 'need_object_frame':
-                return {'report_target_frame', 'get_drone_state'}
+            if goal['phase'] == 'choose_goal':
+                return {'choose_task_goal', 'get_drone_state'}
             if goal['phase'] == 'ready':
                 return {'execute_task_goal', 'get_drone_state'}
-            if goal['phase'] == 'need_relation_review':
-                return {'review_goal_region', 'get_drone_state'}
+            if goal['phase'] == 'review_visual_goal':
+                return {'review_task_goal', 'get_drone_state'}
             if goal['phase'] == 'landing_ready':
                 return {'land_task_goal', 'get_drone_state'}
             if goal['phase'] in ('plan', 'request_observation'):
@@ -983,6 +934,7 @@ class TaskOrchestrator:
                 'available_replan_strategies': self.available_replan_strategies(owner),
                 'goal_state':self.public_goal(s.get('goal_state')),
                 'next_tool': self.next_tool(owner),
+                'pending_observation': copy.deepcopy(s.get('pending_observation')),
                 'target_memory':{ref:self.skills.target_view(owner,value) for ref,value in s['targets'].items()},
                 'budget': {**asdict(s['limits']),'model_calls_used':s['model_calls'],
                            'recoveries_used':s['recoveries'],'observations_used':len(s['observations']),
@@ -993,6 +945,8 @@ class TaskOrchestrator:
     def model_context(self, owner):
         """Current evidence summary; do not replay cumulative flight/metric audits to the model."""
         value = self.snapshot(owner)
+        if value['plan'] is None:
+            value['plan_constraints'] = plan_constraints(self.sessions[owner]['instruction'])
         if value['plan']:
             for stage in value['plan']['stages']:
                 stage.pop('evidence_refs', None)
@@ -1029,12 +983,12 @@ class TaskOrchestrator:
                     'awaiting_review': 'review_photo', 'adjust': 'adjust_photo_view_or_rotate_photo_view'}.get(status)
         goal = s.get('goal_state')
         if goal:
-            if goal['phase'] == 'need_object_frame':
-                return 'report_target_frame'
+            if goal['phase'] == 'choose_goal':
+                return 'choose_task_goal'
             if goal['phase'] == 'ready':
                 return 'execute_task_goal'
-            if goal['phase'] == 'need_relation_review':
-                return 'review_goal_region'
+            if goal['phase'] == 'review_visual_goal':
+                return 'review_task_goal'
             if goal['phase'] == 'landing_ready':
                 return 'land_task_goal'
         return self.skills.search.summary(owner)['next_tool'] if owner in self.skills.search.sessions else None

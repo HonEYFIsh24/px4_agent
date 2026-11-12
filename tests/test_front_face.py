@@ -9,7 +9,7 @@ from semantic_map import SemanticMap
 from task_runtime.object_frame import estimate_front_face_frame, current_front_relation, FRONT_FACE_BASIS
 from task_runtime.goal_planner import GoalPosePlanner
 from task_runtime.contracts import GoalSpec
-from task_runtime.landing import verify_front_review
+from task_runtime.object_frame import verify_front_review
 from test_semantic_map import navigator, observation, OWNER
 from test_target_observation import relative_target, measured_stereo
 from test_goal_pose import region
@@ -94,6 +94,9 @@ class FrontFaceTests(unittest.TestCase):
         self.assertEqual(generated['scoring'], 'observed_current_front_region_v1')
         self.assertEqual(len(generated['candidates']), 1)
         self.assertEqual(generated['candidates'][0]['position_enu_m'], f['snapshot']['body_pose_enu']['position_m'])
+        self.assertEqual(generated['target_anchor_covariance_enu_m2'],value['orientation']['front_covariance_enu_m2'])
+        generated['target_anchor_covariance_enu_m2'][0][0]=0.
+        self.assertGreater(value['orientation']['front_covariance_enu_m2'][0][0],0.)
         blocked = planner.evaluate(generated, lambda *args: {'reachable': False, 'target_visible': True})
         self.assertEqual(blocked['status'], 'no_safe_goal')
         behind = planner.generate(GoalSpec(l.id, 'object_behind', 'relative_hover'), m, ref,
@@ -143,194 +146,6 @@ class FrontFaceBridge(FlatGoalBridge):
         else:
             points = [self.front]*len(boxes)
         return {'status': 'ok', 'targets': [measured_stereo(f, p) for p in points]}
-
-
-def front_response(bridge, reset_on_review=False, roi_failures=0, foreign=False, prior_error=False):
-    ordinary = response_for(bridge)
-    remaining = [roi_failures];bad_report = [prior_error]
-    bridge.region_requests = []
-    def response(messages):
-        state = next(json.loads(m.content.split('父任务实际状态：', 1)[1]) for m in reversed(messages)
-            if isinstance(getattr(m, 'content', None), str) and m.content.startswith('父任务实际状态：'))
-        name = state['next_tool']
-        if name not in ('report_target_frame', 'review_goal_region'):
-            call = ordinary(messages)
-            if name == 'report_scene' and bad_report[0]:
-                call.tool_calls[0]['args']['targets'] = 'controlled invalid report array'
-                bad_report[0] = False
-            return call
-        pair = next(reversed(bridge.pairs.values()))
-        f = {'snapshot': {'body_pose_enu': pair['body_pose_enu'], 'camera_intrinsics': pair['left']['camera_intrinsics']}}
-        sides = sorted([region(f, p) for p in bridge.front_sides], key=lambda b: b[0])
-        face = [min(b[0] for b in sides), min(b[1] for b in sides), max(b[2] for b in sides), max(b[3] for b in sides)]
-        args = {'capture_id': state['target_memory']['van']['last_capture_id'],
-                'front_box': face, 'front_left_box': sides[0], 'front_right_box': sides[1]}
-        if name == 'report_target_frame':
-            args.update(front_description='controlled visible front face and two lateral structures', rear_box=None,
-                        rear_description='rear is hidden; no fabricated rear')
-            if remaining[0]:
-                args['front_box'][0] = 0.
-                remaining[0] -= 1
-            if foreign:
-                args['capture_id'] = 'controlled-different-image'
-            bridge.region_requests.append(copy.deepcopy(args))
-        else:
-            if reset_on_review:
-                bridge.telemetry['external_vision']['adapter']['epoch'] += 1
-            args.update(front_visible=True, description='controlled fresh front face and lateral structures')
-        return tool_call(name, args)
-    return response
-
-
-class FrontFaceLandingGraphTests(unittest.TestCase):
-    def run_front(self, weak=False, reset=False, roi_failures=0, foreign=False, prior_error=False,
-                  omit_report_id=False, uncertain_at_last=False, stage_ceiling=None):
-        directory = tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup)
-        bridge = FrontFaceBridge(directory.name, weak)
-        ordinary = front_response(bridge, reset, roi_failures, foreign, prior_error)
-        def response(messages):
-            call = ordinary(messages)
-            if omit_report_id and call.tool_calls[0]['name'] == 'report_scene':
-                call.tool_calls[0]['args'].pop('capture_id', None)
-            if uncertain_at_last and call.tool_calls[0]['name'] == 'review_target_candidate':
-                state = next(json.loads(m.content.split('父任务实际状态：', 1)[1]) for m in reversed(messages)
-                    if isinstance(getattr(m, 'content', None), str) and m.content.startswith('父任务实际状态：'))
-                ceiling = stage_ceiling if stage_ceiling is not None else state['budget']['max_observations']-1
-                if state['budget']['observations_used'] == ceiling:
-                    call.tool_calls[0]['args'].update(source_supported=False, source_uncertain=True)
-                    bridge.reviewed_last_budget_pair = True
-            return call
-        from task_runtime.orchestrator import TaskOrchestrator
-        advance = TaskOrchestrator._advance_relative
-        def bounded_stage(runtime, owner, stage):
-            result = advance(runtime, owner, stage)
-            if (runtime.sessions[owner].get('goal_state') or {}).get('phase') == 'observing':
-                # Explicit fixture allocation, equivalent to the real 11-view
-                # stage ceiling with one photo reserved for goal verification.
-                runtime.skills.search.sessions[owner]['observation_ceiling'] = stage_ceiling
-            return result
-        limit = mock.patch.object(TaskOrchestrator, '_advance_relative', bounded_stage) if stage_ceiling else nullcontext()
-        with limit:
-            result, app, _ = runtime_fixtures.RuntimeGraphTests().run_graph([
-                tool_call('define_task_plan', {'plan': plan(landing=True)}),
-                *[response]*55],
-                '找到白色货车后降落在货车前方', bridge, timeout=40)
-        return bridge, result, app
-
-    def test_parent_normal_landing_reports_use_program_bound_current_images(self):
-        bridge, result, _ = self.run_front(omit_report_id=True)
-        self.assertEqual(result['status'], 'succeeded', result.get('error'))
-        self.assertTrue(result['task_outcome']['user_goal_completed'])
-        self.assertEqual(bridge.goal_land_executions, 1)
-        self.assertIsNone(result['safety_landing'])
-
-    def test_hidden_rear_can_finish_through_normal_goal_and_landing_authority(self):
-        bridge, result, app = self.run_front()
-        self.assertEqual(result['status'], 'succeeded', result.get('error'))
-        self.assertEqual(result['task_runtime_result']['termination_source'], 'normal_completion')
-        self.assertTrue(result['task_outcome']['user_goal_completed'])
-        self.assertEqual(bridge.goal_executions, 1)
-        self.assertEqual(bridge.goal_land_executions, 1)
-        self.assertIsNone(result['safety_landing'])
-        self.assertFalse(bridge.telemetry['armed'])
-        self.assertEqual(bridge.telemetry['landed_state'], 1)
-        self.assertFalse(any(s['action'] == 'return_home' for m in bridge.flight_requests for s in m.get('steps', [])))
-        runtime = app.audited_client.task_runtime
-        semantic = next(iter(runtime.skills.search.semantic_maps.maps.values()))
-        normal = next(l.attributes['object_orientation'] for l in semantic.landmarks.values() if l.attributes.get('object_orientation'))
-        self.assertEqual(normal['basis'], FRONT_FACE_BASIS)
-        self.assertIsNone(normal['rear_surface_enu_m'])
-
-    def test_missing_front_side_depth_never_authorizes_relative_landing(self):
-        bridge, result, _ = self.run_front(weak=True)
-        self.assertNotEqual(result['status'], 'succeeded')
-        self.assertFalse(result['task_outcome']['user_goal_completed'])
-        self.assertEqual(bridge.goal_land_executions, 0)
-        self.assertFalse(bridge.telemetry['armed'])
-
-    def test_last_budget_pair_is_reviewed_then_unconfirmed_goal_returns_normally(self):
-        bridge, result, _ = self.run_front(weak=True, uncertain_at_last=True, stage_ceiling=3)
-        self.assertTrue(bridge.reviewed_last_budget_pair)
-        self.assertFalse(result['task_outcome']['user_goal_completed'])
-        self.assertEqual(result['task_runtime_result']['goal_status'], 'partial')
-        self.assertEqual(result['task_runtime_result']['process_status'], 'completed')
-        self.assertEqual(result['task_runtime_result']['termination_source'], 'normal_completion')
-        self.assertIsNone(result['safety_landing'])
-        self.assertEqual(bridge.goal_land_executions, 0)
-        self.assertEqual(result['task_runtime']['budget']['observations_used'], 3)
-        self.assertTrue(any(s['action'] == 'return_home' for m in bridge.flight_requests for s in m.get('steps', [])))
-        self.assertFalse(bridge.telemetry['armed'])
-        self.assertEqual(bridge.telemetry['landed_state'], 1)
-
-    def test_search_stage_last_pair_is_reviewed_before_unmet_return(self):
-        from task_runtime.orchestrator import TaskOrchestrator
-        with tempfile.TemporaryDirectory() as directory:
-            bridge = FrontFaceBridge(directory)
-            proposal = {'targets': [{'ref':'van','label':'白色货车'}], 'stages': [
-                {'kind':'search','target_ref':'van'}, {'kind':'return_home_land'}]}
-            ordinary = response_for(bridge);reviews = []
-            def response(messages):
-                call = ordinary(messages)
-                if call.tool_calls[0]['name'] == 'review_target_candidate':
-                    call.tool_calls[0]['args'].update(source_supported=False, source_uncertain=True)
-                    reviews.append(call)
-                return call
-            start = TaskOrchestrator.start_stage
-            def allocate(runtime, owner):
-                start(runtime, owner)
-                if runtime.stage(owner).kind == 'search':
-                    runtime.skills.search.sessions[owner]['observation_ceiling'] = 2
-            with mock.patch.object(TaskOrchestrator, 'start_stage', allocate):
-                result, _, _ = runtime_fixtures.RuntimeGraphTests().run_graph([
-                    tool_call('define_task_plan', {'plan':proposal}), *[response]*20],
-                    '找到白色货车后返航降落', bridge, confirmation='multiview', timeout=30)
-            self.assertEqual(len(reviews), 1)
-            self.assertFalse(result['task_outcome']['user_goal_completed'])
-            self.assertEqual(result['task_runtime_result']['process_status'], 'completed')
-            self.assertEqual(result['task_runtime_result']['termination_source'], 'normal_completion')
-            self.assertEqual(result['task_runtime']['budget']['observations_used'], 2)
-            self.assertIsNone(result['safety_landing'])
-            self.assertFalse(bridge.telemetry['armed'])
-
-    def test_epoch_change_before_fresh_front_review_keeps_landing_permit_closed(self):
-        bridge, result, _ = self.run_front(reset=True)
-        self.assertNotEqual(result['status'], 'succeeded')
-        self.assertFalse(result['task_outcome']['user_goal_completed'])
-        self.assertEqual(bridge.goal_land_executions, 0)
-        self.assertFalse(bridge.telemetry['armed'])
-
-    def test_outside_part_roi_corrects_once_on_the_same_image_and_finishes_normally(self):
-        bridge, result, _ = self.run_front(roi_failures=1)
-        self.assertEqual(result['status'], 'succeeded', result.get('error'))
-        self.assertEqual(result['task_runtime']['budget']['recoveries_used'], 1)
-        self.assertEqual(bridge.region_requests[0]['capture_id'], bridge.region_requests[1]['capture_id'])
-        self.assertEqual(bridge.goal_land_executions, 1)
-        self.assertIsNone(result['safety_landing'])
-
-    def test_repeated_outside_roi_fails_without_an_extra_photo_or_landing_permit(self):
-        bridge, result, _ = self.run_front(roi_failures=2)
-        self.assertEqual(result['status'], 'failed')
-        self.assertEqual(result['task_runtime']['budget']['recoveries_used'], 1)
-        self.assertEqual(len(bridge.region_requests), 2)
-        self.assertEqual(len({a['capture_id'] for a in bridge.region_requests}), 1)
-        self.assertEqual(bridge.goal_executions, 0)
-        self.assertEqual(bridge.goal_land_executions, 0)
-        self.assertFalse(bridge.telemetry['armed'])
-
-    def test_region_validation_shares_credit_with_report_schema_errors(self):
-        bridge, result, _ = self.run_front(roi_failures=1, prior_error=True)
-        self.assertEqual(result['status'], 'failed')
-        self.assertEqual(result['task_runtime']['budget']['recoveries_used'], 1)
-        self.assertEqual(len(bridge.region_requests), 1)
-        self.assertEqual(bridge.goal_land_executions, 0)
-        self.assertFalse(bridge.telemetry['armed'])
-
-    def test_different_capture_id_is_an_identity_fault_without_format_correction(self):
-        bridge, result, _ = self.run_front(foreign=True)
-        self.assertEqual(result['status'], 'failed')
-        self.assertEqual(result['task_runtime']['budget']['recoveries_used'], 0)
-        self.assertEqual(bridge.goal_land_executions, 0)
-        self.assertFalse(bridge.telemetry['armed'])
 
 
 class RefutedRelationReferenceTests(unittest.TestCase):

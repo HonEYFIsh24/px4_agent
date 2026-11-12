@@ -25,13 +25,42 @@ COLORS = {'white': ('白色', 'white'), 'red': ('红色', 'red'), 'blue': ('蓝�
           'black': ('黑色', 'black'), 'green': ('绿色', 'green'),
           'gray': ('灰色', 'gray', 'grey')}
 
+_SEMANTIC_TERMS = sorted({name for names in (*ALIASES.values(), *COLORS.values()) for name in names}
+                         | {'目标', 'target'}, key=len, reverse=True)
+_TERM_PATTERN = '|'.join((r'\b'+re.escape(name)+r'\b') if name.isascii() else re.escape(name)
+                         for name in _SEMANTIC_TERMS)
+_NEGATED_LABEL_CLAUSE = re.compile(
+    r'(?:没有看到|没有发现|未识别到|未检测到|未发现|未看到|看不到|并不是|并非|不是|不属于|未见|没有|非|无|\bnot\s+(?:(?:a|an|the)\s+)?|\bno\s+)'
+    r'(?:一[辆台个只座顶]|任何|可辨认的|可见的|所需的)*'
+    r'(?=(?:'+_TERM_PATTERN+r'))'
+    r'(?:(?!(?:而是|但是|\bbut\b|\binstead\b))[^，,。;；()（）\[\]])*')
+
+
+def _affirmative_label(value):
+    normalized = ' '.join(str(value).casefold().strip().split())
+    return _NEGATED_LABEL_CLAUSE.sub('', normalized).strip(' ()（）[]')
+
+
+def _negated_semantics(label, attributes):
+    groups = []
+    for text in (str(label).casefold(), str((attributes or {}).get('color', '')).casefold()):
+        for match in _NEGATED_LABEL_CLAUSE.finditer(text):
+            clause = match.group()
+            category = next((key for key,names in ALIASES.items() if any(
+                name in clause if not name.isascii() else re.search(r'\b'+re.escape(name)+r'\b',clause)
+                for name in names)), None)
+            colors = {key for key,names in COLORS.items() if any(name in clause for name in names)}
+            generic = category is None and not colors and bool(re.search(r'目标|\btarget\b',clause))
+            groups.append((category,colors,generic))
+    return groups
+
 
 def semantic_key(label, attributes=None):
-    normalized = ' '.join(str(label).casefold().strip().split())
+    normalized = _affirmative_label(label)
     category = next((key for key, names in ALIASES.items() if any(
         name in normalized if not name.isascii() else re.search(r'\b'+re.escape(name)+r'\b', normalized)
         for name in names)), normalized)
-    color_text = normalized+' '+str((attributes or {}).get('color', '')).casefold()
+    color_text = normalized+' '+_affirmative_label((attributes or {}).get('color', ''))
     colors = {key for key, names in COLORS.items() if any(name in color_text for name in names)}
     return category, colors
 
@@ -39,7 +68,13 @@ def semantic_key(label, attributes=None):
 def labels_compatible(a, b, attributes_a=None, attributes_b=None):
     ka, ca = semantic_key(a, attributes_a)
     kb, cb = semantic_key(b, attributes_b)
-    return ka == kb and not (ca and cb and ca.isdisjoint(cb))
+    def excludes(category, colors, groups):
+        return any(generic or ((negative_category is None or negative_category == category)
+            and (bool(colors & negative_colors) if negative_colors else negative_category == category))
+            for negative_category,negative_colors,generic in groups)
+    return (bool(ka and kb) and ka == kb and not (ca and cb and ca.isdisjoint(cb))
+            and not excludes(kb, cb, _negated_semantics(a, attributes_a))
+            and not excludes(ka, ca, _negated_semantics(b, attributes_b)))
 
 
 class PatchMatcher:

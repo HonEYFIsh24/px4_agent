@@ -1,6 +1,8 @@
 """Validate the model's decomposition without granting model-made coordinates."""
 from .contracts import PlanProposal, TaskPlan, TaskStage
 from task_contract import assess_task
+import re
+import copy
 
 
 PLAN_PROMPT = '''复合任务使用父任务编排。首先调用define_task_plan一次，完整保留用户原句。
@@ -15,8 +17,93 @@ target_ref引用上一已取得的地标作权限追踪，不是把该地标当�
 程序执行阶段交接和正常收尾；不要自行调用通用飞行/降落。根据真实next_tool继续。
 普通拍摄用photo作为首阶段，target_ref填写主体，altitude_m为可选初始高度（1～20米）。
 寻找后的目标取景使用close_photo，完整区域范围未知时不能声称全貌达标。
+只拆分原句明确要求的动作；图像选点、GoalPose移动及到位后新图复核是目标相对阶段的内部流程，
+不能据此添加未要求的独立approach或close_photo。search不填写altitude_m，初始搜索高度由程序负责。
 如果工具返回tool_schema_invalid，它没有执行；只修正同一工具参数，不能移动或重新采图。
+如果返回plan_contract_invalid，按具体错误和plan_constraints修正完整计划，不能增加动作、改变终端目标或预算。
 不确定语义/几何如实保留unknown，不用文字声称完成未验证的空间关系。'''
+
+
+def requested_route_actions(instruction):
+    """The same bounded vocabulary drives validation and model guidance."""
+    positive = re.sub(r'(?:不要|无需|不用|禁止|do not|don\x27t)[^，,。；;]*', '', instruction.lower())
+    return {'pass_landmark': bool(re.search(r'经过|穿过|\bpass\b', positive)),
+            'relative_turn': bool(re.search(r'左转|右转|向左转|向右转|turn (?:left|right)', positive)),
+            'face_target': bool(re.search(r'面对|面向|转向|\bface\b|turn toward', positive)),
+            'approach': bool(re.search(r'靠近|接近|\bapproach\b', positive))}
+
+
+def plan_constraints(instruction):
+    original = assess_task(instruction)
+    relative = original['unsupported_capabilities']
+    requested = requested_route_actions(instruction)
+    allowed = {'search'} if original['requires_target_search'] or relative or any(requested.values()) else {'photo'}
+    if original['target_observation_required']:allowed.add('close_photo')
+    if any(word in instruction.lower() for word in ('报告', 'report', 'describe')):allowed.add('report')
+    if 'target_relative_landing' in relative:allowed.add('relative_land')
+    if 'target_relative_hover' in relative:allowed.add('relative_hover')
+    for kind,required in requested.items():
+        if required and not (kind == 'approach' and original['target_observation_required']):allowed.add(kind)
+    if 'target_relative_landing' not in relative:
+        allowed.add('hold' if original['search_success_end'] == 'hold' else 'return_home_land')
+    from .contracts import StageProposal
+    order = StageProposal.model_json_schema()['properties']['kind']['enum']
+    return {'allowed_stage_kinds': [k for k in order if k in allowed],
+            'search_required': original['requires_target_search'],
+            'close_photo_required': original['target_observation_required'],
+            'report_required': any(word in instruction.lower() for word in ('报告', 'report', 'describe')),
+            'relative_landing_required': 'target_relative_landing' in relative,
+            'relative_hover_required': 'target_relative_hover' in relative,
+            'terminal_policy': 'relative_land' if 'target_relative_landing' in relative else
+                'hold' if original['search_success_end'] == 'hold' else 'return_home_land',
+            'requested_route_actions': requested,
+            'unrequested_independent_route_actions': [k for k in ('pass_landmark','relative_turn','approach') if not requested[k]],
+            'altitude_m_only_on_stage': 'photo',
+            'relative_goal_internal_evidence': 'front relation, approach to selected GoalPose and fresh arrival review are internal, not extra requested actions'}
+
+
+def plan_request_schema(schema, instruction):
+    """Narrow a request copy to the original instruction; keep executor schemas intact."""
+    value = copy.deepcopy(schema)
+    allowed = plan_constraints(instruction)['allowed_stage_kinds']
+    found = False
+    def walk(node):
+        nonlocal found
+        if isinstance(node, list):
+            for item in node:walk(item)
+        elif isinstance(node, dict):
+            properties = node.get('properties') or {}
+            kind = properties.get('kind') or {}
+            if isinstance(kind.get('enum'), list) and 'target_ref' in properties:
+                variants = []
+                target_kinds = {'search','close_photo','approach','photo','relative_hover','relative_land',
+                                'pass_landmark','face_target','relative_turn'}
+                for role in kind['enum']:
+                    if role not in allowed:continue
+                    props = {'kind': {'type': 'string', 'enum': [role]}}
+                    required = ['kind']
+                    if role in target_kinds:
+                        props['target_ref'] = {'type': 'string', 'minLength': 1}
+                        required.append('target_ref')
+                    elif role == 'report':props['target_ref'] = copy.deepcopy(properties['target_ref'])
+                    if role in ('relative_hover','relative_land'):
+                        props['relation'] = copy.deepcopy(next(p for p in properties['relation']['anyOf'] if p.get('type') == 'string'))
+                        required.append('relation')
+                    elif role == 'approach':props['relation'] = copy.deepcopy(properties['relation'])
+                    if role == 'photo':props['altitude_m'] = copy.deepcopy(properties['altitude_m'])
+                    if role == 'relative_turn':
+                        for field in ('direction','angle_deg'):
+                            props[field] = copy.deepcopy(next(p for p in properties[field]['anyOf'] if p.get('type') != 'null'))
+                            required.append(field)
+                    variants.append({'type':'object','properties':props,'required':required,'additionalProperties':False})
+                title = node.get('title', 'StageProposal')
+                node.clear();node.update({'title':title,'anyOf':variants})
+                found = True
+                return
+            for item in node.values():walk(item)
+    walk(value)
+    if not found:raise ValueError('Plan request is missing its declared stage schema')
+    return value
 
 
 def target_query(target):
@@ -72,7 +159,7 @@ def compile_plan(value, owner, instruction, limits):
             raise ValueError('Terminal action must be the final stage')
         stages.append(TaskStage('stage-%02d' % (index+1), item.kind, item.target_ref, item.relation,
             'same_frame_close_photo' if item.kind == 'close_photo' else
-            'object_relation_and_surface' if item.kind in ('relative_hover','relative_land') else
+            'visual_relation_and_execution' if item.kind in ('relative_hover','relative_land') else
             'configured_search_evidence' if item.kind == 'search' else 'saved_report'))
         stages[-1].altitude_m = item.altitude_m
         stages[-1].direction, stages[-1].angle_deg = item.direction, item.angle_deg
@@ -88,7 +175,7 @@ def compile_plan(value, owner, instruction, limits):
             stages[-1].evidence_profile = 'original_photo_four_edges_and_extent'
         if item.kind in ('relative_hover','relative_land'):
             stages[-1].conditions = {'execution_capability':'unknown',
-                                     'object_orientation':'unknown','goal_region':'unknown'}
+                                     'visual_relation':'unknown','goal_region':'unknown'}
             stages[-1].reason_code = None
     kinds = {s.kind for s in stages}
     if 'photo' in kinds and 'search' in kinds:
@@ -112,12 +199,7 @@ def compile_plan(value, owner, instruction, limits):
         raise ValueError('The original return-home requirement must remain in the plan')
     # Bounded completeness checks for the supported route vocabulary; the model
     # still performs decomposition, coreference and ordering, not this guard.
-    import re
-    positive = re.sub(r'(?:不要|无需|不用|禁止|do not|don\x27t)[^，,。；;]*', '', instruction.lower())
-    requested = {'pass_landmark': bool(re.search(r'经过|穿过|\bpass\b', positive)),
-                 'relative_turn': bool(re.search(r'左转|右转|向左转|向右转|turn (?:left|right)', positive)),
-                 'face_target': bool(re.search(r'面对|面向|转向|\bface\b|turn toward', positive)),
-                 'approach': bool(re.search(r'靠近|接近|\bapproach\b', positive))}
+    requested = requested_route_actions(instruction)
     for kind, required in requested.items():
         represented = kind in kinds or kind == 'approach' and bool(kinds.intersection(('close_photo', 'relative_hover', 'relative_land')))
         if kind == 'face_target' and kinds.intersection(('relative_hover', 'relative_land', 'approach')):

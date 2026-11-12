@@ -10,6 +10,37 @@ from test_semantic_map import navigator, observation, EPOCH
 
 
 class AuthorityTests(unittest.TestCase):
+    def test_owned_observation_endpoint_keeps_existing_clearance_under_tracking_offset(self):
+        from static_navigation import StaticNavigator
+        nav=StaticNavigator([([4.,-1.,0.],[6.,1.,6.])],[[-15.,-15.,-.2],[15.,15.,20.6]],clearance=1.)
+        nav.bind([0.,0.,3.],[0.,0.,0.,1.],{'position_m':[0.,0.,3.],'orientation_xyzw':[0.,0.,0.,1.]})
+        nav.world_sha256='a'*64
+        frame,_,_=observation(nav);snap=frame['snapshot'];identity=registered_identity(nav,EPOCH)
+        candidates=[{'id':'view_001','position_enu_m':[2.99,0.,3.]},
+                    {'id':'view_002','position_enu_m':[2.5,0.,3.]}]
+        ordinary=StaticViewpointEvaluator(nav,snap['body_pose_enu'],snap['camera_intrinsics'],EPOCH)
+        reserved=StaticViewpointEvaluator(nav,snap['body_pose_enu'],snap['camera_intrinsics'],EPOCH,
+                                          endpoint_tracking_reserve_m=.35)
+        self.assertTrue(ordinary.query('paths',[0.,0.],identity,candidates)['results'][0]['reachable'])
+        self.assertFalse(nav.segment_safe([3.02,0.,3.],[3.02,0.,3.]))
+        result=reserved.query('paths',[0.,0.],identity,candidates)
+        self.assertFalse(result['results'][0]['reachable'])
+        self.assertIn('tracking reserve',result['results'][0]['reason'])
+        self.assertTrue(result['results'][1]['reachable'])
+        self.assertTrue(nav.segment_safe([2.85,.35,3.35],[2.85,.35,3.35]))
+        self.assertEqual(result['endpoint_tracking_reserve_m'],.35)
+
+    def test_tracking_reserve_covers_search_boundary_and_cannot_be_negative(self):
+        nav=navigator();frame,_,_=observation(nav);snap=frame['snapshot'];identity=registered_identity(nav,EPOCH)
+        reserved=StaticViewpointEvaluator(nav,snap['body_pose_enu'],snap['camera_intrinsics'],EPOCH,
+                                          endpoint_tracking_reserve_m=.35)
+        result=reserved.query('visibility',[0.,0.],identity,[{'id':'view_001','position_enu_m':[0.,11.8,3.]}])
+        self.assertFalse(result['results'][0]['reachable'])
+        for value in(-.1,float('nan'),.6):
+            with self.subTest(value=value),self.assertRaises((ValueError,MissionError)):
+                StaticViewpointEvaluator(nav,snap['body_pose_enu'],snap['camera_intrinsics'],EPOCH,
+                                          endpoint_tracking_reserve_m=value)
+
     def setUp(self):
         self.now = 0.
         self.authority = ViewpointAuthority(clock=lambda: self.now)

@@ -125,7 +125,7 @@ class AdaptiveTests(unittest.TestCase):
     def test_observation_budget_and_radius_are_enforced(self):
         self.report()
         budget = self.search.summary(OWNER)['max_observations']
-        self.assertEqual(budget, 12)
+        self.assertEqual(budget, 16)
         for index in range(budget-1):
             r = self.search.next_view(OWNER, 'auto', '未发现')
             if 'goto' not in r: break

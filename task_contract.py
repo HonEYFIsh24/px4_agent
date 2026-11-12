@@ -71,7 +71,8 @@ def search_result(command, flight_completion_verified=False):
     parent = command.get('task_runtime_result')
     if isinstance(parent, dict) and parent.get('schema_version') == 1:
         targets = (parent.get('evidence_summary') or {}).get('targets') or {}
-        confirmed = any(t.get('confirmation_level') == 'multiview' for t in targets.values())
+        visual = any(t.get('confirmation_level') == 'visual_review' for t in targets.values())
+        confirmed = visual or any(t.get('confirmation_level') == 'multiview' for t in targets.values())
         single = any(t.get('confirmation_level') == 'single_frame' for t in targets.values())
         return {'user_goal_completed':parent['goal_status'] == 'satisfied',
                 'search_process_ended':True, 'search_status':'parent_'+parent['goal_status'],
@@ -79,7 +80,7 @@ def search_result(command, flight_completion_verified=False):
                 'target_observation_required':bool((command.get('task_contract') or {}).get('target_observation_required')),
                 'target_observation_completed':any(s.get('kind')=='close_photo' and s.get('status')=='completed'
                     for s in (command.get('task_runtime',{}).get('plan') or {}).get('stages',[])),
-                'confirmation_level':'multiview' if confirmed else 'single_frame' if single else 'visual_candidate' if targets else 'unconfirmed',
+                'confirmation_level':'visual_review' if visual else 'multiview' if confirmed else 'single_frame' if single else 'visual_candidate' if targets else 'unconfirmed',
                 'flight_status':parent['flight_status'], 'flight_source':parent['termination_source'],
                 'flight_purpose':'goal_completion' if parent['goal_status']=='satisfied' else 'unmet_goal_recovery',
                 'basis':'parent_task_plan_and_verified_skill_results'}

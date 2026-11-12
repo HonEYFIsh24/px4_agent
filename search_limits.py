@@ -1,6 +1,6 @@
 """Shared hard limits for the adaptive search session and its view history."""
 
-MAX_OBSERVATIONS = 12
+MAX_OBSERVATIONS = 16
 SEARCH_RADIUS_M = 30.
 GRID_RESOLUTION_M = 1.
 

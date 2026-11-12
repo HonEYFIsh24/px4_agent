@@ -15,7 +15,7 @@ from stereo_localization import finite, vector
 def validate_goal_context(context, active):
     keys = {'schema_version', 'stage_id', 'stage_revision', 'plan_revision',
             'target_id', 'target_revision', 'relation', 'terminal_action'}
-    if not isinstance(context, dict) or set(context) != keys or context['schema_version'] != 1:
+    if not isinstance(context, dict) or set(context) != keys or context['schema_version'] not in (1, 2):
         raise MissionError('invalid versioned goal context')
     if (not active or active.get('revoked') or context['stage_id'] != active.get('stage_id')
             or context['stage_revision'] != active.get('stage_revision')
@@ -33,6 +33,8 @@ def validate_goal_context(context, active):
              'relative_land': ('object_front', 'object_behind', 'object_near', 'object_beside')}
     if context['relation'] not in pairs[context['terminal_action']]:
         raise MissionError('goal relation does not match its authorized action type')
+    if context['schema_version'] == 2 and context['terminal_action'] not in ('approach', 'relative_hover', 'relative_land'):
+        raise MissionError('visual goal profile belongs to a visually reviewed position goal')
     return copy.deepcopy(context)
 
 
@@ -56,7 +58,8 @@ def query_goal_poses(evaluator, operation, origin, identity, candidates, goal_co
         temporary = {'id': 'view_001', 'position_enu_m': point}
         result = evaluator.query('paths', origin, identity, [temporary])['results'][0]
         result.update(id=c['id'], target_yaw_enu_rad=yaw, target_visible=False)
-        view_required = not goal_context or goal_context['terminal_action'] not in ('relative_turn', 'face_target', 'pass_landmark')
+        visual = bool(goal_context and goal_context['schema_version'] == 2)
+        view_required = not visual and (not goal_context or goal_context['terminal_action'] not in ('relative_turn', 'face_target', 'pass_landmark'))
         result['target_visibility_required'] = view_required
         if result['reachable'] and view_required:
             predicted = copy.copy(evaluator)
@@ -64,11 +67,28 @@ def query_goal_poses(evaluator, operation, origin, identity, candidates, goal_co
             visibility = predicted.query('visibility', origin, identity, [temporary])['results'][0]
             probes = visibility.get('probe_visibility') or []
             result['target_visible'] = bool(probes) and all(
-                p['inside_fov_and_range'] and p['unoccluded'] for p in probes)
+                p['inside_fov_and_range'] and (p['unoccluded'] or p.get('surface_visibility_possible') is True)
+                for p in probes)
             result['probe_visibility'] = probes
+            if evaluator.probe_covariances is not None:
+                result['target_visibility_basis'] = 'measured_surface_uncertainty_prediction_requires_fresh_image'
             if not result['target_visible']:
                 result.update(reachable=False, reason='goal target is not geometrically visible at the actual camera yaw')
         elif result['reachable']:
-            result.update(target_visible=None, visibility_basis='not_used_for_checked_heading_or_route_plane_action')
+            result.update(target_visible=None, visibility_basis='fresh_visual_review' if visual else
+                          'not_used_for_checked_heading_or_route_plane_action')
+            if visual:
+                result['requires_fresh_visual_verification'] = True
+                # A newly selected image-ground location must be visible from
+                # the source observer. Current-location completion needs only
+                # the independent landing support/descent checks.
+                if math.dist(point[:2], evaluator.position[:2]) > .35:
+                    from stereo_localization import quaternion_rotation, matvec, iris_left_optical_to_body
+                    offset = matvec(quaternion_rotation(evaluator.pose['orientation_xyzw']),
+                                    iris_left_optical_to_body()['translation_m'])
+                    camera = [a+b for a,b in zip(evaluator.position, offset)]
+                    ground = [point[0], point[1], evaluator.navigator.ground_world_z-evaluator.navigator.origin[2]]
+                    if not evaluator.navigator.raw_line_of_sight(camera, ground):
+                        result.update(reachable=False, reason='chosen ground area is occluded in the source view')
         response['results'].append(result)
     return response

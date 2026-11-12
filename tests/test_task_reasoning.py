@@ -40,7 +40,7 @@ class ReasoningTests(unittest.TestCase):
         child = {'query': '白色货车', 'search_phase': 'confirming', 'status': 'searching',
                  'confirmation': {'target_id': 'target_01'}}
         reasoning.update(state, stage, m, child)
-        self.assertEqual(state['need']['kind'], 'REVEAL_FRONT')
+        self.assertEqual(state['need']['kind'], 'VISUAL_GOAL_REVIEW')
         f, r, g = observation(n, 'occlusion', [0., 1., 3.], 2.)
         m.update_observation(f, r, g);reasoning.update(state, stage, m, child)
         self.assertEqual(state['need']['kind'], 'RECOVER_OCCLUDED')

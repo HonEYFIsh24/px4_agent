@@ -66,6 +66,43 @@ class ObjectFrameTests(unittest.TestCase):
 
 
 class GoalPoseTests(unittest.TestCase):
+    def test_surface_visibility_uses_measured_covariance_but_requires_fov_and_clear_prefix(self):
+        n, f, m, ref, *_ = relative_fixture()
+        point=[5.,-1.,1.]
+        n.raw_boxes.append(([4.,-1.03,0.],[6.,1.,2.]))
+        # A front surface point measured 3cm inside its raw collision surface.
+        candidate={'id':'goal_001','position_enu_m':[5.,-6.,3.],
+                   'yaw_enu_rad':camera_facing_yaw([5.,-6.,3.],point)}
+        matrix=[[.0016,0.,0.],[0.,.0016,0.],[0.,0.,.0016]]
+        backend=StaticViewpointEvaluator(n,f['snapshot']['body_pose_enu'],f['snapshot']['camera_intrinsics'],EPOCH,
+            probe_points_enu_m=[point],probe_covariances_enu_m2=[matrix])
+        identity=registered_identity(n,EPOCH)
+        result=query_goal_poses(backend,'paths',[0.,0.],identity,[candidate])['results'][0]
+        self.assertTrue(result['reachable'],result)
+        probe=result['probe_visibility'][0]
+        self.assertFalse(probe['unoccluded'])
+        self.assertTrue(probe['surface_visibility_possible'])
+        self.assertAlmostEqual(probe['endpoint_uncertainty_m'],.08)
+        self.assertTrue(probe['requires_fresh_visual_verification'])
+        self.assertEqual(backend.probe_covariances,[matrix])
+        strict=StaticViewpointEvaluator(n,f['snapshot']['body_pose_enu'],f['snapshot']['camera_intrinsics'],EPOCH,
+            probe_points_enu_m=[point])
+        self.assertFalse(query_goal_poses(strict,'paths',[0.,0.],identity,[candidate])['results'][0]['reachable'])
+        wrong={**candidate,'yaw_enu_rad':-math.pi/2}
+        self.assertFalse(query_goal_poses(backend,'paths',[0.,0.],identity,[wrong])['results'][0]['reachable'])
+        n.raw_boxes.append(([4.,-3.,0.],[6.,-2.95,4.]))
+        self.assertFalse(query_goal_poses(backend,'paths',[0.,0.],identity,[candidate])['results'][0]['reachable'])
+
+    def test_surface_probe_covariance_is_optional_and_malformed_values_are_rejected(self):
+        n, f, m, ref, *_ = relative_fixture()
+        args=(n,f['snapshot']['body_pose_enu'],f['snapshot']['camera_intrinsics'],EPOCH)
+        for covariances in ([],[[[0.,0.,0.],[0.,0.,0.],[0.,0.,0.]]],
+                             [[[.1,.2,0.],[.2,.1,0.],[0.,0.,.1]]]):
+            with self.subTest(covariances=covariances),self.assertRaises(ValueError):
+                StaticViewpointEvaluator(*args,probe_points_enu_m=[[5.,-1.,1.]],probe_covariances_enu_m2=covariances)
+        backend=StaticViewpointEvaluator(*args,probe_points_enu_m=[[5.,-1.,1.]])
+        self.assertIsNone(backend.probe_covariances)
+
     def test_front_goal_candidates_face_actual_front_and_keep_uncertainty(self):
         n, f, m, ref, *_ = relative_fixture()
         spec = GoalSpec(ref['target_id'], 'object_front', 'relative_hover')

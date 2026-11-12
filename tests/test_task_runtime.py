@@ -3,13 +3,15 @@ import copy
 import json
 import math
 import os
+import time
 import unittest
 from unittest import mock
 
 from mission import MissionError
 from task_runtime.contracts import TaskLimits
-from task_runtime.planning import compile_plan, target_query
+from task_runtime.planning import compile_plan, target_query, plan_constraints, plan_request_schema
 from task_runtime.orchestrator import TaskOrchestrator
+from search_limits import MAX_OBSERVATIONS
 from viewpoint_geometry import registered_identity
 from search_tools import coordinate_epoch
 import test_nbv_search_integration as nbv_fixtures
@@ -112,6 +114,38 @@ class ContractTests(unittest.TestCase):
             compile_plan(proposal(relative=True),('t','c'),'找到油桶并报告',self.limits)
 
 
+    def test_front_evidence_is_internal_without_invented_independent_route_requirements(self):
+        text='寻找白色货车，取得有效前脸关系证据后，由程序选择车前落点；到位后用新图复核，再正常降落在货车前方。'
+        constraints=plan_constraints(text)
+        self.assertTrue(constraints['search_required'])
+        self.assertTrue(constraints['relative_landing_required'])
+        self.assertFalse(constraints['close_photo_required'])
+        self.assertFalse(constraints['requested_route_actions']['approach'])
+        self.assertIn('approach',constraints['unrequested_independent_route_actions'])
+        explicit=plan_constraints('找到蓝色油桶，接近它并报告，然后返航降落')
+        self.assertTrue(explicit['requested_route_actions']['approach'])
+        self.assertNotIn('approach',explicit['unrequested_independent_route_actions'])
+
+    def test_plan_request_schema_exposes_only_requested_actions_without_changing_execution_schema(self):
+        from task_runtime.contracts import PlanProposal
+        original=PlanProposal.model_json_schema();saved=copy.deepcopy(original)
+        value=plan_request_schema(original,'寻找白色货车，取得前脸关系证据后，降落在货车前方')
+        variants=value['$defs']['StageProposal']['anyOf']
+        stages={s['properties']['kind']['enum'][0]:s for s in variants}
+        self.assertEqual(list(stages),['search','relative_land'])
+        self.assertNotIn('altitude_m',stages['search']['properties'])
+        self.assertNotIn('relation',stages['search']['properties'])
+        self.assertIn('relation',stages['relative_land']['required'])
+        self.assertNotIn('null',str(stages['relative_land']['properties']['relation']))
+        self.assertEqual(original,saved)
+        close=plan_constraints('找到蓝色油桶，靠近拍照并报告，然后返航降落')
+        self.assertIn('close_photo',close['allowed_stage_kinds'])
+        self.assertNotIn('approach',close['allowed_stage_kinds'])
+        photo=plan_request_schema(original,'拍摄当前区域，然后降落')
+        photographic=next(s for s in photo['$defs']['StageProposal']['anyOf'] if s['properties']['kind']['enum']==['photo'])
+        self.assertIn('altitude_m',photographic['properties'])
+
+
 class StageAuthorityTests(unittest.TestCase):
     def setUp(self):
         self.fixture=authority_fixtures.AuthorityTests('test_valid_ticket_resolves_cached_goal_and_invalidates_all_alternatives')
@@ -192,6 +226,98 @@ class ParentGuardTests(unittest.TestCase):
     def test_original_instruction_cannot_be_replaced_under_same_owner(self):
         with self.assertRaises(ValueError):self.runtime.ensure(self.owner,'改成另一个任务')
 
+    def test_semantic_plan_rejection_is_unexecuted_and_shares_the_original_credit(self):
+        invalid=proposal();invalid['stages'].insert(1,{'kind':'approach','target_ref':'target'})
+        call={'id':'unrequested-route','name':'define_task_plan','args':{'plan':invalid}}
+        self.runtime.register_response(self.owner,[call],0)
+        result=self.runtime.guard_tool(self.owner,call)
+        self.assertEqual(result['reason_code'],'plan_contract_invalid')
+        self.assertFalse(result['tool_executed'])
+        self.assertFalse(result['mission_submitted'])
+        self.assertIn('approach',result['plan_constraints']['unrequested_independent_route_actions'])
+        self.assertIsNone(self.runtime.sessions[self.owner]['plan'])
+        self.assertNotIn(self.owner,self.manager.adaptive.sessions)
+        self.assertEqual(self.bridge.flight_requests,[])
+        self.assertEqual(self.runtime.sessions[self.owner]['recoveries'],1)
+        with self.assertRaisesRegex(ValueError,'budget exhausted'):
+            self.runtime.correct_unsubmitted_text(self.owner)
+
+    def pending_observation(self, delivered=True):
+        from single_vlm import FrameStore
+        from test_vision import CONFIG
+        self.runtime.define(self.owner, proposal())
+        self.manager.adaptive.execute_pending(self.owner)
+        store = self.runtime.frame_store = FrameStore(self.bridge, CONFIG, ttl_seconds=900, frames_per_turn=12)
+        capture = store.capture(self.owner, 'controlled actual owned pixels')['capture_id']
+        self.runtime.await_report(self.owner, capture)
+        if delivered:
+            store.mark_delivered(self.owner, capture, {})
+            self.runtime.observation_delivered(self.owner, capture)
+        return store, capture
+
+    def redundant_observation(self, name='observe_target_search_view', identifier='redundant'):
+        call = {'id': identifier, 'name': name, 'args': {}}
+        self.runtime.register_response(self.owner, [call], self.runtime.sessions[self.owner]['revision'])
+        return call
+
+    def test_pending_capture_dominates_scheduling_and_needs_delivery_before_correction(self):
+        store, capture = self.pending_observation(delivered=False)
+        before = len(self.bridge.flight_requests)
+        self.assertEqual(self.runtime.snapshot(self.owner)['next_tool'], 'report_scene')
+        self.assertIsNone(self.runtime.program_call(self.owner))
+        with self.assertRaisesRegex(RuntimeError, '尚未成功传给'):
+            self.runtime.guard_tool(self.owner, self.redundant_observation())
+        self.assertEqual(self.runtime.sessions[self.owner]['recoveries'], 0)
+        store.mark_delivered(self.owner, capture, {})
+        self.runtime.observation_delivered(self.owner, capture)
+        call = self.redundant_observation(identifier='delivered')
+        corrected = self.runtime.guard_tool(self.owner, call)
+        self.assertEqual(corrected['capture_id'], capture)
+        self.assertFalse(corrected['tool_executed'])
+        self.assertFalse(corrected['mission_submitted'])
+        with self.assertRaisesRegex(ValueError, 'Stale, duplicate'):
+            self.runtime.guard_tool(self.owner, call)
+        self.assertEqual(len(self.bridge.flight_requests), before)
+
+    def test_observation_correction_cannot_bypass_live_or_image_identity_barriers(self):
+        store, capture = self.pending_observation()
+        call = self.redundant_observation()
+        saved = copy.deepcopy(store.frames[capture])
+        for fault in ('expired', 'owner', 'hash', 'revision', 'epoch'):
+            with self.subTest(fault=fault):
+                store.frames[capture] = copy.deepcopy(saved)
+                store.clock = time.monotonic
+                s = self.runtime.sessions[self.owner]
+                revision = s['revision']
+                if fault == 'expired':store.clock = lambda: saved['created_monotonic']+901
+                elif fault == 'owner':store.frames[capture]['owner'] = ('other', 'turn')
+                elif fault == 'hash':store.frames[capture]['camera']['image_sha256'] = 'a'*64
+                elif fault == 'revision':s['revision'] += 1
+                else:self.bridge.telemetry['external_vision']['adapter']['epoch'] += 1
+                s['issued_calls'][call['id']] = (revision, call['name'])
+                with self.assertRaises((ValueError, RuntimeError)):
+                    self.runtime.guard_tool(self.owner, call)
+                self.assertEqual(s['recoveries'], 0)
+                s['revision'] = revision
+
+    def test_pending_image_uses_shared_credit_and_other_disallowed_actions_stay_fatal(self):
+        self.pending_observation()
+        for name in ('execute_mission', 'capture_scene', 'land_drone'):
+            with self.assertRaisesRegex(ValueError, 'outside the current parent stage'):
+                self.runtime.guard_tool(self.owner, self.redundant_observation(name, name))
+        self.assertEqual(self.runtime.sessions[self.owner]['recoveries'], 0)
+        self.runtime.correct_unsubmitted_text(self.owner)
+        with self.assertRaisesRegex(ValueError, 'budget exhausted'):
+            self.runtime.guard_tool(self.owner, self.redundant_observation())
+        self.assertEqual(self.runtime.sessions[self.owner]['recoveries'], 1)
+
+    def test_new_capture_cannot_replace_an_unreported_image(self):
+        store, capture = self.pending_observation()
+        other = store.capture(self.owner, 'second controlled image')['capture_id']
+        with self.assertRaisesRegex(ValueError, 'cannot be replaced'):
+            self.runtime.await_report(self.owner, other)
+        self.assertEqual(self.runtime.sessions[self.owner]['awaiting_report_capture_id'], capture)
+
     def test_staged_cache_keeps_original_pixels_for_the_existing_photo_and_time_budget(self):
         from single_vlm import build_single_vlm_agent
         from test_single_vlm import LocalScriptModel
@@ -201,22 +327,24 @@ class ParentGuardTests(unittest.TestCase):
         store = self.bridge.task_runtime.frame_store
         now = [100.];store.clock = lambda: now[0]
         captures = []
-        for index in range(12):
+        for index in range(MAX_OBSERVATIONS):
             identifier = store.capture(self.owner, 'controlled retained image')['capture_id']
             store.mark_delivered(self.owner, identifier, {})
             captures.append(identifier);now[0] += 50.
         self.assertEqual(store.get(self.owner, captures[0], require_delivered=True)['capture_id'], captures[0])
-        self.assertEqual(len(store.frames), 12)
+        self.assertEqual(len(store.frames), 16)
         self.assertEqual(store.ttl_seconds, self.runtime.sessions[self.owner]['limits'].max_duration_seconds)
         self.assertEqual(store.frames_per_turn, self.runtime.sessions[self.owner]['limits'].max_observations)
         with self.assertRaises(RuntimeError):store.get(('other', 'task'), captures[0])
         for index in range(4):store.capture(('other', 'task'), 'controlled other owner')
-        self.assertLessEqual(len(store.frames), 14)
+        self.assertLessEqual(len(store.frames), MAX_OBSERVATIONS+2)
         now[0] += 901.
         with self.assertRaises(RuntimeError):store.get(self.owner, captures[-1])
 
     def test_model_budget_charges_attempts_and_cannot_reset_with_a_stage(self):
         s=self.runtime.sessions[self.owner]
+        from search_limits import MAX_OBSERVATIONS
+        self.assertGreater(self.runtime.graph_step_limit(),2*(60+2*MAX_OBSERVATIONS))
         for _ in range(s['limits'].max_model_calls):self.runtime.before_model_call(self.owner,0)
         self.assertEqual(s['model_calls'],60)
         with self.assertRaises(ValueError):self.runtime.before_model_call(self.owner,0)
@@ -243,11 +371,13 @@ class RuntimeGraphTests(unittest.TestCase):
         self.assertIn('蓝色',child['query'])
         self.assertEqual(result['task_runtime']['plan']['targets'][0]['label'],'油桶')
 
-    def run_graph(self, script, prompt, bridge=None, confirmation='single_frame', timeout=15):
+    def run_graph(self, script, prompt, bridge=None, confirmation='single_frame', timeout=15,
+                  selector='deterministic', pool='ranked'):
         self.bridge=bridge or RuntimeBridge()
         fixture=nbv_fixtures.NBVGraphTests('test_multiview_graph_requires_paired_delivery_and_distinct_confirmation_move')
         with mock.patch.dict(os.environ,{'UAV_TASK_RUNTIME':'staged'}):
-            return fixture.run_task(self.bridge,script,auto_prepare=True,prompt=prompt,confirmation=confirmation,timeout=timeout)
+            return fixture.run_task(self.bridge,script,auto_prepare=True,prompt=prompt,confirmation=confirmation,timeout=timeout,
+                                    selector=selector,pool=pool)
 
     def base(self, close=False, relative=False):
         return [tool_call('define_task_plan',{'plan':proposal(close,relative)},'plan')]
@@ -282,6 +412,74 @@ class RuntimeGraphTests(unittest.TestCase):
         self.assertEqual(result['task_runtime']['budget']['recoveries_used'],1)
         self.assertEqual(len(result['perceptions']),1)
         self.assertEqual(result['task_runtime']['budget']['observations_used'],1)
+        self.assertIsNone(result['safety_landing'])
+
+    def test_report_explicitly_negating_query_does_not_handoff_or_complete_search(self):
+        label='灰色金属箱体（非蓝色油桶）'
+        def negative(messages):
+            call=current_report(messages)
+            call.tool_calls[0]['args']['targets'][0]['label']=label
+            return call
+        result,app,_=self.run_graph(self.base()+[negative,RuntimeError('controlled end after negative report')],
+            '找到蓝色油桶并报告，然后返航降落')
+        self.assertEqual(result['status'],'failed')
+        self.assertEqual(result['task_runtime']['target_memory'],{})
+        self.assertFalse(any(e['event']=='stage_completed'for e in result['task_runtime_events']))
+        self.assertEqual(result['perceptions'][0]['targets'][0]['label'],label)
+
+    def test_staged_visual_nbv_selection_uses_owned_offered_ticket_and_normal_parent_end(self):
+        from test_single_vlm import tool_payload
+        reports=[0]
+        def respond(messages):
+            state=json.loads(next(m.content.split('父任务实际状态：',1)[1]for m in reversed(messages)
+                if isinstance(getattr(m,'content',None),str)and m.content.startswith('父任务实际状态：')))
+            name=state['next_tool']
+            if name=='observe_target_search_view':return tool_call(name,{})
+            if name=='report_scene':
+                call=current_report(messages)
+                if not reports[0]:call.tool_calls[0]['args']['targets']=[]
+                reports[0]+=1
+                return call
+            if name=='select_target_search_view':
+                progress=tool_payload(messages,'report_scene')['search_progress']
+                self.assertGreaterEqual(len(progress['candidates']),2)
+                self.assertNotIn('execution_ticket',json.dumps(progress['candidates']))
+                return tool_call(name,{'batch_id':progress['batch_id'],'candidate_id':progress['candidates'][-1]['id'],
+                                      'reason':'controlled choice among verified diverse views'})
+            raise AssertionError('Unexpected model phase '+str(name))
+        result,app,model=self.run_graph(self.base()+[respond]*12,'找到蓝色油桶并报告，然后返航降落',
+            selector='vlm',pool='diverse',timeout=25)
+        self.assertEqual(result['status'],'succeeded',result.get('error'))
+        self.assertEqual(self.bridge.ticket_executions,1)
+        self.assertEqual(result['task_runtime']['budget']['recoveries_used'],0)
+        self.assertIsNone(result['safety_landing'])
+        selection=next(c for c in result['model_calls']if c['image_purpose']=='nbv_candidate_selection')
+        self.assertEqual(selection['tool_choice'],'select_target_search_view')
+
+    def test_semantic_plan_error_corrects_before_any_child_or_flight_then_completes(self):
+        invalid=proposal();invalid['stages'][0]['altitude_m']=3.
+        script=[tool_call('define_task_plan',{'plan':invalid},'bad-plan')]+self.base()+[current_report]
+        result,app,model=self.run_graph(script,'找到蓝色油桶并报告，然后返航降落')
+        self.assertEqual(result['status'],'succeeded',result.get('error'))
+        self.assertEqual(result['task_runtime']['budget']['recoveries_used'],1)
+        corrected=next(e for e in result['task_runtime_events']if e['event']=='unexecuted_plan_contract_correction')
+        self.assertIsNone(corrected['plan'])
+        self.assertEqual(corrected['budget']['observations_used'],0)
+        self.assertIsNone(result['safety_landing'])
+        self.assertEqual(model.bindings[0]['tool_choice'],'define_task_plan')
+        self.assertEqual(model.bindings[1]['tool_choice'],'define_task_plan')
+
+    def test_repeated_semantic_plan_error_terminates_on_ground_without_unbounded_retry(self):
+        invalid=proposal();invalid['stages'].insert(1,{'kind':'approach','target_ref':'target'})
+        script=[tool_call('define_task_plan',{'plan':invalid},'bad-plan-1'),
+                tool_call('define_task_plan',{'plan':invalid},'bad-plan-2')]
+        result,app,model=self.run_graph(script,'找到蓝色油桶并报告，然后返航降落')
+        self.assertEqual(result['status'],'failed')
+        self.assertEqual(result['error'],'Parent plan correction budget exhausted')
+        self.assertEqual(len(model.calls),2)
+        self.assertEqual(result['task_runtime']['budget']['recoveries_used'],1)
+        self.assertEqual(self.bridge.flight_requests,[])
+        self.assertEqual(app.audited_client.task_runtime.skills.search.sessions,{})
         self.assertIsNone(result['safety_landing'])
 
     def test_second_schema_error_aborts_with_owned_landing(self):
@@ -356,7 +554,7 @@ class RuntimeGraphTests(unittest.TestCase):
         runtime=app.audited_client.task_runtime;owner=next(iter(runtime.sessions));s=runtime.skills.search.sessions[owner]
         self.assertEqual(len(runtime.skills.search.semantic_maps.maps),1)
         self.assertEqual(len(s['observations']),result['task_runtime']['budget']['observations_used'])
-        self.assertLessEqual(len(s['observations']),12)
+        self.assertLessEqual(len(s['observations']),MAX_OBSERVATIONS)
         self.assertEqual(s['epoch'],runtime.skills.search.semantic_maps.maps[owner].coordinate_epoch)
         self.assertEqual(sum(r['steps'][0]['action']=='takeoff' for r in bridge.flight_requests if r['path']=='/mission'),1)
 

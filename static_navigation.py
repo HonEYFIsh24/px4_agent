@@ -184,6 +184,29 @@ class StaticNavigator:
             target = [b+(a-b)*1e-4/distance for a, b in zip(camera, target)]
         return not any(intersects(camera, target, low, high) for low, high in self.raw_boxes)
 
+    def raw_surface_visibility_possible(self, camera_enu, target_enu, endpoint_uncertainty_m):
+        """Predict a measured surface, retaining uncertainty at the ray endpoint.
+
+        Only boxes containing the measured endpoint may terminate this ray.
+        A separate intervening obstacle remains an occluder, even inside the
+        endpoint's uncertainty interval. This is a visibility prediction for a
+        future image, never flight clearance or proof of visual recognition.
+        """
+        camera, target = self.to_world(camera_enu), self.to_world(target_enu)
+        distance = math.dist(camera, target)
+        margin = endpoint_uncertainty_m
+        if (type(margin) not in (int, float) or not math.isfinite(margin)
+                or not 0 < margin < distance):
+            return False
+        near = [b+(a-b)*margin/distance for a, b in zip(camera, target)]
+        for low, high in self.raw_boxes:
+            if not intersects(camera, target, low, high):
+                continue
+            if (not all(low[i] <= target[i] <= high[i] for i in range(3))
+                    or intersects(camera, near, low, high)):
+                return False
+        return True
+
     def to_local(self, point):
         x,y,z = [v-o for v,o in zip(point,self.origin)]
         c,s = math.cos(self.yaw),math.sin(self.yaw)

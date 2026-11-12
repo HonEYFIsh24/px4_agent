@@ -81,6 +81,7 @@ class ScopedFixtureBridge(LocalStereoBridge):
             pose = {**pair['body_pose_enu'], 'position_m': list(self.telemetry['position_enu_m'])}
             result = StaticViewpointEvaluator(self.nav, pose, pair['left']['camera_intrinsics'], epoch,
                 fixed_yaw=0., reference_kind='live_enu_pose', probe_points_enu_m=payload.get('probe_points_enu_m'),
+                probe_covariances_enu_m2=payload.get('probe_covariances_enu_m2'),
                 search_radius_m=self.search_radius,grid_resolution_m=self.grid_resolution).query(payload['operation'], payload['origin_xy_enu_m'],
                     payload['expected_identity'], payload['candidates'])
             if context and payload['operation'] == 'paths': self.authority.issue(context, result)

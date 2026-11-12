@@ -21,19 +21,30 @@ class GoalExecution:
         self.search.semantic_maps.checkpoint(owner)
         if self.client.state().get('navigation', {}).get('goal_pose_execution_supported') is not True:
             return {'status': 'unavailable', 'reason_code': 'EXECUTOR_GOAL_POSE_VERSION_UNAVAILABLE', 'candidates': []}
+        if not child.get('nbv_bound'):
+            # A visual goal may be chosen from the first observation, before
+            # any NBV move has opened the executor's immutable search scope.
+            self.client.request('/navigation/viewpoints', {'operation': 'context',
+                'pair_id': child['last_stereo_pair_id'], 'origin_xy_enu_m': child['boundary_origin'][:2],
+                'expected_identity': map_identity(semantic), 'candidates': [],
+                'search_context': {'owner': list(owner), 'map_revision': generated['map_revision'],
+                                   'batch_id': uuid.uuid4().hex}})
+            child.update(nbv_bound=True, nbv_released=False)
         # Retire every old NBV candidate while preserving the actual scope.
         revision = child.get('authority_stage_revision', 0)+1
         self.client.request('/navigation/stage-transition',
             {'owner': list(owner), 'stage_id': stage.stage_id, 'revision': revision})
         child['authority_stage_revision'] = revision
         context = {'owner': list(owner), 'map_revision': generated['map_revision'], 'batch_id': uuid.uuid4().hex}
-        goal_context = {'schema_version': 1, 'stage_id': stage.stage_id, 'stage_revision': revision,
+        goal_context = {'schema_version': generated.get('goal_context_version', 1), 'stage_id': stage.stage_id, 'stage_revision': revision,
             'plan_revision': plan_revision, 'target_id': stage_target_id(generated),
             'target_revision': generated['target_revision'], 'relation': stage.relation, 'terminal_action': stage.kind}
         payload = {'pair_id': child['last_stereo_pair_id'], 'origin_xy_enu_m': child['boundary_origin'][:2],
                    'expected_identity': map_identity(semantic), 'search_context': context,
                    'goal_context': goal_context, 'probe_points_enu_m': ([generated['target_anchor_enu_m']]
                     if generated['target_anchor_enu_m'] is not None else None)}
+        if generated.get('target_anchor_covariance_enu_m2') is not None:
+            payload['probe_covariances_enu_m2'] = [copy.deepcopy(generated['target_anchor_covariance_enu_m2'])]
         self.client.request('/navigation/goal-poses', {**payload, 'operation': 'context', 'candidates': []})
 
         def evaluate(candidate, _anchor):
