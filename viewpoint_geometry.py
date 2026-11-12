@@ -104,7 +104,8 @@ class StaticViewpointEvaluator:
                 raise MissionError('candidate requires id, position and optional bounded heading step')
             heading_step = candidate.get('heading_step')
             if 'heading_step' in candidate and (not self.allow_yaw or type(heading_step) is not int
-                                                 or heading_step not in (-1, 1)):
+                                                 or heading_step not in ((-3, -2, -1, 1, 2, 3, 4)
+                                                                         if self.probes else (-1, 1))):
                 raise MissionError('candidate heading requires enabled discrete rotation')
             identifier = candidate['id']
             if (not isinstance(identifier, str) or not re.fullmatch(r'view_[0-9]{3}', identifier)

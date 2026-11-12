@@ -103,10 +103,17 @@ class VisualGoalSkill:
         if goal['phase'] == 'request_observation':
             if len(child['observations']) >= s['limits'].max_observations-1:
                 stage.reason_code = 'VISUAL_GOAL_UNCERTAIN';r.finish(owner, False);return False
+            semantic = r.skills.search.semantic_maps.maps[owner]
+            reference = s['targets'][stage.target_ref]
+            observed = SharedTargetMemory(semantic).last_reliable_observation(reference['target_id'], child['query'])
+            r.frame_store.get(owner, observed['capture_id'], require_delivered=True)
+            r.frame_store.pin_confirmation_source(owner, observed['capture_id'])
             s['revision'] += 1
             child.update(status='searching', activity_closed=False, arrived=False, pending=None,
-                         search_phase='exploring', target_confirmation_mode='route_observation',
-                         handoff_evidence_profile='route_observation', confirmation=None,
+                         search_phase='confirming', target_confirmation_mode='route_observation',
+                         handoff_evidence_profile='route_observation', target_focus_state='reacquiring',
+                         confirmation={'target_id': reference['target_id'], 'source_capture_id': observed['capture_id'],
+                                       'purpose': 'recovery'},
                          nbv_awaiting_selection=False, program_verification=True)
             child['observation_ceiling'] = s['limits'].max_observations-1
             child.pop('front_relation_quality', None)

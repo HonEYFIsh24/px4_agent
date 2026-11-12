@@ -49,3 +49,18 @@ class SharedTargetMemory:
         return [self.view(l.id) for l in self.map.landmarks.values() if labels_compatible(l.label, query)
                 and not any(r['capture_id'] == l.observations[-1]['capture_id'] and labels_compatible(r['query'], query)
                             for r in l.attributes.get('refuted_visual_observations', []))]
+
+    def last_reliable_observation(self, identifier, query):
+        """Retain the latest same-instance visual clue, not the latest empty frame."""
+        m = self.map
+        if m.status != 'valid':
+            raise ValueError('Cannot recover a target from an invalid semantic map')
+        landmark = m.landmarks[identifier]
+        refuted = {r['capture_id'] for r in landmark.attributes.get('refuted_visual_observations', [])
+                   if labels_compatible(r['query'], query)}
+        for observed in sorted(landmark.observations, key=lambda o: o['stamp_sim_s'], reverse=True):
+            if (observed['capture_id'] not in refuted
+                    and observed['coordinate_epoch'] == m.coordinate_epoch
+                    and (observed.get('association') or {}).get('status') != 'ambiguous'):
+                return copy.deepcopy(observed)
+        raise ValueError('No retained reliable observation of this target in the current coordinate epoch')

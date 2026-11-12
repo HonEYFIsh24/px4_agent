@@ -14,7 +14,9 @@
 
 林地复测已验证两个工具的实际SDK参数不再包含capture_id，图片编号问题未再出现。3次目标移动任务`e72c630e465e`、`e6f2b61cdcc5`、`205ba87b8ff6`均成功。第二图中的模型复核为uncertain/same_target=true；后继视图丢失帐篷，未取得satisfied，未执行正常目标落地。最后`07c1edb8da84`执行return_home/land成功，实际landed_state=1、armed=false，safety_landing=null。父结果为completed/partial、VISUAL_GOAL_UNCERTAIN；搜索阶段完成，目标旁降落未完成。15次实际观察低于16次上限，状态机在预算保留规则下正常收尾。
 
-本轮还定位了一个未修复问题：`VisualGoalSkill.advance`将默认observe设为exploring并清空confirmation，而NBV仅在confirming时取得目标回看探点。帐篷位置与原图仍在记忆中，模型明确要求找回；实际连续规划却为exploration、confirmation_goal=null，按覆盖评分逐步远离目标。这是观察意图到视点规划的接线缺口，应单独修正；不能归因为帐篷识别失败或额外关系误差门槛。测试结束后未再改飞行逻辑或新增重试。
+2026-11-12后续已修复并完成受控实测，见 [丢失目标后的记忆回看](visual_goal_reacquisition.md)。以下为当时定位记录，不改写原试验结果。
+
+本轮当时定位了一个未修复问题：`VisualGoalSkill.advance`将默认observe设为exploring并清空confirmation，而NBV仅在confirming时取得目标回看探点。帐篷位置与原图仍在记忆中，模型明确要求找回；实际连续规划却为exploration、confirmation_goal=null，按覆盖评分逐步远离目标。这是观察意图到视点规划的接线缺口，应单独修正；不能归因为帐篷识别失败或额外关系误差门槛。测试结束后未再改飞行逻辑或新增重试。
 
 庭院成功记录对应图片绑定修复前的冻结源码；林地复测对应修复后的冻结源码。两者的原始结果、源码哈希和SDK记录分别保留，没有事后改写。
 

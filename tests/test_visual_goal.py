@@ -30,7 +30,8 @@ class VisualGoalGraphTests(unittest.TestCase):
     def run_visual(self, *, decision='here', reviews=None, foreign=False, reset=False,
                    relation='object_front', label='白色货车', invalid_first=False, review_at_limit=False,
                    no_ground=False, reset_before_review=False, observe_first=False,
-                   drop_after_ground=False, blocked_move_first=False):
+                   drop_after_ground=False, blocked_move_first=False, recover_lost_target=False,
+                   turn_before_goal=False):
         directory = tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup)
         class Bridge(FlatGoalBridge):
             # Frontal controlled fixture; image/recognition are still doubles.
@@ -48,7 +49,10 @@ class VisualGoalGraphTests(unittest.TestCase):
             bridge.nav.boxes.append(([1.8, -2.2, -1.], [4.2, .2, 6.]))
         runner = runtime_fixtures.RuntimeGraphTests();proposal = plan(landing=True)
         proposal['targets'][0]['label'] = label;proposal['stages'][1]['relation'] = relation
-        ordinary = response_for(bridge);seen = [];review_count = [0];choices = [0]
+        if turn_before_goal:
+            proposal['stages'].insert(1, {'kind': 'relative_turn', 'target_ref': proposal['stages'][1]['target_ref'],
+                                         'direction': 'left', 'angle_deg': 90.})
+        ordinary = response_for(bridge);seen = [];review_count = [0];choices = [0];reports = [0];reported_ids = []
         from task_runtime.orchestrator import TaskOrchestrator
         ensure = TaskOrchestrator.ensure
         original_review = TaskOrchestrator.review_task_goal
@@ -67,7 +71,8 @@ class VisualGoalGraphTests(unittest.TestCase):
             name = state['next_tool'];seen.append(name)
             if name == 'choose_task_goal':
                 choices[0] += 1
-                if observe_first and choices[0] == 1:
+                if turn_before_goal:self.assertEqual(state['goal_state']['view_capture_id'], reported_ids[-1])
+                if ((observe_first or turn_before_goal) and choices[0] == 1) or (recover_lost_target and choices[0] == 2):
                     return tool_call(name, {'decision': 'observe',
                         'description': 'controlled initial relation uncertain', 'ground_point_uv': []})
                 if reviews and review_count[0] and all(x[0] != 'satisfied' or not x[1] for x in reviews):
@@ -89,11 +94,16 @@ class VisualGoalGraphTests(unittest.TestCase):
                 return tool_call(name, {'status': status, 'same_target': same,
                     'description': 'controlled fresh visual conclusion'})
             answer = ordinary(messages)
-            if name == 'report_scene':answer.tool_calls[0]['args']['targets'][0]['label'] = label
+            if name == 'report_scene':
+                reports[0] += 1
+                reported_ids.append(answer.tool_calls[0]['args']['capture_id'])
+                answer.tool_calls[0]['args']['targets'][0]['label'] = label
+                if (recover_lost_target or turn_before_goal) and reports[0] == 2:answer.tool_calls[0]['args']['targets'] = []
             return answer
         with patch.object(TaskOrchestrator, 'ensure', bounded), patch.object(TaskOrchestrator, 'review_task_goal', bounded_review):
             result, app, model = runner.run_graph([tool_call('define_task_plan', {'plan': proposal})]+[respond]*80,
-                ('找到'+label+'后降落在它旁边' if relation == 'object_beside' else '找到'+label+'后降落在它前方'),
+                ('找到'+label+'后向左转90度，再降落在它旁边' if turn_before_goal else
+                 '找到'+label+'后降落在它旁边' if relation == 'object_beside' else '找到'+label+'后降落在它前方'),
                 bridge, timeout=30)
         return bridge, result, app, model, seen
 
@@ -172,6 +182,34 @@ class VisualGoalGraphTests(unittest.TestCase):
         self.assertEqual(result['status'], 'succeeded', result.get('error'))
         self.assertEqual(len(result['perceptions']), 3)
         self.assertNotIn('review_target_candidate', seen)
+        self.assertEqual(bridge.goal_land_executions, 1)
+
+    def test_lost_target_observation_uses_retained_image_then_resumes_visual_goal(self):
+        bridge, result, _, _, seen = self.run_visual(recover_lost_target=True,
+            reviews=[('unsatisfied', False), ('satisfied', True)], label='橙色帐篷', relation='object_beside')
+        self.assertEqual(result['status'], 'succeeded', result.get('error'))
+        source, lost, recovered, arrival = result['perceptions']
+        self.assertEqual(lost['targets'], [])
+        self.assertTrue(recovered['targets'])
+        prediction = next(e for e in result['nbv_events'] if e.get('prepared_by') == 'visual_goal')
+        self.assertEqual(prediction['planning_mode'], 'confirmation')
+        self.assertEqual(prediction['confirmation_goal']['purpose'], 'recovery')
+        self.assertEqual(prediction['confirmation_goal']['source_capture_id'], source['capture_id'])
+        selected = next(c for c in prediction['ranked_candidates'] if c['id'] == prediction['selected_id'])
+        self.assertGreater(selected['target_visibility_score'], 0.)
+        self.assertNotIn('review_target_candidate', seen)
+        self.assertEqual(bridge.goal_land_executions, 1)
+
+    def test_turn_then_relative_goal_uses_current_empty_image_and_recovers_from_target_memory(self):
+        bridge, result, *_ = self.run_visual(turn_before_goal=True, label='橙色帐篷', relation='object_beside')
+        self.assertEqual(result['status'], 'succeeded', result.get('error'))
+        source, lost, recovered, arrival = result['perceptions']
+        self.assertEqual(lost['targets'], [])
+        self.assertTrue(recovered['targets'])
+        prediction = next(e for e in result['nbv_events'] if e.get('prepared_by') == 'visual_goal')
+        self.assertEqual(prediction['source_capture_id'], lost['capture_id'])
+        self.assertEqual(prediction['confirmation_goal']['source_capture_id'], source['capture_id'])
+        self.assertEqual(prediction['confirmation_goal']['purpose'], 'recovery')
         self.assertEqual(bridge.goal_land_executions, 1)
 
     def test_final_visual_confirmation_at_model_limit_still_completes_the_owned_descent(self):

@@ -206,7 +206,8 @@ class TaskOrchestrator:
             s['reasoning'] = {**self.reasoning.initial(), 'global_replans': s['reasoning']['global_replans']}
             visual = stage.kind in ('approach', 'relative_hover', 'relative_land')
             s['goal_state'] = {'stage_id': stage.stage_id, 'phase': 'choose_goal' if visual else 'plan',
-                'visual_goal': visual, 'view_capture_id': s['targets'][stage.target_ref]['capture_id'], 'prepared': None}
+                'visual_goal': visual, 'view_capture_id': (self.skills.search.sessions[owner]['observations'][-1]['capture_id']
+                    if visual else s['targets'][stage.target_ref]['capture_id']), 'prepared': None}
         elif stage.kind == 'photo':
             subject = target_query(next((t for t in s['plan'].targets if t['ref'] == stage.target_ref), s['plan'].targets[0]))
             s['photo_state'] = self.photography.start(owner, s['instruction'], subject, stage.altitude_m or 3.)

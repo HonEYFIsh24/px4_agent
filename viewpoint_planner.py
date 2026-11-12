@@ -188,6 +188,14 @@ class ViewpointPlanner:
                     points.append({'id':'view_{:03d}'.format(len(points)+1),'position_enu_m':point,
                         'fixed_yaw_enu_rad':yaw,'direction':'沿当前目标方位小步接近，重新获取深度',
                         'candidate_basis':'local_motion_along_observed_bearing_not_target_position'})
+        if (self.confirmation_goal or {}).get('purpose') == 'recovery':
+            source = list(self.confirmation_goal['source_observer_enu_m'])
+            if (1.5 <= source[2] <= MAX_ALTITUDE-.5
+                    and math.dist(source[:2], origin) <= self.search_radius_m):
+                # Keep the acquired-view provenance even if a grid point coincides.
+                points.append({'id': 'view_{:03d}'.format(len(points)+1), 'position_enu_m': source,
+                    'fixed_yaw_enu_rad': yaw, 'direction': '回到最后可靠观察位置',
+                    'candidate_basis': 'last_reliable_observer_pose'})
         if self.config.heading_mode == 'discrete':
             base = points + ([{'position_enu_m': list(position), 'direction': '原地', 'fixed_yaw_enu_rad': yaw}]
                              if 1.5 <= position[2] <= MAX_ALTITUDE-.5 else [])
@@ -196,14 +204,35 @@ class ViewpointPlanner:
                     points.append({**candidate, 'id': 'view_{:03d}'.format(len(points)+1),
                                    'heading_step': step,
                                    'direction': candidate['direction'] + ('向右转45度' if step < 0 else '向左转45度')})
+            if (self.confirmation_goal or {}).get('purpose') == 'recovery':
+                from stereo_localization import iris_left_optical_to_body
+                mount = iris_left_optical_to_body()['rotation']
+                camera_heading = math.atan2(mount[1][2], mount[0][2])
+                anchor = self.confirmation_goal['probe_points_enu_m'][0]
+                for candidate in base:
+                    point = candidate['position_enu_m']
+                    facing = math.atan2(anchor[1]-point[1], anchor[0]-point[0])-camera_heading
+                    revisit = candidate.get('candidate_basis') == 'last_reliable_observer_pose'
+                    if revisit:
+                        ray = self.confirmation_goal['bearing_reference']['direction_enu']
+                        facing = math.atan2(ray[1], ray[0])-camera_heading
+                    delta = math.atan2(math.sin(facing-yaw), math.cos(facing-yaw))
+                    step = int(round(delta/(math.pi/4)))
+                    if step == -4:step = 4
+                    if step in (0, -1, 1):continue  # Already evaluated above.
+                    points.append({**candidate, 'id': 'view_{:03d}'.format(len(points)+1),
+                        'heading_step': step, 'direction': '按最后可靠目标方位回看',
+                        'candidate_basis': 'last_reliable_observer_pose' if revisit else 'retained_visual_target_bearing'})
         return points
 
     def _score(self, coverage, semantic, seconds, repeat, target_visibility=0., parallax=0., range_quality=0.,
-               bearing_advance=0., height_change=0.):
+               bearing_advance=0., height_change=0., source_view_revisit=0.):
         c = self.config
         if self.confirmation_goal is not None:
             terms = {'target_visibility': c.target_visibility_weight*target_visibility,
-                     'parallax': c.parallax_weight*parallax*(.2 if self.confirmation_goal.get('purpose') == 'approach' or self.acquire_depth else 1.),
+                     'source_view_revisit': c.target_visibility_weight*max(0., source_view_revisit-target_visibility),
+                     'parallax': c.parallax_weight*parallax*(0. if self.confirmation_goal.get('purpose') == 'recovery'
+                         else .2 if self.confirmation_goal.get('purpose') == 'approach' or self.acquire_depth else 1.),
                      'observation_range': c.observation_range_weight*range_quality,
                      'bearing_approach': c.bearing_approach_weight*bearing_advance,
                      'height_change': -c.depth_height_weight*height_change,
@@ -333,6 +362,7 @@ class ViewpointPlanner:
                 rejected.append({'id': candidate['id'], 'stage': 'visibility', 'reason': 'no new geometric coverage'})
                 continue
             target_visibility, parallax, range_quality, distance = 0., 0., 0., None
+            source_view_revisit = 0.
             bearing_advance,height_change = 0.,0.
             if self.acquire_depth:
                 ray = confirmation_goal['bearing_reference']['direction_enu'];length = math.hypot(*ray[:2])
@@ -401,11 +431,24 @@ class ViewpointPlanner:
                     angle_gain = min(1., math.sin(angle)/math.sin(math.radians(20.))) if angle <= math.radians(70.) else 0.
                     target_visibility += size_quality/len(probes)
                     parallax += size_quality*angle_gain/len(probes)
-                if (math.dist(candidate['position_enu_m'], confirmation_goal['source_observer_enu_m']) < .5
+                recovery = confirmation_goal.get('purpose') == 'recovery'
+                if (recovery and candidate.get('candidate_basis') == 'last_reliable_observer_pose'
+                        and candidate['position_enu_m'] == confirmation_goal['source_observer_enu_m']):
+                    # Revisit a genuinely acquired view even when its measured
+                    # surface point lies inside a conservative collision box.
+                    # This is an image/pose clue, not a fabricated clear ray.
+                    from stereo_localization import iris_left_optical_to_body
+                    mount = iris_left_optical_to_body()['rotation']
+                    ray = confirmation_goal['bearing_reference']['direction_enu']
+                    facing = math.atan2(ray[1], ray[0])-math.atan2(mount[1][2], mount[0][2])
+                    yaw = result.get('target_yaw_enu_rad', reference['fixed_yaw_enu_rad'])
+                    delta = abs(math.atan2(math.sin(facing-yaw), math.cos(facing-yaw)))
+                    if delta <= math.pi/8+1e-9:source_view_revisit = 1.-delta/(math.pi/4)
+                if ((target_visibility <= 0 and source_view_revisit <= 0) or (not recovery and (
+                        math.dist(candidate['position_enu_m'], confirmation_goal['source_observer_enu_m']) < .5
                         or any(math.dist(candidate['position_enu_m'], old) < .75
                                for old in confirmation_goal.get('avoid_observer_positions', []))
-                        or target_visibility <= 0
-                        or (parallax < .05 and confirmation_goal.get('purpose') != 'approach' and not self.acquire_depth)):
+                        or (parallax < .05 and confirmation_goal.get('purpose') != 'approach' and not self.acquire_depth)))):
                     rejected.append({'id': candidate['id'], 'stage': 'confirmation',
                                      'reason': 'insufficient predicted target visibility or distinct-view parallax'})
                     continue
@@ -425,10 +468,11 @@ class ViewpointPlanner:
             # Rotation cost is omitted from this upper bound; the estimated cost
             # below is not a guaranteed lower bound on real arrival time.
             upper, _ = self._score(coverage, semantic, lower_length/self.config.nominal_speed_m_s, repeat,
-                                   target_visibility, parallax, range_quality, bearing_advance,height_change)
+                                   target_visibility, parallax, range_quality, bearing_advance,height_change,source_view_revisit)
             useful.append({**candidate, 'visible_cell_ids': visible, 'coverage_gain_m2': coverage,
                            'semantic_gain_m2': semantic, 'repeat_cost': repeat, 'optimistic_score': upper,
                            'target_visibility_score': target_visibility, 'parallax_score': parallax,
+                           'source_view_revisit_score': source_view_revisit,
                            'observation_range_score': range_quality,
                            'predicted_target_range_m': distance,
                            'bearing_advance_score':bearing_advance,'height_change_cost':height_change,
@@ -462,11 +506,13 @@ class ViewpointPlanner:
                 length = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
                 if not math.isclose(length, finite(plan['path_length_m'], 'path length'), rel_tol=1e-9, abs_tol=1e-9):
                     raise ViewpointError('candidate route length does not match its waypoints')
-                seconds = length/self.config.nominal_speed_m_s + ((math.pi/4/.5 + 1.) if 'heading_step' in candidate else 0.)
+                seconds = length/self.config.nominal_speed_m_s + ((abs(candidate['heading_step'])*math.pi/4/.5 + 1.)
+                    if 'heading_step' in candidate else 0.)
                 score, terms = self._score(candidate['coverage_gain_m2'], candidate['semantic_gain_m2'], seconds,
                                            candidate['repeat_cost'], candidate['target_visibility_score'],
                                            candidate['parallax_score'], candidate['observation_range_score'],
-                                           candidate['bearing_advance_score'],candidate['height_change_cost'])
+                                           candidate['bearing_advance_score'],candidate['height_change_cost'],
+                                           candidate['source_view_revisit_score'])
                 evaluated.append({**candidate, 'path': plan, 'motion_seconds': seconds,
                                   'score': score, 'score_terms': terms, 'path_verified': True,
                                   'execution_ticket': result.get('execution_ticket')})

@@ -355,7 +355,7 @@ class AdaptiveSearch:
                 confirmation['avoid_observer_positions'] = [list(o['position_enu_m']) for o in s['observations']]
                 confirmation['purpose'] = active.get('purpose', 'confirmation')
                 confirmation['evidence_purpose'] = confirmation['purpose']
-                if (confirmation.get('surface_reference') is None
+                if (confirmation.get('purpose') != 'recovery' and confirmation.get('surface_reference') is None
                         and not (confirmation.get('purpose') in ('reveal_front', 'front_relation')
                                  and confirmation.get('probe_basis') == 'actual_stereo_surface_with_bounded_uncertainty_probe')
                         and s['observations'][-1]['capture_id'] == active['source_capture_id']):
